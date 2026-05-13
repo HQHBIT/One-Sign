@@ -6,7 +6,8 @@ import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest } from "../pdf.js";
+import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation } from "../pdf.js";
+import { rotateMarker90CW } from "../pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
@@ -23,6 +24,30 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 }
 });
+
+function parseOrientation(raw) {
+  const v = (raw || "").toString().toLowerCase();
+  return v === "landscape" ? "landscape" : v === "portrait" ? "portrait" : null;
+}
+
+// Bake the orientation into the uploaded PDF bytes and return the new buffer
+// plus the per-page rotation plan. Non-PDFs and missing orientation pass through.
+async function bakeRequestFile({ buffer, fileType, orientation }) {
+  if (fileType !== "pdf" || !orientation) {
+    return { bakedBuffer: buffer, pageRotations: [] };
+  }
+  const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
+  return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
+}
+
+// Apply the per-page rotation plan to a marker. If the marker's page was rotated
+// 90° CW during the bake, rotate the marker the same way; otherwise return as-is.
+function transformMarkerForBake(marker, pageRotations) {
+  const pageIdx = (marker.page || 1) - 1;
+  if (pageRotations[pageIdx] !== 90) return marker;
+  const r = rotateMarker90CW({ x: marker.x, y: marker.y, w: marker.w, h: marker.h });
+  return { ...marker, ...r };
+}
 
 // ============================================================
 //   list (role-scoped)
@@ -90,6 +115,7 @@ router.post("/", authRequired, requireRole("requestor"), upload.single("file"), 
     if (!targetTeamId || !marker) return res.status(400).json({ error: "Provide either workflow or targetTeamId+marker" });
     let markerObj;
     try { markerObj = JSON.parse(marker); } catch { return res.status(400).json({ error: "marker must be valid JSON" }); }
+    if (markerObj && "rotation" in markerObj) delete markerObj.rotation;
 
     const team = await queryOne("SELECT * FROM teams WHERE id = ?", [targetTeamId]);
     if (!team) return res.status(400).json({ error: "Unknown team" });
@@ -100,15 +126,27 @@ router.post("/", authRequired, requireRole("requestor"), upload.single("file"), 
     `, [targetTeamId]);
     if (approvers.length === 0) return res.status(400).json({ error: "No approvers configured for this team" });
 
+    const orientation = parseOrientation(req.body?.orientation);
+    let bakedBuffer, pageRotations;
+    try {
+      ({ bakedBuffer, pageRotations } = await bakeRequestFile({
+        buffer: file.buffer, fileType, orientation
+      }));
+    } catch (e) {
+      console.error("[create] bake failed", e);
+      return res.status(400).json({ error: "Could not process PDF orientation" });
+    }
+    const bakedMarker = transformMarkerForBake(markerObj, pageRotations);
+
     const id = uid();
     const storedName = `${id}.${ext}`;
     await fs.mkdir(DOC_DIR, { recursive: true });
-    await fs.writeFile(path.join(DOC_DIR, storedName), file.buffer);
+    await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
 
     await execute(`
       INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(markerObj), note, Date.now(), instantApproval, requestType]);
+    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType]);
 
     for (const a of approvers) {
       sendEmail({
@@ -157,10 +195,31 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     }
   }
 
+  const orientation = parseOrientation(req.body?.orientation);
+  let bakedBuffer, pageRotations;
+  try {
+    ({ bakedBuffer, pageRotations } = await bakeRequestFile({
+      buffer: file.buffer, fileType, orientation
+    }));
+  } catch (e) {
+    console.error("[create workflow] bake failed", e);
+    return res.status(400).json({ error: "Could not process PDF orientation" });
+  }
+  for (const step of workflow) {
+    for (const s of step.signers) {
+      const baked = transformMarkerForBake(
+        { x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 },
+        pageRotations
+      );
+      s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+      delete s.rotation;
+    }
+  }
+
   const id = uid();
   const storedName = `${id}.${ext}`;
   await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), file.buffer);
+  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
 
   const pool = getPool();
   const conn = await pool.getConnection();
@@ -184,7 +243,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
         await conn.execute(
           `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, Number(s.rotation || 0)]
+          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0]
         );
       }
     }
