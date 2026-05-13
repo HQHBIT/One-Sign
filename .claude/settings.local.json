@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(npm run *)",
+      "Bash(node src/index.js)",
+      "Bash(npm install *)",
+      "Bash(netstat -ano)",
+      "Bash(break)"
+    ]
+  }
+}

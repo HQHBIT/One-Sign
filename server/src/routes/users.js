@@ -1,0 +1,184 @@
+import { Router } from "express";
+import bcrypt from "bcryptjs";
+import multer from "multer";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
+import { authRequired, requireRole } from "../auth.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
+
+const router = Router();
+const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+
+// ---------- list ----------
+router.get("/", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const rows = await query("SELECT * FROM users ORDER BY created_at DESC");
+    const users = await Promise.all(rows.map(hydrateUser));
+    res.json({ users });
+  } catch (e) { next(e); }
+});
+
+// ---------- create ----------
+router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { email, password, name, role, team, signingAuthorityTeams } = req.body || {};
+    if (!email || !password || !name || !role) return res.status(400).json({ error: "email, password, name, role are required" });
+    if (!["admin", "requestor", "approver"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+
+    const existing = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+    if (existing) return res.status(409).json({ error: "Email already exists" });
+
+    const id = uid("u");
+    const hash = bcrypt.hashSync(password, 10);
+    const teamId = role === "requestor" ? (team || null) : null;
+
+    await execute(
+      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [id, email, hash, name, role, teamId, Date.now()]
+    );
+
+    if (role === "approver" && Array.isArray(signingAuthorityTeams)) {
+      for (const tid of signingAuthorityTeams) {
+        try { await execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
+      }
+    }
+
+    const row = await queryOne("SELECT * FROM users WHERE id = ?", [id]);
+    res.json({ user: await hydrateUser(row) });
+  } catch (e) { next(e); }
+});
+
+// ---------- bulk create ----------
+router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { rows } = req.body || {};
+    if (!Array.isArray(rows)) return res.status(400).json({ error: "rows must be an array" });
+
+    let imported = 0;
+    const now = Date.now();
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const r of rows) {
+        if (!r.email || !r.name || !r.role || !r.password) continue;
+        if (!["admin", "requestor", "approver"].includes(r.role)) continue;
+        const [exists] = await conn.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [r.email]);
+        if (exists.length) continue;
+        const id = uid("u");
+        const hash = bcrypt.hashSync(r.password, 10);
+        await conn.execute(
+          "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now]
+        );
+        if (r.role === "approver" && r.teams) {
+          const tids = r.teams.split("|").map(s => s.trim()).filter(Boolean);
+          for (const tid of tids) {
+            try { await conn.execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
+          }
+        }
+        imported++;
+      }
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+    res.json({ imported });
+  } catch (e) { next(e); }
+});
+
+// ---------- delete ----------
+router.delete("/:id", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) return res.status(400).json({ error: "Cannot delete yourself" });
+    await execute("DELETE FROM users WHERE id = ?", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- my signature ----------
+router.put("/me/signature", authRequired, upload.single("signature"), async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const buf = req.file?.buffer;
+    const dataUrlField = req.body?.dataUrl;
+    let buffer = null, ext = "png";
+
+    if (buf) {
+      buffer = buf;
+      const mt = (req.file.mimetype || "").toLowerCase();
+      ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
+    } else if (dataUrlField && dataUrlField.startsWith("data:image/")) {
+      const match = /^data:image\/(png|jpeg|jpg);base64,(.+)$/.exec(dataUrlField);
+      if (!match) return res.status(400).json({ error: "Invalid dataUrl" });
+      ext = match[1] === "jpeg" ? "jpg" : match[1];
+      buffer = Buffer.from(match[2], "base64");
+    } else {
+      return res.status(400).json({ error: "signature file or dataUrl required" });
+    }
+
+    await fs.mkdir(SIG_DIR, { recursive: true });
+    const fileName = `${userId}.${ext}`;
+    await fs.writeFile(path.join(SIG_DIR, fileName), buffer);
+    await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, userId]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- admin set signature for a user ----------
+router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("signature"), async (req, res, next) => {
+  try {
+    const targetId = req.params.id;
+    const target = await queryOne("SELECT id FROM users WHERE id = ?", [targetId]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const buf = req.file?.buffer;
+    if (!buf) return res.status(400).json({ error: "Signature file required" });
+
+    await fs.mkdir(SIG_DIR, { recursive: true });
+    const mt = (req.file.mimetype || "").toLowerCase();
+    const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
+    const fileName = `${targetId}.${ext}`;
+    await fs.writeFile(path.join(SIG_DIR, fileName), buf);
+    await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, targetId]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- get signature image (authenticated) ----------
+router.get("/:id/signature", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.params.id]);
+    if (!row?.signature_path) return res.status(404).end();
+    res.sendFile(path.join(SIG_DIR, row.signature_path));
+  } catch (e) { next(e); }
+});
+
+// ---------- bulk signatures ----------
+router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array("signatures", 200), async (req, res, next) => {
+  try {
+    await fs.mkdir(SIG_DIR, { recursive: true });
+    const matched = [];
+    for (const f of (req.files || [])) {
+      const email = f.originalname.replace(/\.(png|jpg|jpeg)$/i, "").toLowerCase();
+      const user = await queryOne("SELECT id FROM users WHERE LOWER(email) = ?", [email]);
+      if (!user) continue;
+      const mt = (f.mimetype || "").toLowerCase();
+      const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
+      const fileName = `${user.id}.${ext}`;
+      await fs.writeFile(path.join(SIG_DIR, fileName), f.buffer);
+      await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, user.id]);
+      matched.push({ email, userId: user.id });
+    }
+    res.json({ matched: matched.length, results: matched });
+  } catch (e) { next(e); }
+});
+
+export default router;

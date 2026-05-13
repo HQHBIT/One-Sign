@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+server/.env
+server/uploads/documents/*
+server/uploads/signatures/*
+server/uploads/signed/*
+!server/uploads/documents/.gitkeep
+!server/uploads/signatures/.gitkeep
+!server/uploads/signed/.gitkeep
+.DS_Store
+*.log
+.vite
