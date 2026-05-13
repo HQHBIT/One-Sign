@@ -934,14 +934,16 @@ function BackHeader({ back, title, step }) {
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, initialRotation }) {
+function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, orientation, onOrientationChange, onFirstPageOrientation }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} initialRotation={initialRotation} />;
+      onPages={onPages}
+      orientation={orientation} onOrientationChange={onOrientationChange}
+      onFirstPageOrientation={onFirstPageOrientation} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} />;
 }
@@ -966,15 +968,14 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, initialRotation }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, orientation, onOrientationChange, onFirstPageOrientation }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
-  const [rotation, setRotation] = useState(0);
+  const [pageDims, setPageDims] = useState([]); // [{ width, height }, ...]
 
   useEffect(() => {
     let cancelled = false;
-    setPdf(null); setErr(null);
-    setRotation(0);
+    setPdf(null); setErr(null); setPageDims([]);
     (async () => {
       try {
         const loadingTask = pdfjsLib.getDocument({ url: file.base64 });
@@ -982,50 +983,68 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
         if (cancelled) return;
         setPdf(doc);
         onPages?.(doc.numPages);
-        // Priority: explicit initialRotation from the caller (e.g. the rotation the
-        // requestor was viewing at when they placed the marker) → the page's own
-        // /Rotate → fall back to 0. This guarantees the approver sees the document
-        // in the same orientation the requestor used.
-        if (typeof initialRotation === "number" && !Number.isNaN(initialRotation)) {
-          if (!cancelled) setRotation(((initialRotation % 360) + 360) % 360);
-        } else {
-          try {
-            const firstPage = await doc.getPage(1);
-            if (!cancelled) setRotation(((firstPage.rotate || 0) % 360 + 360) % 360);
-          } catch {}
+        const dims = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const vp = page.getViewport({ scale: 1, rotation: 0 });
+          dims.push({ width: vp.width, height: vp.height });
+        }
+        if (cancelled) return;
+        setPageDims(dims);
+        if (dims.length > 0) {
+          const first = dims[0].width > dims[0].height ? "landscape" : "portrait";
+          onFirstPageOrientation?.(first);
         }
       } catch (e) {
         if (!cancelled) setErr(e.message || String(e));
       }
     })();
     return () => { cancelled = true; };
-  }, [file.base64, initialRotation]);
+  }, [file.base64]);
 
   if (err) return <div className="card p-6 text-sm" style={{ color: "#9B2C2C" }}>Could not render PDF: {err}</div>;
   if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
 
+  // Fall back to portrait while page dims are still loading, so the JSX below never
+  // gets undefined. Once dims arrive, RequestEditor will have called setOrientation
+  // via onFirstPageOrientation and re-rendered us with the correct value.
+  const activeOrientation = orientation || "portrait";
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+  const pageRotations = pageDims.map(d =>
+    (d.width > d.height ? "landscape" : "portrait") === activeOrientation ? 0 : 90
+  );
 
   return (
     <div className="card overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
-        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"} · rotation {rotation}°</div>
-        <button onClick={() => setRotation(r => (r + 90) % 360)} className="btn-ghost text-xs" title="Rotate 90° clockwise — useful when the document is landscape and you want to view/sign in portrait, or vice versa">
-          <RotateCw size={12} /> Rotate
-        </button>
+        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"} · {activeOrientation}</div>
+        {editable && (
+          <div className="flex gap-1">
+            <button
+              onClick={() => onOrientationChange?.("portrait")}
+              className={`btn-ghost text-xs ${activeOrientation === "portrait" ? "ring-1" : ""}`}
+              title="Display every page in portrait orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
+            >Portrait</button>
+            <button
+              onClick={() => onOrientationChange?.("landscape")}
+              className={`btn-ghost text-xs ${activeOrientation === "landscape" ? "ring-1" : ""}`}
+              title="Display every page in landscape orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
+            >Landscape</button>
+          </div>
+        )}
       </div>
       <div style={{ maxHeight: 720, overflowY: "auto", backgroundColor: "#E8E3D5" }}>
         {pages.map(p => (
           <PdfPage key={p} pdf={pdf} pageNum={p}
-            rotation={rotation}
+            rotation={pageRotations[p - 1] || 0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
-            onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h, rotation) : null}
+            onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
         ))}
       </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Scroll through the pages and click-drag where the signature should go. Use the Rotate button if the page is sideways.</div>}
+      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Pick Portrait or Landscape, then click-drag where the signature should go. The orientation is baked into the PDF on submit.</div>}
     </div>
   );
 }
