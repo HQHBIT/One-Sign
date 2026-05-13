@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { orientationOf, bakeOrientationPlan } from "./pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIGNED_DIR = path.join(__dirname, "..", "uploads", "signed");
@@ -242,6 +243,73 @@ function formatSignedDate(ts) {
   const d = new Date(Number(ts));
   try { return d.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }); }
   catch { return d.toISOString().slice(0, 16).replace("T", " "); }
+}
+
+// Rebuilds the PDF so every page matches the target orientation. Pages already in
+// that orientation are embedded and drawn unchanged. Pages in the other orientation
+// are embedded and drawn rotated 90° CW onto a new page with swapped MediaBox dims.
+// Result: all pages have /Rotate = 0 and display in the target orientation natively.
+// Returns the new bytes and a parallel array indicating which pages were rotated
+// (0 = unchanged, 90 = rotated CW).
+export async function bakeOrientation(srcBytes, targetOrientation) {
+  const src = await PDFDocument.load(srcBytes);
+  const srcPages = src.getPages();
+
+  // pdf-lib's embedPage throws MissingPageContentsEmbeddingError for pages that
+  // have no /Contents stream (blank pages created without any drawing operations).
+  // Drawing an empty string forces the Contents stream into existence without
+  // adding any visible content.
+  for (const p of srcPages) {
+    if (!p.node.Contents()) p.drawText("");
+  }
+
+  // Visible dims account for any pre-existing /Rotate on the source page.
+  const pageDims = srcPages.map(p => {
+    const { width, height } = p.getSize();
+    const rot = ((p.getRotation().angle % 360) + 360) % 360;
+    const sideways = rot === 90 || rot === 270;
+    return sideways ? { width: height, height: width } : { width, height };
+  });
+  const plan = bakeOrientationPlan(pageDims, targetOrientation);
+
+  const out = await PDFDocument.create();
+  for (let i = 0; i < srcPages.length; i++) {
+    const { width: visW, height: visH } = pageDims[i];
+    const extraRot = plan[i]; // 0 or 90
+
+    const pageW = extraRot === 90 ? visH : visW;
+    const pageH = extraRot === 90 ? visW : visH;
+    const newPage = out.addPage([pageW, pageH]);
+    newPage.setRotation(degrees(0));
+
+    const embedded = await out.embedPage(srcPages[i]);
+    drawEmbeddedRotated(newPage, embedded, extraRot, visW, visH);
+  }
+
+  const bakedBytes = await out.save();
+  return { bakedBytes, pageRotations: plan };
+}
+
+// pdf-lib's drawPage anchor (x, y) is the rotation center; the embedded page is
+// translated to (x, y) and then rotated by `rotate` (CCW-positive). For 90° CW
+// we use degrees(-90) and anchor at (0, visW) so the four source corners map
+// exactly onto the new (visH × visW) page:
+//   source (0,    0)    → (0,    visW)
+//   source (visW, 0)    → (0,    0)
+//   source (visW, visH) → (visH, 0)
+//   source (0,    visH) → (visH, visW)
+function drawEmbeddedRotated(page, embedded, rotation, visW, visH) {
+  if (rotation === 0) {
+    page.drawPage(embedded, { x: 0, y: 0, width: visW, height: visH });
+  } else {
+    page.drawPage(embedded, {
+      x: 0,
+      y: visW,
+      width: visW,
+      height: visH,
+      rotate: degrees(-90)
+    });
+  }
 }
 
 export async function writeXlsxSignatureManifest({ srcPath, signaturePath, marker, outName }) {
