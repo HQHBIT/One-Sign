@@ -1008,7 +1008,8 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   // Fall back to portrait while page dims are still loading, so the JSX below never
   // gets undefined. Once dims arrive, RequestEditor will have called setOrientation
   // via onFirstPageOrientation and re-rendered us with the correct value.
-  const activeOrientation = orientation || "portrait";
+  const activeOrientation = orientation
+    || (pageDims[0] ? (pageDims[0].width > pageDims[0].height ? "landscape" : "portrait") : "portrait");
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
   const pageRotations = pageDims.map(d =>
     (d.width > d.height ? "landscape" : "portrait") === activeOrientation ? 0 : 90
