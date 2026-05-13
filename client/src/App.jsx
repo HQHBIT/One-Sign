@@ -1576,7 +1576,6 @@ function PreviewDrawer({ req, onClose, users, teams }) {
   }, [req.id, req.hasSignedFile]);
 
   const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams);
-  const initialRotation = pickInitialRotation(req);
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
@@ -1596,29 +1595,13 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         <div className="p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
-            <DocPreview file={file} markers={markers} initialRotation={initialRotation} />
+            <DocPreview file={file} markers={markers} />
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
       </div>
     </div>
   );
-}
-
-// Pick the rotation the requestor used when placing markers, so every viewer of this
-// request (preview drawer, approve drawer, etc.) shows the document the same way.
-function pickInitialRotation(req) {
-  if (req?.workflow?.length > 0) {
-    for (const step of req.workflow) {
-      for (const s of step.signers) {
-        if (typeof s.rotation === "number") return ((s.rotation % 360) + 360) % 360;
-      }
-    }
-  }
-  if (req?.marker && typeof req.marker.rotation === "number") {
-    return ((req.marker.rotation % 360) + 360) % 360;
-  }
-  return undefined;
 }
 
 function WorkflowSummary({ req, teams }) {
@@ -1881,7 +1864,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         </div>
         <div className="p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? <DocPreview file={file} markers={markers} initialRotation={pickInitialRotation(req)} /> : <div className="text-sm opacity-50">Loading…</div>}
+          {file ? <DocPreview file={file} markers={markers} /> : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
 
           {canApprove && (
