@@ -17,8 +17,8 @@ test("orientationOf returns 'portrait' when height >= width", () => {
 
 test("rotateMarker90CW maps top-left corner to right edge", () => {
   // Marker at (x=10, y=20, w=10, h=5) in top-down %.
-  // After 90° CW on the page: the marker's pre-rotation top-left ends up at
-  // post-rotation (x=80, y=10). w/h swap.
+  // After 90° CW on the page, the new top-left of the bounding box is at
+  // (100 - y - h, x) = (75, 10) with w and h swapped.
   const r = rotateMarker90CW({ x: 10, y: 20, w: 10, h: 5 });
   assert.deepEqual(r, { x: 75, y: 10, w: 5, h: 10 });
 });
