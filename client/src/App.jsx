@@ -535,6 +535,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   // workflow mode: [{teamId, signers: [{userId, page, x, y, w, h}]}]
   const [workflow, setWorkflow] = useState([]);
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
+  const [orientation, setOrientation] = useState(null);
 
   const handleFile = e => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -574,9 +575,9 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   }, [mode, marker, workflow, teams]);
 
   // ---------- click handler from PDF viewer ----------
-  const onAddMarker = (page, x, y, w, h, rotation = 0) => {
+  const onAddMarker = (page, x, y, w, h) => {
     if (mode === "single") {
-      setMarker({ page, x, y, w, h, rotation });
+      setMarker({ page, x, y, w, h });
       return;
     }
     if (!placingSlot) {
@@ -587,7 +588,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
     setWorkflow(wf => {
       const next = wf.map((st, i) => i !== stepIdx ? st : {
         ...st,
-        signers: st.signers.map((s, j) => j !== signerIdx ? s : { ...s, page, x, y, w, h, rotation })
+        signers: st.signers.map((s, j) => j !== signerIdx ? s : { ...s, page, x, y, w, h })
       });
       return next;
     });
@@ -642,10 +643,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
     try {
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: file.blob, targetTeamId: targetTeam, marker, instantApproval, note, requestType });
+        await addRequest({ file: file.blob, targetTeamId: targetTeam, marker, instantApproval, note, requestType, orientation });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
-        await addRequest({ file: file.blob, workflow, instantApproval, note, requestType });
+        await addRequest({ file: file.blob, workflow, instantApproval, note, requestType, orientation });
       }
       notify("Request submitted", "success");
       onDone();
@@ -732,7 +733,11 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {/* 3a. single mode: pick team + place marker */}
           {file && mode === "single" && (
             <Section n="03" title="Mark the signature field" desc="Click and drag on the document to set the signature box.">
-              <DocPreview file={file} markers={allMarkers} editable onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              <DocPreview file={file} markers={allMarkers} editable
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
+                orientation={orientation}
+                onOrientationChange={setOrientation}
+                onFirstPageOrientation={setOrientation} />
               {marker && (
                 <div className="mt-3 text-xs font-mono opacity-60">
                   Placed on page {marker.page} · {Math.round(marker.x)}% × {Math.round(marker.y)}% · {Math.round(marker.w)}% wide
@@ -764,7 +769,11 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {/* 3b. workflow mode */}
           {file && mode === "workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
-              <DocPreview file={file} markers={allMarkers} editable onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              <DocPreview file={file} markers={allMarkers} editable
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
+                orientation={orientation}
+                onOrientationChange={setOrientation}
+                onFirstPageOrientation={setOrientation} />
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
                   Click and drag on the document to place this signer's box. <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
