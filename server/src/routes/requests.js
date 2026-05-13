@@ -419,7 +419,6 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     signaturePath: path.join(SIG_DIR, s.signature_path),
     page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
     w: Number(s.marker_w), h: Number(s.marker_h),
-    rotation: s.rotation != null ? Number(s.rotation) : undefined,
     signerName: s.user_name,
     signedAt: s.signed_at ? Number(s.signed_at) : Date.now()
   }));
@@ -581,7 +580,6 @@ async function approveWorkflowStepInline({ req, row, signer }) {
     signaturePath: path.join(SIG_DIR, s.signature_path),
     page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
     w: Number(s.marker_w), h: Number(s.marker_h),
-    rotation: s.rotation != null ? Number(s.rotation) : undefined,
     signerName: s.user_name,
     signedAt: s.signed_at ? Number(s.signed_at) : Date.now()
   }));
