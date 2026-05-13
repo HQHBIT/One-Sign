@@ -2,7 +2,7 @@ import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { orientationOf, bakeOrientationPlan } from "./pdf-rotation.js";
+import { bakeOrientationPlan } from "./pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIGNED_DIR = path.join(__dirname, "..", "uploads", "signed");
