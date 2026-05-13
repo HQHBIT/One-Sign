@@ -4,7 +4,7 @@ import {
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
-  FileSpreadsheet, FileSignature, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, RotateCw
+  FileSpreadsheet, FileSignature, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
