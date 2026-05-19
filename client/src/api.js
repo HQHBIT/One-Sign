@@ -77,7 +77,7 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, instantApproval, note, requestType, orientation }) {
+  createRequest({ file, targetTeamId, marker, workflow, instantApproval, note, requestType }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (workflow) fd.append("workflow", JSON.stringify(workflow));
@@ -86,7 +86,6 @@ export const api = {
     if (instantApproval) fd.append("instantApproval", "true");
     if (note) fd.append("note", note);
     if (requestType) fd.append("requestType", requestType);
-    if (orientation) fd.append("orientation", orientation);
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
   approveRequest(id) { return this.fetch(`/api/requests/${id}/approve`, { method: "POST" }); },

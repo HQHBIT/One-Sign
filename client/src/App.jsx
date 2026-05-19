@@ -535,7 +535,47 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   // workflow mode: [{teamId, signers: [{userId, page, x, y, w, h}]}]
   const [workflow, setWorkflow] = useState([]);
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
-  const [orientation, setOrientation] = useState(null);
+
+  // Holds the live XLSX workbook so cell edits can be written back on submit
+  const xlsxWbRef = useRef(null);
+  const leaveTemplateCache = useRef(null);
+  const [leaveStyleMap, setLeaveStyleMap] = useState(null);
+
+  // Auto-load leave template + styles when type is "leave"
+  useEffect(() => {
+    if (requestType !== "leave") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [templateU8, stylesJson] = await Promise.all([
+          leaveTemplateCache.current
+            ? Promise.resolve(leaveTemplateCache.current)
+            : fetch("/leave-template.xlsx").then(r => r.arrayBuffer()).then(b => { const u8 = new Uint8Array(b); leaveTemplateCache.current = u8; return u8; }),
+          !leaveStyleMap
+            ? fetch("/leave-template-styles.json").then(r => r.json()).catch(() => null)
+            : Promise.resolve(null)
+        ]);
+        if (cancelled) return;
+        if (stylesJson) setLeaveStyleMap(stylesJson);
+        const blob = new File([templateU8], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (cancelled) return;
+          setFile({ name: "Leave Approval.xlsx", base64: reader.result, type: blob.type, ext: "xlsx", blob });
+          setMarker(null); setWorkflow([]); setPlacingSlot(null);
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) { console.error(e); notify("Failed to load leave template", "error"); }
+    })();
+    return () => { cancelled = true; };
+  }, [requestType]);
+
+  const buildXlsxBlob = () => {
+    const wb = xlsxWbRef.current;
+    if (!wb) return null;
+    const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    return new File([new Uint8Array(out)], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  };
 
   const handleFile = e => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -633,20 +673,24 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   }));
 
   // ---------- submit ----------
-  const canSubmitSingle = file && marker && targetTeam;
-  const canSubmitWorkflow = file && workflow.length > 0
+  const isLeave = requestType === "leave";
+  const effectiveFile = !!file;
+  const canSubmitSingle = isLeave ? (effectiveFile && targetTeam) : (effectiveFile && marker && targetTeam);
+  const canSubmitWorkflow = effectiveFile && workflow.length > 0
     && workflow.every(st => st.teamId && st.signers.length > 0
         && st.signers.every(s => s.userId && s.x != null));
 
   const submit = async () => {
     setBusy(true);
     try {
+      const submitFile = isLeave ? (buildXlsxBlob() || file.blob) : file.blob;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: file.blob, targetTeamId: targetTeam, marker, instantApproval, note, requestType, orientation });
+        const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, instantApproval, note, requestType });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
-        await addRequest({ file: file.blob, workflow, instantApproval, note, requestType, orientation });
+        await addRequest({ file: submitFile, workflow, instantApproval, note, requestType });
       }
       notify("Request submitted", "success");
       onDone();
@@ -678,31 +722,41 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
             </div>
           </Section>
 
-          {/* 1. upload */}
-          <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
-            {!file ? (
-              <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
-                <Upload size={24} className="opacity-50 mb-3" />
-                <div className="font-medium">Click to select a file</div>
-                <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
-                <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
-              </label>
-            ) : (
-              <div className="card p-5 flex items-center gap-4">
-                {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{file.name}</div>
-                  <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
+          {/* 1. upload / leave template */}
+          {isLeave ? (
+            <Section n="01" title="Leave Request Form" desc="Edit the cells directly in the spreadsheet below.">
+              {file ? (
+                <XlsxViewer file={file} markers={[]} cellEditable onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
+              ) : (
+                <div className="card p-10 text-sm opacity-50 text-center">Loading template…</div>
+              )}
+            </Section>
+          ) : (
+            <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
+              {!file ? (
+                <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
+                  <Upload size={24} className="opacity-50 mb-3" />
+                  <div className="font-medium">Click to select a file</div>
+                  <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
+                  <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
+                </label>
+              ) : (
+                <div className="card p-5 flex items-center gap-4">
+                  {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{file.name}</div>
+                    <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
+                  </div>
+                  <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
+                    <X size={12} /> Remove
+                  </button>
                 </div>
-                <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
-                  <X size={12} /> Remove
-                </button>
-              </div>
-            )}
-          </Section>
+              )}
+            </Section>
+          )}
 
           {/* 2. mode + instant */}
-          {file && (
+          {effectiveFile && (
             <Section n="02" title="Approval flow" desc="Pick how this document should be approved.">
               <div className="grid sm:grid-cols-2 gap-3">
                 <button onClick={() => setMode("single")}
@@ -731,13 +785,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 3a. single mode: pick team + place marker */}
-          {file && mode === "single" && (
+          {!isLeave && effectiveFile && mode === "single" && (
             <Section n="03" title="Mark the signature field" desc="Click and drag on the document to set the signature box.">
               <DocPreview file={file} markers={allMarkers} editable
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-                orientation={orientation}
-                onOrientationChange={setOrientation}
-                onFirstPageOrientation={setOrientation} />
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               {marker && (
                 <div className="mt-3 text-xs font-mono opacity-60">
                   Placed on page {marker.page} · {Math.round(marker.x)}% × {Math.round(marker.y)}% · {Math.round(marker.w)}% wide
@@ -747,8 +798,8 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
             </Section>
           )}
 
-          {file && mode === "single" && marker && (
-            <Section n="04" title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
+          {effectiveFile && mode === "single" && (isLeave || marker) && (
+            <Section n={isLeave ? "03" : "04"} title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
               <div className="grid sm:grid-cols-3 gap-3">
                 {teams.map(t => {
                   const active = targetTeam === t.id;
@@ -767,13 +818,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 3b. workflow mode */}
-          {file && mode === "workflow" && (
+          {!isLeave && effectiveFile && mode === "workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
               <DocPreview file={file} markers={allMarkers} editable
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-                orientation={orientation}
-                onOrientationChange={setOrientation}
-                onFirstPageOrientation={setOrientation} />
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
                   Click and drag on the document to place this signer's box. <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
@@ -831,8 +879,8 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 5. submit */}
-          {file && (mode === "single" ? (marker && targetTeam) : workflow.length > 0) && (
-            <Section n={mode === "single" ? "05" : "04"} title="Add a note (optional)" desc="">
+          {effectiveFile && (mode === "single" ? ((isLeave || marker) && targetTeam) : workflow.length > 0) && (
+            <Section n={isLeave ? "04" : (mode === "single" ? "05" : "04")} title="Add a note (optional)" desc="">
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the approver(s)…" />
               <div className="flex justify-end mt-4 gap-3">
                 <button className="btn-ghost" onClick={onDone}>Cancel</button>
@@ -943,18 +991,16 @@ function BackHeader({ back, title, step }) {
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, orientation, onOrientationChange, onFirstPageOrientation }) {
+function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages}
-      orientation={orientation} onOrientationChange={onOrientationChange}
-      onFirstPageOrientation={onFirstPageOrientation} />;
+      onPages={onPages} />;
   }
-  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} />;
+  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} />;
 }
 
 // Convert a rectangle between viewport-space % and MediaBox-space % for an arbitrary
@@ -977,14 +1023,13 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, orientation, onOrientationChange, onFirstPageOrientation }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
-  const [pageDims, setPageDims] = useState([]); // [{ width, height }, ...]
 
   useEffect(() => {
     let cancelled = false;
-    setPdf(null); setErr(null); setPageDims([]);
+    setPdf(null); setErr(null);
     (async () => {
       try {
         const loadingTask = pdfjsLib.getDocument({ url: file.base64 });
@@ -992,18 +1037,6 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
         if (cancelled) return;
         setPdf(doc);
         onPages?.(doc.numPages);
-        const dims = [];
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i);
-          const vp = page.getViewport({ scale: 1, rotation: 0 });
-          dims.push({ width: vp.width, height: vp.height });
-        }
-        if (cancelled) return;
-        setPageDims(dims);
-        if (dims.length > 0) {
-          const first = dims[0].width > dims[0].height ? "landscape" : "portrait";
-          onFirstPageOrientation?.(first);
-        }
       } catch (e) {
         if (!cancelled) setErr(e.message || String(e));
       }
@@ -1014,39 +1047,17 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   if (err) return <div className="card p-6 text-sm" style={{ color: "#9B2C2C" }}>Could not render PDF: {err}</div>;
   if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
 
-  // Fall back to portrait while page dims are still loading, so the JSX below never
-  // gets undefined. Once dims arrive, RequestEditor will have called setOrientation
-  // via onFirstPageOrientation and re-rendered us with the correct value.
-  const activeOrientation = orientation
-    || (pageDims[0] ? (pageDims[0].width > pageDims[0].height ? "landscape" : "portrait") : "portrait");
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-  const pageRotations = pageDims.map(d =>
-    (d.width > d.height ? "landscape" : "portrait") === activeOrientation ? 0 : 90
-  );
 
   return (
     <div className="card overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
-        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"} · {activeOrientation}</div>
-        {editable && (
-          <div className="flex gap-1">
-            <button
-              onClick={() => onOrientationChange?.("portrait")}
-              className={`btn-ghost text-xs ${activeOrientation === "portrait" ? "ring-1" : ""}`}
-              title="Display every page in portrait orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
-            >Portrait</button>
-            <button
-              onClick={() => onOrientationChange?.("landscape")}
-              className={`btn-ghost text-xs ${activeOrientation === "landscape" ? "ring-1" : ""}`}
-              title="Display every page in landscape orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
-            >Landscape</button>
-          </div>
-        )}
+        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
       </div>
       <div style={{ maxHeight: 720, overflowY: "auto", backgroundColor: "#E8E3D5" }}>
         {pages.map(p => (
           <PdfPage key={p} pdf={pdf} pageNum={p}
-            rotation={pageRotations[p - 1] || 0}
+            rotation={0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
@@ -1054,7 +1065,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             onDeleteMarker={onDeleteMarker} />
         ))}
       </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Pick Portrait or Landscape, then click-drag where the signature should go. The orientation is baked into the PDF on submit.</div>}
+      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click-drag where the signature should go.</div>}
     </div>
   );
 }
@@ -1286,25 +1297,121 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature }) {
-  const [sheets, setSheets] = useState([]);
+function xlsxBorderCss(bd) {
+  if (!bd) return {};
+  const w = { thin: "1px", medium: "2px" };
+  const s = {};
+  if (bd.t) s.borderTop = `${w[bd.t] || "1px"} solid #333`;
+  if (bd.b) s.borderBottom = `${w[bd.b] || "1px"} solid #333`;
+  if (bd.l) s.borderLeft = `${w[bd.l] || "1px"} solid #333`;
+  if (bd.r) s.borderRight = `${w[bd.r] || "1px"} solid #333`;
+  return s;
+}
+
+function xlsxCellStyle(sty) {
+  if (!sty) return {};
+  const css = {};
+  if (sty.b) css.fontWeight = "bold";
+  if (sty.fs) css.fontSize = `${sty.fs}pt`;
+  if (sty.ha) css.textAlign = sty.ha;
+  if (sty.va === "center") css.verticalAlign = "middle";
+  else if (sty.va === "top") css.verticalAlign = "top";
+  if (sty.wr) css.whiteSpace = "normal";
+  return { ...css, ...xlsxBorderCss(sty.bd) };
+}
+
+function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, onWorkbookReady, styleMap }) {
+  const [wb, setWb] = useState(null);
+  const [sheetNames, setSheetNames] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
+  const [grid, setGrid] = useState([]);
   const [drawing, setDrawing] = useState(null);
+  const [editTick, setEditTick] = useState(0);
   const pageRef = useRef(null);
 
   useEffect(() => {
-    try {
-      const b64 = file.base64.split(",")[1];
-      const bin = atob(b64);
-      const u8 = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-      const wb = XLSX.read(u8, { type: "array" });
-      const sh = wb.SheetNames.map(n => ({ name: n, html: XLSX.utils.sheet_to_html(wb.Sheets[n], { id: "t" }) }));
-      setSheets(sh);
-      setActiveSheet(sh[0]?.name);
-      onPages?.(sh.length);
-    } catch (e) { console.error(e); }
+    let cancelled = false;
+    (async () => {
+      try {
+        let u8;
+        if (file.base64.startsWith("blob:")) {
+          const resp = await fetch(file.base64);
+          const buf = await resp.arrayBuffer();
+          u8 = new Uint8Array(buf);
+        } else {
+          const b64 = file.base64.split(",")[1];
+          const bin = atob(b64);
+          u8 = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        }
+        if (cancelled) return;
+        const workbook = XLSX.read(u8, { type: "array", cellDates: true });
+        setWb(workbook);
+        setSheetNames(workbook.SheetNames);
+        const firstVisible = cellEditable
+          ? (workbook.SheetNames.find(s => s !== "Sheet1") || workbook.SheetNames[0])
+          : workbook.SheetNames[0];
+        setActiveSheet(firstVisible);
+        onPages?.(workbook.SheetNames.length);
+        onWorkbookReady?.(workbook);
+      } catch (e) { console.error(e); }
+    })();
+    return () => { cancelled = true; };
   }, [file.base64]);
+
+  useEffect(() => {
+    if (!wb || !activeSheet) { setGrid([]); return; }
+    const ws = wb.Sheets[activeSheet];
+    if (!ws || !ws["!ref"]) { setGrid([]); return; }
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    const merges = ws["!merges"] || [];
+    const merged = {};
+    for (const m of merges) {
+      for (let r = m.s.r; r <= m.e.r; r++)
+        for (let c = m.s.c; c <= m.e.c; c++)
+          if (r !== m.s.r || c !== m.s.c) merged[`${r}:${c}`] = true;
+    }
+    const findMerge = (r, c) => merges.find(m => m.s.r === r && m.s.c === c);
+    const rows = [];
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const cells = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        if (merged[`${r}:${c}`]) continue;
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        const m = findMerge(r, c);
+        let display = "";
+        if (cell) {
+          if (cell.t === "d" && cell.v instanceof Date) {
+            display = cell.v.toLocaleDateString();
+          } else if (cell.w) {
+            display = cell.w;
+          } else if (cell.v != null) {
+            display = String(cell.v);
+          }
+        }
+        cells.push({
+          addr, r, c, display,
+          colSpan: m ? m.e.c - m.s.c + 1 : 1,
+          rowSpan: m ? m.e.r - m.s.r + 1 : 1
+        });
+      }
+      rows.push(cells);
+    }
+    setGrid(rows);
+  }, [wb, activeSheet, editTick]);
+
+  const handleCellEdit = (addr, newVal) => {
+    if (!wb || !activeSheet) return;
+    const ws = wb.Sheets[activeSheet];
+    if (newVal === "") {
+      delete ws[addr];
+    } else {
+      const num = Number(newVal);
+      ws[addr] = isNaN(num) || newVal.trim() === "" ? { t: "s", v: newVal } : { t: "n", v: num };
+    }
+    setEditTick(t => t + 1);
+  };
 
   const onDown = (e) => {
     if (!editable || !onAddMarker) return;
@@ -1340,22 +1447,76 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
     setDrawing(null);
   };
 
-  const active = sheets.find(s => s.name === activeSheet);
+  const visibleSheets = cellEditable ? sheetNames.filter(s => s !== "Sheet1") : sheetNames;
+  const sm = styleMap?.styles || {};
+  const rh = styleMap?.rowHeights || {};
+  const cw = styleMap?.colWidths || {};
+  const hasStyles = Object.keys(sm).length > 0;
+
   return (
     <div className="card overflow-hidden">
-      <div className="flex border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
-        {sheets.map(s => (
-          <button key={s.name} onClick={() => setActiveSheet(s.name)}
-            className={`px-4 py-2 text-xs font-medium ${activeSheet === s.name ? "" : "opacity-50"}`}
-            style={{ borderBottom: activeSheet === s.name ? "2px solid #B8894A" : "2px solid transparent" }}>
-            {s.name}
-          </button>
-        ))}
-      </div>
-      <div ref={pageRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={() => setDrawing(null)}
-           style={{ position: "relative", minHeight: 400, maxHeight: 720, overflow: "auto", cursor: editable ? "crosshair" : "default" }}>
-        <style>{`.xlsx-wrap table { border-collapse: collapse; font-size: 13px; } .xlsx-wrap td, .xlsx-wrap th { border: 1px solid rgba(15,26,46,.15); padding: 6px 10px; }`}</style>
-        <div className="xlsx-wrap p-3" dangerouslySetInnerHTML={{ __html: active?.html || "" }} />
+      {visibleSheets.length > 1 && (
+        <div className="flex border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+          {visibleSheets.map(s => (
+            <button key={s} onClick={() => setActiveSheet(s)}
+              className={`px-4 py-2 text-xs font-medium ${activeSheet === s ? "" : "opacity-50"}`}
+              style={{ borderBottom: activeSheet === s ? "2px solid #B8894A" : "2px solid transparent" }}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      <div ref={pageRef}
+           onMouseDown={editable ? onDown : undefined} onMouseMove={editable ? onMove : undefined}
+           onMouseUp={editable ? onUp : undefined} onMouseLeave={editable ? () => setDrawing(null) : undefined}
+           style={{ position: "relative", minHeight: 400, maxHeight: 720, overflow: "auto", cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
+        <style>{`
+          .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
+          .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
+          .xlsx-grid td.cell-editable { cursor: text; }
+          .xlsx-grid td.cell-editable:hover { background: rgba(184,137,74,.08); }
+          .xlsx-grid td.cell-editable:focus { outline: 2px solid #B8894A; outline-offset: -2px; background: #FFFDF5; }
+        `}</style>
+        <div style={{ padding: "12px 16px" }}>
+          <table className="xlsx-grid">
+            {Object.keys(cw).length > 0 && (
+              <colgroup>
+                {Array.from({ length: 9 }, (_, i) => {
+                  const letter = String.fromCharCode(65 + i);
+                  return <col key={i} style={{ width: cw[letter] ? `${cw[letter]}px` : 130 }} />;
+                })}
+              </colgroup>
+            )}
+            <tbody>
+              {grid.map((row, ri) => {
+                const rowNum = ri + 1;
+                const rowH = rh[String(rowNum)];
+                return (
+                  <tr key={ri} style={rowH ? { height: `${rowH}px` } : undefined}>
+                    {row.map(cell => {
+                      const sty = sm[cell.addr];
+                      const cellCss = sty ? xlsxCellStyle(sty) : (hasStyles ? {} : {});
+                      return (
+                        <td key={cell.addr}
+                          colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
+                          rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
+                          className={cellEditable ? "cell-editable" : ""}
+                          style={cellCss}
+                          contentEditable={cellEditable ? true : undefined}
+                          suppressContentEditableWarning
+                          onBlur={cellEditable ? e => {
+                            const newVal = e.currentTarget.textContent || "";
+                            if (newVal !== cell.display) handleCellEdit(cell.addr, newVal);
+                          } : undefined}
+                        >{cell.display}</td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         {markers.map((m, i) => (
           <MarkerOverlay key={m.id || i} m={{ ...m, signedDataUrl: m.signedDataUrl || appliedSignature }} />
         ))}
@@ -1369,6 +1530,7 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
         )}
       </div>
       {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click and drag on the active sheet to place a signature.</div>}
+      {cellEditable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click any cell to edit its value.</div>}
     </div>
   );
 }
@@ -1525,13 +1687,14 @@ function DownloadBtn({ req }) {
   const download = async () => {
     setBusy(true);
     try {
-      // Prefer signed version when available
-      const kind = req.hasSignedFile ? "signed" : "file";
+      const isPdf = req.fileType === "pdf";
+      // For xlsx, the "signed" version is a JSON manifest — always download the original file
+      const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
       const url = await api.getRequestFileBlob(req.id, kind);
       const a = document.createElement("a");
       a.href = url;
-      const ext = req.fileType === "pdf" ? "pdf" : "xlsx";
-      a.download = req.hasSignedFile ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
+      const ext = isPdf ? "pdf" : "xlsx";
+      a.download = (req.hasSignedFile && isPdf) ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (e) { alert(e.message || "Download failed"); }
@@ -1563,13 +1726,18 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
 function PreviewDrawer({ req, onClose, users, teams }) {
   const [file, setFile] = useState(null);
+  const [leaveStyles, setLeaveStyles] = useState(null);
   useEffect(() => {
     let url = null;
     (async () => {
       try {
-        const kind = req.hasSignedFile ? "signed" : "file";
+        const isPdf = req.fileType === "pdf";
+        const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
         url = await api.getRequestFileBlob(req.id, kind);
         setFile({ name: req.fileName, base64: url, ext: req.fileType === "pdf" ? "pdf" : "xlsx" });
+        if (req.requestType === "leave" && req.fileType !== "pdf") {
+          fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
+        }
       } catch (e) { console.error(e); }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
@@ -1595,7 +1763,7 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         <div className="p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
-            <DocPreview file={file} markers={markers} />
+            <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
@@ -1814,15 +1982,20 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
 
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
+  const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
   useEffect(() => {
     let url = null;
     (async () => {
       try {
-        const kind = req.hasSignedFile ? "signed" : "file";
+        const isPdf = req.fileType === "pdf";
+        const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
         url = await api.getRequestFileBlob(req.id, kind);
         setFile({ name: req.fileName, base64: url, ext: req.fileType === "pdf" ? "pdf" : "xlsx" });
+        if (req.requestType === "leave" && req.fileType !== "pdf") {
+          fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
+        }
       } catch (e) { console.error(e); }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
@@ -1864,7 +2037,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         </div>
         <div className="p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? <DocPreview file={file} markers={markers} /> : <div className="text-sm opacity-50">Loading…</div>}
+          {file ? <DocPreview file={file} markers={markers} styleMap={leaveStyles} /> : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
 
           {canApprove && (
