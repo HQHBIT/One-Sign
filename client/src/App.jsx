@@ -8,10 +8,9 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { api } from "./api.js";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
 // FileX icon shim (lucide doesn't always export it)
 const FileX = (props) => <FileText {...props} />;
