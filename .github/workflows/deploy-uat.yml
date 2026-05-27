@@ -11,17 +11,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Check for changes
         id: changes
         run: |
-          if git diff --name-only HEAD~1 HEAD | grep -q '^client/'; then
+          BASE=${{ github.event.before }}
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git rev-parse HEAD~1)
+          fi
+          echo "Comparing $BASE..HEAD"
+          if git diff --name-only "$BASE" HEAD | grep -q '^client/'; then
             echo "client=true" >> $GITHUB_OUTPUT
           else
             echo "client=false" >> $GITHUB_OUTPUT
           fi
-          if git diff --name-only HEAD~1 HEAD | grep -q '^server/'; then
+          if git diff --name-only "$BASE" HEAD | grep -q '^server/'; then
             echo "server=true" >> $GITHUB_OUTPUT
           else
             echo "server=false" >> $GITHUB_OUTPUT
@@ -81,12 +86,14 @@ jobs:
             PORT=5101 pm2 start src/index.js --name onesign_backend_uat --cwd /home/ubuntu/OneSign/server
             pm2 save
 
-      - name: Reload nginx after client deploy
-        if: steps.changes.outputs.client == 'true'
+      - name: Ensure nginx serves .mjs with correct MIME type
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.UAT_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
           script: |
+            if ! grep -q 'mjs' /etc/nginx/mime.types 2>/dev/null; then
+              sudo sed -i 's|application/javascript\s\+js;|application/javascript  js mjs;|' /etc/nginx/mime.types
+            fi
             sudo nginx -t && sudo systemctl reload nginx
