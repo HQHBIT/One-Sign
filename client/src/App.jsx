@@ -591,6 +591,22 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
     reader.readAsDataURL(f);
   };
 
+  // ---------- aspect ratio to lock the marker rectangle to ----------
+  // When placing a signer's marker in workflow mode, snap the rectangle to that
+  // signer's signature aspect so the requestor sees the exact footprint that will
+  // be stamped on approval. Single mode and unknown aspects fall back to free-form.
+  const lockedAspect = useMemo(() => {
+    if (mode !== "workflow" || !placingSlot) return null;
+    const step = workflow[placingSlot.stepIdx];
+    if (!step) return null;
+    const signerSlot = step.signers?.[placingSlot.signerIdx];
+    if (!signerSlot) return null;
+    const team = teams.find(t => t.id === step.teamId);
+    const approver = (team?.approvers || []).find(a => a.id === signerSlot.userId);
+    const a = approver?.signatureAspect;
+    return (a && a > 0 && isFinite(a)) ? a : null;
+  }, [mode, placingSlot, workflow, teams]);
+
   // ---------- markers shown on the doc ----------
   const allMarkers = useMemo(() => {
     if (mode === "single") {
@@ -794,6 +810,9 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
                   <button className="ml-3 underline" onClick={() => setMarker(null)}>Reset</button>
                 </div>
               )}
+              <div className="mt-3 text-xs opacity-60">
+                The signature will fill this exact rectangle. A "Digitally signed by … · date" line is added below it automatically.
+              </div>
             </Section>
           )}
 
@@ -819,11 +838,15 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {/* 3b. workflow mode */}
           {!isLeave && effectiveFile && mode === "workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
-              <DocPreview file={file} markers={allMarkers} editable
+              <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
                 onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
-                  Click and drag on the document to place this signer's box. <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
+                  Click and drag on the document to place this signer's box.{" "}
+                  {lockedAspect
+                    ? <span>Aspect is locked to the signer's signature so what you draw is what gets stamped.</span>
+                    : <span>(Once this signer uploads a signature, the box will lock to its aspect.)</span>}
+                  <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
                 </div>
               )}
 
@@ -990,14 +1013,14 @@ function BackHeader({ back, title, step }) {
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap }) {
+function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} />;
+      onPages={onPages} lockedAspect={lockedAspect} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} />;
 }
@@ -1022,7 +1045,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -1059,6 +1082,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             rotation={0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
+            lockedAspect={lockedAspect}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
@@ -1069,11 +1093,33 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   );
 }
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0 }) {
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+
+  // Constrain a viewport %-rectangle to satisfy lockedAspect (signature width/height
+  // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger
+  // dimension. Returns null if there's no lock or canvas hasn't measured yet.
+  const lockRect = (vx, vy, vw, vh) => {
+    if (!lockedAspect || !size.w || !size.h) return null;
+    // Target viewport ratio so that the resulting MediaBox rectangle has aspect α.
+    // At rotation 0: vw_px / vh_px = α   →   vw/vh = α * (canvas_h / canvas_w).
+    const target = lockedAspect * (size.h / size.w);
+    const currentRatio = vw / Math.max(vh, 0.0001);
+    if (currentRatio > target) {
+      // Too wide → shrink width to match height
+      vw = vh * target;
+    } else {
+      // Too tall → shrink height to match width
+      vh = vw / target;
+    }
+    // Keep inside page bounds (anchor at vx, vy)
+    if (vx + vw > 100) vw = Math.max(1, 100 - vx);
+    if (vy + vh > 100) vh = Math.max(1, 100 - vy);
+    return { vx, vy, vw, vh };
+  };
 
   // Cancel any in-progress drag when the user rotates the page
   useEffect(() => { setDrawing(null); }, [rotation]);
@@ -1146,12 +1192,27 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     if (vy < 0) vy = 0;
     if (vx + vw > 100) vx = Math.max(0, 100 - vw);
     if (vy + vh > 100) vy = Math.max(0, 100 - vh);
+    // Snap to the signer's signature aspect when one is known
+    const locked = lockRect(vx, vy, vw, vh);
+    if (locked) { vx = locked.vx; vy = locked.vy; vw = locked.vw; vh = locked.vh; }
     // Convert viewport-space coords (what the user clicked at the current rotation) to
     // MediaBox-space coords for storage and stamping.
     const m = viewportToMediabox(rotation, vx, vy, vw, vh);
     onAddMarker(m.x, m.y, m.w, m.h);
     setDrawing(null);
   };
+
+  // Live drag preview, locked to aspect if applicable
+  const previewRect = (() => {
+    if (!drawing) return null;
+    const vx = Math.min(drawing.sx, drawing.x);
+    const vy = Math.min(drawing.sy, drawing.y);
+    let vw = Math.abs(drawing.x - drawing.sx);
+    let vh = Math.abs(drawing.y - drawing.sy);
+    const locked = lockRect(vx, vy, vw, vh);
+    if (locked) { vw = locked.vw; vh = locked.vh; }
+    return { vx, vy, vw, vh };
+  })();
 
   return (
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
@@ -1177,11 +1238,11 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
             onUpdate={updateHandler}
             onDelete={deleteHandler} />;
         })}
-        {drawing && (
+        {previewRect && (
           <div style={{
             position: "absolute",
-            left: `${Math.min(drawing.sx, drawing.x)}%`, top: `${Math.min(drawing.sy, drawing.y)}%`,
-            width: `${Math.abs(drawing.x - drawing.sx)}%`, height: `${Math.abs(drawing.y - drawing.sy)}%`,
+            left: `${previewRect.vx}%`, top: `${previewRect.vy}%`,
+            width: `${previewRect.vw}%`, height: `${previewRect.vh}%`,
             border: "2px dashed #B8894A", backgroundColor: "rgba(184,137,74,.18)", pointerEvents: "none"
           }} />
         )}

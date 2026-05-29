@@ -208,6 +208,10 @@ async function runSchema() {
   // approvers can filter / batch-approve same-type requests together.
   await tryExec(`ALTER TABLE requests ADD COLUMN request_type VARCHAR(32) NOT NULL DEFAULT 'general'`);
 
+  // Native width/height ratio of the signature image, persisted on upload so the
+  // requestor's marker box can snap to that aspect at placement time.
+  await tryExec(`ALTER TABLE users ADD COLUMN signature_aspect DOUBLE DEFAULT NULL`);
+
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
   await tryExec(`ALTER TABLE requests MODIFY COLUMN requestor_id VARCHAR(64) NULL`);
@@ -281,6 +285,7 @@ export async function hydrateUser(row) {
     role: row.role,
     team: row.team_id,
     hasSignature: !!row.signature_path,
+    signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id)
   };
 }

@@ -69,57 +69,67 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
   return outPath;
 }
 
-// Draws the signature image (aspect-fit) above an optional caption ("Signed by …"
-// + date) inside the marker box. All coordinates are MediaBox y-up; no rotation logic.
+// Draws the signature image filling the EXACT marker rectangle the requestor placed.
+// The image is stretched to (boxW, boxH); no aspect-fit, no interior caption. A small
+// "Digitally signed by … · date" strip is rendered BELOW the marker box (or above it
+// when there isn't room below) so the visible signature footprint always equals the
+// placed rectangle. Coords are MediaBox y-up; rotation has already been baked.
 function drawStampedBlock({ page, sigImg, font, fontBold, boxX, boxY, boxW, boxH, signerName, signedAt }) {
-  const hasCaptionData = !!(signerName || signedAt);
-  const captionFrac = hasCaptionData && (boxH * 0.28) >= 10 ? 0.28 : 0;
-  const sigFrac = 1 - captionFrac;
-  const sigAreaH = sigFrac * boxH;
-  const capAreaH = captionFrac * boxH;
+  // 1) Signature fills the marker exactly.
+  page.drawImage(sigImg, { x: boxX, y: boxY, width: boxW, height: boxH });
 
-  const sigRatio = sigImg.width / sigImg.height;
-  const areaRatio = boxW / sigAreaH;
-  let fitW, fitH;
-  if (sigRatio > areaRatio) { fitW = boxW; fitH = boxW / sigRatio; }
-  else { fitH = sigAreaH; fitW = sigAreaH * sigRatio; }
+  // 2) Optional caption rendered outside the marker. Compose the lines first so we
+  //    know whether there's anything to draw.
+  if (!signerName && !signedAt) return;
 
-  // Signature area sits at the TOP of the box (display y = 0..sigAreaH); caption sits
-  // BELOW it. In MediaBox y-up: top-of-box = boxY + boxH. The signature image's BL
-  // is at boxY + boxH - sigAreaH + verticalSlack/2.
-  const sigBLx = boxX + (boxW - fitW) / 2;
-  const sigBLy = boxY + boxH - sigAreaH + (sigAreaH - fitH) / 2;
-  page.drawImage(sigImg, { x: sigBLx, y: sigBLy, width: fitW, height: fitH });
+  const { width: pageW, height: pageH } = page.getSize();
+  const nameText = signerName ? `Digitally signed by ${signerName}` : "";
+  const dateText = signedAt ? formatSignedDate(signedAt) : "";
 
-  if (captionFrac > 0) {
-    // Separator between sig and caption: in y-up at boxY + capAreaH
-    page.drawLine({
-      start: { x: boxX + 1, y: boxY + capAreaH },
-      end:   { x: boxX + boxW - 1, y: boxY + capAreaH },
-      thickness: 0.4,
-      color: rgb(0.62, 0.62, 0.62)
-    });
+  // Caption sizing scales with the marker width but stays within a comfortable range.
+  const nameSize = clampNum(boxW * 0.045, 5.5, 8);
+  const dateSize = clampNum(boxW * 0.038, 4.5, 7);
+  const lineGap = Math.max(1, nameSize * 0.25);
+  const padTop = Math.max(1.5, nameSize * 0.45);
+  const padBottom = Math.max(1, dateSize * 0.4);
+  const linesH = (nameText ? nameSize : 0) + (nameText && dateText ? lineGap : 0) + (dateText ? dateSize : 0);
+  const captionH = padTop + linesH + padBottom;
 
-    const nameText = signerName ? `Signed by ${signerName}` : "";
-    const dateText = signedAt ? formatSignedDate(signedAt) : "";
-    const nameSize = clampNum(capAreaH * 0.42, 4, 9);
-    const dateSize = clampNum(capAreaH * 0.34, 3, 7);
-    const marginTop = Math.max(1.5, capAreaH * 0.08);
-    const lineGap = Math.max(1, nameSize * 0.18);
+  // Prefer below the marker. In MediaBox y-up, "below" means lower y.
+  // Space below = boxY (distance from page bottom). Space above = pageH - (boxY + boxH).
+  const spaceBelow = boxY;
+  const spaceAbove = pageH - (boxY + boxH);
+  const placeBelow = spaceBelow >= captionH || spaceBelow >= spaceAbove;
 
-    if (nameText) {
-      const w = fontBold.widthOfTextAtSize(nameText, nameSize);
-      const x = boxX + Math.max(2, (boxW - w) / 2);
-      const y = boxY + capAreaH - marginTop - nameSize * 0.8;
-      page.drawText(nameText, { x, y, size: nameSize, font: fontBold, color: rgb(0.15, 0.18, 0.27) });
-    }
-    if (dateText) {
-      const w = font.widthOfTextAtSize(dateText, dateSize);
-      const x = boxX + Math.max(2, (boxW - w) / 2);
-      const y = boxY + capAreaH - marginTop - nameSize - lineGap - dateSize * 0.8;
-      page.drawText(dateText, { x, y, size: dateSize, font, color: rgb(0.45, 0.45, 0.45) });
-    }
+  // Caption block top edge (y-up). When placing below, top = boxY (marker bottom).
+  const blockTopY = placeBelow ? boxY : boxY + boxH + captionH;
+  const blockBottomY = blockTopY - captionH;
+  if (blockBottomY < 0 || blockTopY > pageH) return; // No room at all.
+
+  // Thin divider sits on the edge of the caption that touches the marker.
+  const dividerY = placeBelow ? boxY - 0.4 : boxY + boxH + 0.4;
+  page.drawLine({
+    start: { x: boxX, y: dividerY },
+    end:   { x: boxX + boxW, y: dividerY },
+    thickness: 0.4,
+    color: rgb(0.6, 0.6, 0.6)
+  });
+
+  // Text flows top-down from blockTopY. padTop gives a small breathing margin.
+  let cursorY = blockTopY - padTop - nameSize * 0.8;
+  if (nameText) {
+    const w = fontBold.widthOfTextAtSize(nameText, nameSize);
+    const x = boxX + Math.max(0, (boxW - w) / 2);
+    page.drawText(nameText, { x, y: cursorY, size: nameSize, font: fontBold, color: rgb(0.15, 0.18, 0.27) });
+    cursorY -= lineGap + dateSize;
   }
+  if (dateText) {
+    const w = font.widthOfTextAtSize(dateText, dateSize);
+    const x = boxX + Math.max(0, (boxW - w) / 2);
+    page.drawText(dateText, { x, y: cursorY, size: dateSize, font, color: rgb(0.42, 0.42, 0.45) });
+  }
+  // Suppress unused-var warning for pageW (kept for future right-edge clamp).
+  void pageW;
 }
 
 function clampNum(v, min, max) { return Math.max(min, Math.min(max, v)); }

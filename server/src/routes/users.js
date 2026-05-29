@@ -15,6 +15,34 @@ const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toStr
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
+// Reads native pixel dimensions from a PNG or JPEG buffer. Returns null if the
+// format isn't recognised — callers should treat that as "aspect unknown".
+function readImageSize(buf) {
+  if (!buf || buf.length < 24) return null;
+  // PNG: 89 50 4E 47 0D 0A 1A 0A, then 4-byte length, "IHDR", then W (BE32), H (BE32)
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  // JPEG: FF D8 ... scan for SOFn (FF C0..C3, C5..C7, C9..CB, CD..CF). After the
+  // marker: 2-byte segment length, 1-byte precision, 2-byte height, 2-byte width.
+  if (buf[0] === 0xFF && buf[1] === 0xD8) {
+    let i = 2;
+    while (i < buf.length - 9) {
+      if (buf[i] !== 0xFF) { i++; continue; }
+      const m = buf[i + 1];
+      const isSof = (m >= 0xC0 && m <= 0xCF) && m !== 0xC4 && m !== 0xC8 && m !== 0xCC;
+      if (isSof) {
+        const h = buf.readUInt16BE(i + 5);
+        const w = buf.readUInt16BE(i + 7);
+        return { width: w, height: h };
+      }
+      const segLen = buf.readUInt16BE(i + 2);
+      i += 2 + segLen;
+    }
+  }
+  return null;
+}
+
 // ---------- list ----------
 router.get("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
@@ -128,7 +156,9 @@ router.put("/me/signature", authRequired, upload.single("signature"), async (req
     await fs.mkdir(SIG_DIR, { recursive: true });
     const fileName = `${userId}.${ext}`;
     await fs.writeFile(path.join(SIG_DIR, fileName), buffer);
-    await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, userId]);
+    const dims = readImageSize(buffer);
+    const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
+    await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, userId]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -147,7 +177,9 @@ router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("
     const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
     const fileName = `${targetId}.${ext}`;
     await fs.writeFile(path.join(SIG_DIR, fileName), buf);
-    await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, targetId]);
+    const dims = readImageSize(buf);
+    const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
+    await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, targetId]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -174,7 +206,9 @@ router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array
       const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
       const fileName = `${user.id}.${ext}`;
       await fs.writeFile(path.join(SIG_DIR, fileName), f.buffer);
-      await execute("UPDATE users SET signature_path = ? WHERE id = ?", [fileName, user.id]);
+      const dims = readImageSize(f.buffer);
+      const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
+      await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, user.id]);
       matched.push({ email, userId: user.id });
     }
     res.json({ matched: matched.length, results: matched });
