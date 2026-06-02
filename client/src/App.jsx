@@ -279,16 +279,16 @@ function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center p-10 md:p-16 text-center" style={{ color: "#F5F1E8" }}>
+      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center p-10 pb-20 md:p-16 md:pb-20 text-center" style={{ color: "#F5F1E8" }}>
         {/* Logo with animated glow */}
         <div className="logo-glow fade-up mb-5">
           <svg width="82" height="82" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
             <rect width="48" height="48" rx="10" fill="#B8894A"/>
-            <rect x="10" y="7" width="18" height="24" rx="2.5" stroke="#0F1A2E" strokeWidth="1.6" fill="none"/>
-            <path d="M14 13h10M14 17h8M14 21h6" stroke="#0F1A2E" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
-            <line x1="22" y1="35" x2="37" y2="16" stroke="#0F1A2E" strokeWidth="2.5" strokeLinecap="round"/>
-            <path d="M37 16l2.5-4.5-4.5 2z" fill="#0F1A2E"/>
-            <path d="M22 35l-2 3.5 3.5-1.5z" fill="#0F1A2E"/>
+            <rect x="8" y="6" width="20" height="26" rx="2.5" fill="#0F1A2E"/>
+            <path d="M12 13h12M12 17.5h10M12 22h7" stroke="#B8894A" strokeWidth="1.3" strokeLinecap="round" opacity="0.65"/>
+            <line x1="21" y1="37" x2="38" y2="14" stroke="#0F1A2E" strokeWidth="3.2" strokeLinecap="round"/>
+            <polygon points="21,37 18.5,41 23,38.5" fill="#0F1A2E"/>
+            <polygon points="38,14 40,10.5 36,12.5" fill="#0F1A2E"/>
           </svg>
         </div>
         <div className="font-display text-2xl tracking-wide fade-up fade-up-d1">HQHB · SignFlow</div>
@@ -389,11 +389,11 @@ function TopBar({ user, logout, onEditSignature }) {
           <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden">
             <svg width="32" height="32" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <rect width="48" height="48" rx="10" fill="#B8894A"/>
-              <rect x="10" y="7" width="18" height="24" rx="2.5" stroke="#0F1A2E" strokeWidth="1.6" fill="none"/>
-              <path d="M14 13h10M14 17h8M14 21h6" stroke="#0F1A2E" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
-              <line x1="22" y1="35" x2="37" y2="16" stroke="#0F1A2E" strokeWidth="2.5" strokeLinecap="round"/>
-              <path d="M37 16l2.5-4.5-4.5 2z" fill="#0F1A2E"/>
-              <path d="M22 35l-2 3.5 3.5-1.5z" fill="#0F1A2E"/>
+              <rect x="8" y="6" width="20" height="26" rx="2.5" fill="#0F1A2E"/>
+              <path d="M12 13h12M12 17.5h10M12 22h7" stroke="#B8894A" strokeWidth="1.3" strokeLinecap="round" opacity="0.65"/>
+              <line x1="21" y1="37" x2="38" y2="14" stroke="#0F1A2E" strokeWidth="3.2" strokeLinecap="round"/>
+              <polygon points="21,37 18.5,41 23,38.5" fill="#0F1A2E"/>
+              <polygon points="38,14 40,10.5 36,12.5" fill="#0F1A2E"/>
             </svg>
           </div>
           <div>
