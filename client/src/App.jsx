@@ -573,30 +573,34 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
         if (cancelled) return;
         if (stylesJson) setLeaveStyleMap(stylesJson);
 
-        // --- Inject user profile + clear user-fillable fields ---
+        // --- Clear all pre-filled data, leave only labels ---
         const workbook = XLSX.read(templateU8, { type: "array", cellDates: true });
         const ws = workbook.Sheets["New Format"];
         if (ws) {
-          // Clear ITS key so VLOOKUP-based profile fields return empty
-          delete ws["C4"];
-
-          // Pre-fill Name and Email directly from logged-in user profile
-          if (user?.name)  ws["C5"] = { t: "s", v: user.name,  w: user.name };
-          if (user?.email) ws["G5"] = { t: "s", v: user.email, w: user.email };
-
-          // Clear all user-fillable leave data cells (leave rows, reason, last leave, handover)
           [
+            // Profile / header data cells (VLOOKUP formulas + hardcoded ITS)
+            "C4",            // ITS number
+            "C5",            // Name
+            "C6",            // Designation
+            "C7",            // Department
+            "G4",            // DOJ
+            "G5",            // Email
+            "G6",            // Mobile No.
+            "G7",            // Sub Dept
+            "A24",           // Reporting Manager name
+            // Leave schedule rows
             "A10","B10","C10","D10","E10","F10","G10","H10",
             "A11","B11","C11","D11","E11","F11","G11","H11",
             "A12","B12","C12","D12","E12","F12","G12","H12",
             "A13","B13","C13","D13","E13","F13","G13","H13",
-            "C14",           // Reason for leave
-            "C17","F17",     // Last leave taken + reason
-            "A19","F19",     // Work handed over to (name + signature)
+            // Reason, last leave, handover
+            "C14",
+            "C17","F17",
+            "A19","F19",
           ].forEach(addr => { delete ws[addr]; });
         }
         const modifiedU8 = new Uint8Array(XLSX.write(workbook, { bookType: "xlsx", type: "array" }));
-        // --- end inject ---
+        // --- end clear ---
 
         const blob = new File([modifiedU8], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
         const reader = new FileReader();
