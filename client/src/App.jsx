@@ -314,13 +314,6 @@ function LoginScreen({ login }) {
           <button className="btn-primary w-full justify-center" disabled={busy}>
             {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
           </button>
-          <div className="mt-10 pt-6 divider-rule"></div>
-          <div className="mt-5 text-[11px] tracking-wider uppercase opacity-50 mb-2">Seeded accounts</div>
-          <div className="space-y-1.5 text-xs opacity-70 font-mono">
-            <div>admin · it@hqhb.in</div>
-            <div>requestor · mufaddal.safdari@hqhb.in</div>
-            <div>approver · moiz.barwani@hqhb.in</div>
-          </div>
         </form>
       </div>
     </div>
