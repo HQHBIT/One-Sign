@@ -300,7 +300,7 @@ function LoginScreen({ login }) {
           </p>
         </div>
 
-        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">MMXXVI · Internal Build</div>
+        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">HQHB - Internal Build</div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-8 md:p-16">
