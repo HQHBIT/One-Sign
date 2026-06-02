@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
-  FilePlus, AlertCircle, Plus, X, Check, ArrowRight, Building2,
+  FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
   FileSpreadsheet, FileSignature, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
 } from "lucide-react";
@@ -274,14 +274,14 @@ function LoginScreen({ login }) {
           <div className="font-display text-xl">HQHB · SignFlow</div>
         </div>
         <div className="relative z-10">
-          <div className="text-xs tracking-widest uppercase opacity-60 mb-4">A system of record for</div>
+          <div className="text-xs tracking-widest uppercase opacity-60 mb-4">Smart document signing</div>
           <h1 className="font-display text-5xl md:text-6xl leading-[1.05]">
-            Every signature.<br />
-            <span style={{ color: "#B8894A" }}>Every approval.</span><br />
-            Fully accountable.
+            Request. Review.<br />
+            <span style={{ color: "#B8894A" }}>Approve. Track.</span><br />
+            All in one place.
           </h1>
           <p className="mt-6 text-sm opacity-70 max-w-md leading-relaxed">
-            Route documents to the right signing authority, capture approvals with a one-hour reversal window, and keep a complete audit trail — across Finance, IT, and Operations.
+            A unified platform for managing document approvals — route to the right authority, capture verified digital signatures with built-in safeguards, and maintain a complete audit trail at every step.
           </p>
         </div>
         <div className="text-xs opacity-50 tracking-widest uppercase">MMXXVI · Internal Build</div>
@@ -2045,6 +2045,8 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [previewing, setPreviewing] = useState(false);
+  const [sigUrl, setSigUrl] = useState(null);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -2077,8 +2079,21 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   }
   const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
 
-  // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place)
-  const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams, { highlightUserId: user.id });
+  const enterPreview = async () => {
+    try {
+      const url = await api.getSignatureBlob(user.id);
+      if (!url) { notify("Could not load your signature", "error"); return; }
+      setSigUrl(url);
+      setPreviewing(true);
+    } catch { notify("Failed to load signature preview", "error"); }
+  };
+
+  // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place).
+  // In preview mode, overlay the approver's signature image at the marked position.
+  const baseMarkers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams, { highlightUserId: user.id });
+  const markers = (previewing && sigUrl)
+    ? baseMarkers.map(m => (isWorkflow ? m.highlight : true) ? { ...m, signedDataUrl: sigUrl } : m)
+    : baseMarkers;
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
@@ -2102,15 +2117,30 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
           {canApprove && (
             <div className="sticky bottom-0 mt-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
-              <div className="text-xs opacity-60">
-                {isWorkflow
-                  ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
-                  : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
-              </div>
-              <div className="flex gap-3">
-                <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
-                <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Approve & sign</button>
-              </div>
+              {previewing ? (
+                <>
+                  <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
+                    <Eye size={13} />
+                    <span>Review how your signature will appear on the document.</span>
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> Go back</button>
+                    <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Confirm approval</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-xs opacity-60">
+                    {isWorkflow
+                      ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
+                      : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
+                    <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> Preview & approve</button>
+                  </div>
+                </>
+              )}
             </div>
           )}
           {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
@@ -2785,8 +2815,11 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
-  const [drawing, setDrawing] = useState(false);
   const [empty, setEmpty] = useState(true);
+  const drawingRef = useRef(false);
+  const pointsRef = useRef([]);
+  const lastVelRef = useRef(0);
+  const lastWidthRef = useRef(2.0);
   const [currentSigUrl, setCurrentSigUrl] = useState(null);
 
   // Fetch the current signature image, if any, so the user can see what's stored.
@@ -2805,21 +2838,93 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
   useEffect(() => {
     const c = canvasRef.current; if (!c) return;
     const r = c.getBoundingClientRect();
-    c.width = r.width * 2; c.height = r.height * 2;
-    const ctx = c.getContext("2d");
-    ctx.scale(2, 2);
-    ctx.strokeStyle = "#0F1A2E"; ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    c.width = r.width * 3; c.height = r.height * 3;
+    c.getContext("2d").scale(3, 3);
   }, [mode]);
 
   const pos = e => {
     const r = canvasRef.current.getBoundingClientRect();
     const t = e.touches ? e.touches[0] : e;
-    return { x: t.clientX - r.left, y: t.clientY - r.top };
+    return { x: t.clientX - r.left, y: t.clientY - r.top, t: Date.now() };
   };
-  const start = e => { setDrawing(true); const { x, y } = pos(e); const ctx = canvasRef.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(x, y); };
-  const move = e => { if (!drawing) return; e.preventDefault(); const { x, y } = pos(e); const ctx = canvasRef.current.getContext("2d"); ctx.lineTo(x, y); ctx.stroke(); setEmpty(false); };
-  const end = () => setDrawing(false);
-  const clear = () => { const c = canvasRef.current; const ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); setEmpty(true); };
+
+  const start = e => {
+    if (e.touches) e.preventDefault();
+    drawingRef.current = true;
+    const p = pos(e);
+    pointsRef.current = [p];
+    lastVelRef.current = 0;
+    lastWidthRef.current = 2.0;
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.fillStyle = "#0F1A2E";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    setEmpty(false);
+  };
+
+  const move = e => {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const p = pos(e);
+    const pts = pointsRef.current;
+    const prev = pts[pts.length - 1];
+    const dx = p.x - prev.x, dy = p.y - prev.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1.5) return;
+    const dt = Math.max(1, p.t - prev.t);
+    const vel = (dist / dt) * 1000;
+    const sVel = lastVelRef.current * 0.4 + vel * 0.6;
+    lastVelRef.current = sVel;
+    const frac = Math.min(sVel / 800, 1);
+    const rawW = 3.2 - 2.6 * frac;
+    const w = lastWidthRef.current * 0.55 + rawW * 0.45;
+    lastWidthRef.current = w;
+    pts.push(p);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.strokeStyle = "#0F1A2E";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = w;
+    if (pts.length >= 3) {
+      const a = pts[pts.length - 3], b = pts[pts.length - 2];
+      ctx.beginPath();
+      ctx.moveTo((a.x + b.x) / 2, (a.y + b.y) / 2);
+      ctx.quadraticCurveTo(b.x, b.y, (b.x + p.x) / 2, (b.y + p.y) / 2);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+    setEmpty(false);
+  };
+
+  const end = () => {
+    if (drawingRef.current && pointsRef.current.length >= 2) {
+      const pts = pointsRef.current;
+      const last = pts[pts.length - 1], prev = pts[pts.length - 2];
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.strokeStyle = "#0F1A2E";
+      ctx.lineCap = "round";
+      ctx.lineWidth = lastWidthRef.current;
+      ctx.beginPath();
+      ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+    }
+    drawingRef.current = false;
+    pointsRef.current = [];
+  };
+
+  const clear = () => {
+    const c = canvasRef.current;
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    setEmpty(true);
+    lastWidthRef.current = 2.0;
+    lastVelRef.current = 0;
+  };
 
   const handleUpload = e => {
     const f = e.target.files?.[0]; if (!f) return;
