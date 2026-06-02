@@ -4,7 +4,7 @@ import {
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
-  FileSpreadsheet, FileSignature, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
+  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
@@ -229,6 +229,19 @@ function StyleTag() {
       .divider-rule { height: 1px; background: linear-gradient(to right, transparent, rgba(15,26,46,.18), transparent); }
       @keyframes slideIn { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       .anim-in { animation: slideIn .3s ease; }
+      @keyframes logoGlow {
+        0%, 100% { filter: drop-shadow(0 0 20px rgba(184,137,74,.2)); }
+        50% { filter: drop-shadow(0 0 40px rgba(184,137,74,.5)); }
+      }
+      .logo-glow { animation: logoGlow 4s ease-in-out infinite; }
+      @keyframes fadeUp {
+        from { transform: translateY(18px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      .fade-up { animation: fadeUp .7s ease both; }
+      .fade-up-d1 { animation-delay: .12s; }
+      .fade-up-d2 { animation-delay: .24s; }
+      .fade-up-d3 { animation-delay: .36s; }
     `}</style>
   );
 }
@@ -266,25 +279,35 @@ function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col justify-between p-10 md:p-16" style={{ color: "#F5F1E8" }}>
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md flex items-center justify-center" style={{ backgroundColor: "#B8894A" }}>
-            <FileSignature size={18} />
-          </div>
-          <div className="font-display text-xl">HQHB · SignFlow</div>
+      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center p-10 md:p-16 text-center" style={{ color: "#F5F1E8" }}>
+        {/* Logo with animated glow */}
+        <div className="logo-glow fade-up mb-5">
+          <svg width="82" height="82" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+            <rect width="48" height="48" rx="10" fill="#B8894A"/>
+            <rect x="10" y="7" width="18" height="24" rx="2.5" stroke="#0F1A2E" strokeWidth="1.6" fill="none"/>
+            <path d="M14 13h10M14 17h8M14 21h6" stroke="#0F1A2E" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
+            <line x1="22" y1="35" x2="37" y2="16" stroke="#0F1A2E" strokeWidth="2.5" strokeLinecap="round"/>
+            <path d="M37 16l2.5-4.5-4.5 2z" fill="#0F1A2E"/>
+            <path d="M22 35l-2 3.5 3.5-1.5z" fill="#0F1A2E"/>
+          </svg>
         </div>
-        <div className="relative z-10">
-          <div className="text-xs tracking-widest uppercase opacity-60 mb-4">Smart document signing</div>
-          <h1 className="font-display text-5xl md:text-6xl leading-[1.05]">
+        <div className="font-display text-2xl tracking-wide fade-up fade-up-d1">HQHB · SignFlow</div>
+
+        {/* Gold divider */}
+        <div className="my-8 fade-up fade-up-d1" style={{ width: 180, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.5), transparent)" }} />
+
+        <div className="relative z-10 fade-up fade-up-d2">
+          <div className="text-xs tracking-widest uppercase opacity-50 mb-4">Smart document signing</div>
+          <h1 className="font-display text-4xl md:text-5xl leading-[1.1]">
             Request. Review.<br />
             <span style={{ color: "#B8894A" }}>Approve. Track.</span><br />
             All in one place.
           </h1>
-          <p className="mt-6 text-sm opacity-70 max-w-md leading-relaxed">
+          <p className="mt-6 text-sm opacity-60 max-w-sm mx-auto leading-relaxed">
             A unified platform for managing document approvals — route to the right authority, capture verified digital signatures with built-in safeguards, and maintain a complete audit trail at every step.
           </p>
         </div>
-        <div className="text-xs opacity-50 tracking-widest uppercase">MMXXVI · Internal Build</div>
+        <div className="absolute bottom-10 text-xs opacity-40 tracking-widest uppercase fade-up fade-up-d3">MMXXVI · Internal Build</div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-8 md:p-16">
@@ -363,8 +386,15 @@ function TopBar({ user, logout, onEditSignature }) {
     <header className="border-b" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#FAF7F0" }}>
       <div className="max-w-7xl mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md flex items-center justify-center ink-grad">
-            <FileSignature size={16} color="#F5F1E8" />
+          <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden">
+            <svg width="32" height="32" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <rect width="48" height="48" rx="10" fill="#B8894A"/>
+              <rect x="10" y="7" width="18" height="24" rx="2.5" stroke="#0F1A2E" strokeWidth="1.6" fill="none"/>
+              <path d="M14 13h10M14 17h8M14 21h6" stroke="#0F1A2E" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
+              <line x1="22" y1="35" x2="37" y2="16" stroke="#0F1A2E" strokeWidth="2.5" strokeLinecap="round"/>
+              <path d="M37 16l2.5-4.5-4.5 2z" fill="#0F1A2E"/>
+              <path d="M22 35l-2 3.5 3.5-1.5z" fill="#0F1A2E"/>
+            </svg>
           </div>
           <div>
             <div className="font-display text-lg leading-tight">HQHB · SignFlow</div>
