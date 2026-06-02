@@ -279,27 +279,28 @@ function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center p-10 pb-20 md:p-16 md:pb-20 text-center" style={{ color: "#F5F1E8" }}>
-        {/* Logo image with animated glow */}
-        <div className="logo-glow fade-up mb-8">
-          <img src="/signflow-logo.png" alt="HQHB · SignFlow" className="w-72 md:w-96" />
+      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-8 py-12 md:p-14 text-center gap-6" style={{ color: "#F5F1E8" }}>
+        {/* Logo badge */}
+        <div className="logo-glow fade-up">
+          <img src="/signflow-logo.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
         </div>
 
         {/* Gold divider */}
-        <div className="my-6 fade-up fade-up-d1" style={{ width: 180, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.5), transparent)" }} />
+        <div className="fade-up fade-up-d1" style={{ width: 120, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.45), transparent)" }} />
 
+        {/* Hero copy */}
         <div className="relative z-10 fade-up fade-up-d2">
-          <div className="text-xs tracking-widest uppercase opacity-50 mb-4">Smart document signing</div>
-          <h1 className="font-display text-4xl md:text-5xl leading-[1.1]">
+          <h1 className="font-display text-3xl sm:text-4xl md:text-5xl leading-[1.1]">
             Request. Review.<br />
             <span style={{ color: "#B8894A" }}>Approve. Track.</span><br />
             All in one place.
           </h1>
-          <p className="mt-6 text-sm opacity-60 max-w-sm mx-auto leading-relaxed">
-            A unified platform for managing document approvals — route to the right authority, capture verified digital signatures with built-in safeguards, and maintain a complete audit trail at every step.
+          <p className="mt-4 text-sm opacity-55 max-w-xs md:max-w-sm mx-auto leading-relaxed">
+            Route to the right authority, capture verified digital signatures, and maintain a complete audit trail at every step.
           </p>
         </div>
-        <div className="absolute bottom-10 text-xs opacity-40 tracking-widest uppercase fade-up fade-up-d3">MMXXVI · Internal Build</div>
+
+        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">MMXXVI · Internal Build</div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-8 md:p-16">
