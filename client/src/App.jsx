@@ -573,31 +573,29 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
         if (cancelled) return;
         if (stylesJson) setLeaveStyleMap(stylesJson);
 
-        // --- Clear all pre-filled data, leave only labels ---
+        // --- Clear all pre-filled data; stamp today's date on non-leave date cells ---
         const workbook = XLSX.read(templateU8, { type: "array", cellDates: true });
         const ws = workbook.Sheets["New Format"];
         if (ws) {
+          // Clear all data cells
           [
-            // Profile / header data cells (VLOOKUP formulas + hardcoded ITS)
-            "C4",            // ITS number
-            "C5",            // Name
-            "C6",            // Designation
-            "C7",            // Department
-            "G4",            // DOJ
-            "G5",            // Email
-            "G6",            // Mobile No.
-            "G7",            // Sub Dept
-            "A24",           // Reporting Manager name
-            // Leave schedule rows
+            "C4","C5","C6","C7",
+            "G4","G5","G6","G7",
+            "A24",
             "A10","B10","C10","D10","E10","F10","G10","H10",
             "A11","B11","C11","D11","E11","F11","G11","H11",
             "A12","B12","C12","D12","E12","F12","G12","H12",
             "A13","B13","C13","D13","E13","F13","G13","H13",
-            // Reason, last leave, handover
-            "C14",
-            "C17","F17",
-            "A19","F19",
+            "C14","C17","F17","A19","F19",
+            "F20","H24","H26",
           ].forEach(addr => { delete ws[addr]; });
+
+          // Stamp today's date on all date cells EXCEPT From (D10-D13) and To (E10-E13)
+          const today = new Date();
+          const todayDisplay = today.toLocaleDateString("en-GB");
+          ["F10","F11","F12","F13","F20","H24","H26"].forEach(addr => {
+            ws[addr] = { t: "d", v: today, w: todayDisplay };
+          });
         }
         const modifiedU8 = new Uint8Array(XLSX.write(workbook, { bookType: "xlsx", type: "array" }));
         // --- end clear ---
@@ -787,7 +785,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {isLeave ? (
             <Section n="01" title="Leave Request Form" desc="Edit the cells directly in the spreadsheet below.">
               {file ? (
-                <XlsxViewer file={file} markers={[]} cellEditable onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
+                <XlsxViewer file={file} markers={[]} cellEditable lockedCells={new Set(["F10","F11","F12","F13","F20","H24","H26"])} onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
               ) : (
                 <div className="card p-10 text-sm opacity-50 text-center">Loading template…</div>
               )}
@@ -1426,7 +1424,7 @@ function xlsxCellStyle(sty) {
   return { ...css, ...xlsxBorderCss(sty.bd) };
 }
 
-function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, onWorkbookReady, styleMap }) {
+function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, lockedCells, onWorkbookReady, styleMap }) {
   const [wb, setWb] = useState(null);
   const [sheetNames, setSheetNames] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
@@ -1582,6 +1580,7 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
           .xlsx-grid td.cell-editable { cursor: text; }
           .xlsx-grid td.cell-editable:hover { background: rgba(184,137,74,.08); }
           .xlsx-grid td.cell-editable:focus { outline: 2px solid #B8894A; outline-offset: -2px; background: #FFFDF5; }
+          .xlsx-grid td.cell-locked { cursor: default; background: rgba(15,26,46,.03); color: rgba(15,26,46,.55); font-style: italic; }
         `}</style>
         <div style={{ padding: "12px 16px" }}>
           <table className="xlsx-grid">
@@ -1602,15 +1601,17 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
                     {row.map(cell => {
                       const sty = sm[cell.addr];
                       const cellCss = sty ? xlsxCellStyle(sty) : (hasStyles ? {} : {});
+                      const isLocked = lockedCells?.has(cell.addr);
+                      const isEditable = cellEditable && !isLocked;
                       return (
                         <td key={cell.addr}
                           colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
                           rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
-                          className={cellEditable ? "cell-editable" : ""}
+                          className={isLocked ? "cell-locked" : isEditable ? "cell-editable" : ""}
                           style={cellCss}
-                          contentEditable={cellEditable ? true : undefined}
+                          contentEditable={isEditable ? true : undefined}
                           suppressContentEditableWarning
-                          onBlur={cellEditable ? e => {
+                          onBlur={isEditable ? e => {
                             const newVal = e.currentTarget.textContent || "";
                             if (newVal !== cell.display) handleCellEdit(cell.addr, newVal);
                           } : undefined}
