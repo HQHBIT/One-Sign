@@ -1816,29 +1816,31 @@ function PrintBtn({ req }) {
   const [busy, setBusy] = useState(false);
   const print = async () => {
     setBusy(true);
+    // Open the window SYNCHRONOUSLY before any await — this preserves the
+    // user-gesture chain and prevents popup blockers from suppressing it.
+    const pw = window.open("", "_blank", "width=960,height=720");
+    if (!pw) { alert("Popup was blocked. Please allow popups for this site and try again."); setBusy(false); return; }
     try {
       const isPdf = req.fileType === "pdf";
       const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
       const url = await api.getRequestFileBlob(req.id, kind);
 
       if (isPdf) {
-        // PDF: hidden iframe → contentWindow.print()
-        const iframe = document.createElement("iframe");
-        iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
-        iframe.src = url;
-        document.body.appendChild(iframe);
-        iframe.onload = () => {
-          try {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-          } catch {
-            // Fallback: open in new tab for manual print
-            window.open(url, "_blank");
-          }
-          setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
-        };
+        // Navigate the already-open window to the PDF blob URL, then trigger print.
+        // Loading a blank HTML shell that embeds the PDF via <embed> lets us call
+        // pw.print() reliably without relying on the sandboxed PDF-viewer context.
+        pw.document.write(`<!DOCTYPE html><html><head><style>
+          *{margin:0;padding:0;} body,html{width:100%;height:100%;overflow:hidden;}
+          embed{width:100%;height:100%;display:block;}
+        </style></head><body>
+          <embed src="${url}" type="application/pdf" />
+        </body></html>`);
+        pw.document.close();
+        // Give the embed time to render, then trigger the system print dialog
+        setTimeout(() => { try { pw.print(); } catch { pw.focus(); } }, 1200);
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
       } else {
-        // Excel/Leave form: parse with SheetJS → render HTML → print via popup
+        // Excel / Leave form: parse with SheetJS → render as HTML table → auto-print
         const resp = await fetch(url);
         const buf = await resp.arrayBuffer();
         const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
@@ -1847,27 +1849,22 @@ function PrintBtn({ req }) {
         (visibleSheets.length ? visibleSheets : wb.SheetNames).forEach(name => {
           const ws = wb.Sheets[name];
           if (!ws || !ws["!ref"]) return;
-          body += `<h3 style="font-size:11pt;margin:16px 0 6px">${name}</h3>`;
           body += XLSX.utils.sheet_to_html(ws, { editable: false });
         });
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+        pw.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
           <title>${req.fileName}</title>
           <style>
-            body{font-family:Calibri,Arial,sans-serif;font-size:10pt;margin:12mm;}
-            table{border-collapse:collapse;width:100%;}
-            td,th{border:1px solid #aaa;padding:3px 6px;vertical-align:top;}
+            body{font-family:Calibri,Arial,sans-serif;font-size:9.5pt;margin:10mm;}
+            table{border-collapse:collapse;width:100%;page-break-inside:auto;}
+            td,th{border:1px solid #aaa;padding:2px 5px;vertical-align:top;word-break:break-word;}
+            tr{page-break-inside:avoid;}
             @media print{body{margin:6mm;}}
-          </style></head><body>${body}</body></html>`;
-        const pw = window.open("", "_blank", "width=900,height=700");
-        if (pw) {
-          pw.document.write(html);
-          pw.document.close();
-          pw.focus();
-          setTimeout(() => { pw.print(); }, 400);
-        }
-        URL.revokeObjectURL(url);
+          </style></head><body>${body}</body></html>`);
+        pw.document.close();
+        pw.focus();
+        setTimeout(() => { pw.print(); URL.revokeObjectURL(url); }, 400);
       }
-    } catch (e) { alert(e.message || "Print failed"); }
+    } catch (e) { pw.close(); alert(e.message || "Print failed"); }
     finally { setBusy(false); }
   };
   return <button className="btn-ghost text-xs" onClick={print} disabled={busy}><Printer size={12} /> {busy ? "…" : "Print"}</button>;
