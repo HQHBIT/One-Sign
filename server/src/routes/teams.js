@@ -10,7 +10,7 @@ router.get("/", authRequired, async (req, res, next) => {
     const rows = await query("SELECT id, name FROM teams ORDER BY name");
     // Include each team's approvers (with hasSignature flag) so requestors can build workflows
     const auths = await query(`
-      SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.signature_path
+      SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.signature_path, u.signature_aspect
       FROM signing_authority sa
       JOIN users u ON u.id = sa.user_id
       WHERE u.role = 'approver'
@@ -19,7 +19,9 @@ router.get("/", authRequired, async (req, res, next) => {
     const byTeam = {};
     for (const a of auths) {
       (byTeam[a.team_id] ||= []).push({
-        id: a.user_id, name: a.name, email: a.email, hasSignature: !!a.signature_path
+        id: a.user_id, name: a.name, email: a.email,
+        hasSignature: !!a.signature_path,
+        signatureAspect: a.signature_aspect != null ? Number(a.signature_aspect) : null
       });
     }
     const teams = rows.map(t => ({ ...t, approvers: byTeam[t.id] || [] }));

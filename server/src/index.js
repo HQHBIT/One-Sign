@@ -1,6 +1,9 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 import { initDb } from "./db.js";
 import { startScheduler } from "./scheduler.js";
 
@@ -10,7 +13,10 @@ import teamsRoutes from "./routes/teams.js";
 import requestsRoutes from "./routes/requests.js";
 import adminRoutes from "./routes/admin.js";
 
-const PORT = parseInt(process.env.PORT || "3001", 10);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIST = path.resolve(__dirname, "../../client/dist");
+
+const PORT = parseInt(process.env.PORT || "5001", 10);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
 async function main() {
@@ -35,6 +41,21 @@ async function main() {
   app.use("/api/teams", teamsRoutes);
   app.use("/api/requests", requestsRoutes);
   app.use("/api", adminRoutes);
+
+  // Serve built client assets in production
+  if (fs.existsSync(CLIENT_DIST)) {
+    app.use(express.static(CLIENT_DIST, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith(".mjs")) {
+          res.setHeader("Content-Type", "application/javascript");
+        }
+      }
+    }));
+    // SPA fallback — non-API requests serve index.html
+    app.get(/^\/(?!api\/).*/, (_req, res) => {
+      res.sendFile(path.join(CLIENT_DIST, "index.html"));
+    });
+  }
 
   app.use((err, req, res, next) => {
     console.error("[error]", err);

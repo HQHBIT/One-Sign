@@ -2,16 +2,15 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
-  FilePlus, AlertCircle, Plus, X, Check, ArrowRight, Building2,
+  FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
-  FileSpreadsheet, FileSignature, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
+  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { api } from "./api.js";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
 // FileX icon shim (lucide doesn't always export it)
 const FileX = (props) => <FileText {...props} />;
@@ -230,6 +229,19 @@ function StyleTag() {
       .divider-rule { height: 1px; background: linear-gradient(to right, transparent, rgba(15,26,46,.18), transparent); }
       @keyframes slideIn { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       .anim-in { animation: slideIn .3s ease; }
+      @keyframes logoGlow {
+        0%, 100% { filter: drop-shadow(0 0 20px rgba(184,137,74,.2)); }
+        50% { filter: drop-shadow(0 0 40px rgba(184,137,74,.5)); }
+      }
+      .logo-glow { animation: logoGlow 4s ease-in-out infinite; }
+      @keyframes fadeUp {
+        from { transform: translateY(18px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      .fade-up { animation: fadeUp .7s ease both; }
+      .fade-up-d1 { animation-delay: .12s; }
+      .fade-up-d2 { animation-delay: .24s; }
+      .fade-up-d3 { animation-delay: .36s; }
     `}</style>
   );
 }
@@ -267,25 +279,28 @@ function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col justify-between p-10 md:p-16" style={{ color: "#F5F1E8" }}>
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md flex items-center justify-center" style={{ backgroundColor: "#B8894A" }}>
-            <FileSignature size={18} />
-          </div>
-          <div className="font-display text-xl">HQHB · SignFlow</div>
+      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-8 py-12 md:p-14 text-center gap-6" style={{ color: "#F5F1E8" }}>
+        {/* Logo badge */}
+        <div className="logo-glow fade-up">
+          <img src="/signflow-logo.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
         </div>
-        <div className="relative z-10">
-          <div className="text-xs tracking-widest uppercase opacity-60 mb-4">A system of record for</div>
-          <h1 className="font-display text-5xl md:text-6xl leading-[1.05]">
-            Every signature.<br />
-            <span style={{ color: "#B8894A" }}>Every approval.</span><br />
-            Fully accountable.
+
+        {/* Gold divider */}
+        <div className="fade-up fade-up-d1" style={{ width: 120, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.45), transparent)" }} />
+
+        {/* Hero copy */}
+        <div className="relative z-10 fade-up fade-up-d2">
+          <h1 className="font-display text-3xl sm:text-4xl md:text-5xl leading-[1.1]">
+            Request. Review.<br />
+            <span style={{ color: "#B8894A" }}>Approve. Track.</span><br />
+            All in one place.
           </h1>
-          <p className="mt-6 text-sm opacity-70 max-w-md leading-relaxed">
-            Route documents to the right signing authority, capture approvals with a one-hour reversal window, and keep a complete audit trail — across Finance, IT, and Operations.
+          <p className="mt-4 text-sm opacity-55 max-w-xs md:max-w-sm mx-auto leading-relaxed">
+            Route to the right authority, capture verified digital signatures, and maintain a complete audit trail at every step.
           </p>
         </div>
-        <div className="text-xs opacity-50 tracking-widest uppercase">MMXXVI · Internal Build</div>
+
+        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">HQHB - Internal Build</div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-8 md:p-16">
@@ -299,13 +314,6 @@ function LoginScreen({ login }) {
           <button className="btn-primary w-full justify-center" disabled={busy}>
             {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
           </button>
-          <div className="mt-10 pt-6 divider-rule"></div>
-          <div className="mt-5 text-[11px] tracking-wider uppercase opacity-50 mb-2">Seeded accounts</div>
-          <div className="space-y-1.5 text-xs opacity-70 font-mono">
-            <div>admin · it@hqhb.in</div>
-            <div>requestor · mufaddal.safdari@hqhb.in</div>
-            <div>approver · moiz.barwani@hqhb.in</div>
-          </div>
         </form>
       </div>
     </div>
@@ -364,8 +372,15 @@ function TopBar({ user, logout, onEditSignature }) {
     <header className="border-b" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#FAF7F0" }}>
       <div className="max-w-7xl mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md flex items-center justify-center ink-grad">
-            <FileSignature size={16} color="#F5F1E8" />
+          <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden">
+            <svg width="32" height="32" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <rect width="48" height="48" rx="10" fill="#B8894A"/>
+              <rect x="8" y="6" width="20" height="26" rx="2.5" fill="#0F1A2E"/>
+              <path d="M12 13h12M12 17.5h10M12 22h7" stroke="#B8894A" strokeWidth="1.3" strokeLinecap="round" opacity="0.65"/>
+              <line x1="21" y1="37" x2="38" y2="14" stroke="#0F1A2E" strokeWidth="3.2" strokeLinecap="round"/>
+              <polygon points="21,37 18.5,41 23,38.5" fill="#0F1A2E"/>
+              <polygon points="38,14 40,10.5 36,12.5" fill="#0F1A2E"/>
+            </svg>
           </div>
           <div>
             <div className="font-display text-lg leading-tight">HQHB · SignFlow</div>
@@ -535,7 +550,75 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   // workflow mode: [{teamId, signers: [{userId, page, x, y, w, h}]}]
   const [workflow, setWorkflow] = useState([]);
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
-  const [orientation, setOrientation] = useState(null);
+
+  // Holds the live XLSX workbook so cell edits can be written back on submit
+  const xlsxWbRef = useRef(null);
+  const leaveTemplateCache = useRef(null);
+  const [leaveStyleMap, setLeaveStyleMap] = useState(null);
+
+  // Auto-load leave template + styles when type is "leave"
+  useEffect(() => {
+    if (requestType !== "leave") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [templateU8, stylesJson] = await Promise.all([
+          leaveTemplateCache.current
+            ? Promise.resolve(leaveTemplateCache.current)
+            : fetch("/leave-template.xlsx").then(r => r.arrayBuffer()).then(b => { const u8 = new Uint8Array(b); leaveTemplateCache.current = u8; return u8; }),
+          !leaveStyleMap
+            ? fetch("/leave-template-styles.json").then(r => r.json()).catch(() => null)
+            : Promise.resolve(null)
+        ]);
+        if (cancelled) return;
+        if (stylesJson) setLeaveStyleMap(stylesJson);
+
+        // --- Clear all pre-filled data; stamp today's date on non-leave date cells ---
+        const workbook = XLSX.read(templateU8, { type: "array", cellDates: true });
+        const ws = workbook.Sheets["New Format"];
+        if (ws) {
+          // Clear all data cells
+          [
+            "C4","C5","C6","C7",
+            "G4","G5","G6","G7",
+            "A24",
+            "A10","B10","C10","D10","E10","F10","G10","H10",
+            "A11","B11","C11","D11","E11","F11","G11","H11",
+            "A12","B12","C12","D12","E12","F12","G12","H12",
+            "A13","B13","C13","D13","E13","F13","G13","H13",
+            "C14","C17","F17","A19","F19",
+            "F20","H24","H26",
+          ].forEach(addr => { delete ws[addr]; });
+
+          // Stamp today's date on all date cells EXCEPT From (D10-D13) and To (E10-E13)
+          const today = new Date();
+          const todayDisplay = today.toLocaleDateString("en-GB");
+          ["F10","F11","F12","F13","F20","H24","H26"].forEach(addr => {
+            ws[addr] = { t: "d", v: today, w: todayDisplay };
+          });
+        }
+        const modifiedU8 = new Uint8Array(XLSX.write(workbook, { bookType: "xlsx", type: "array" }));
+        // --- end clear ---
+
+        const blob = new File([modifiedU8], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (cancelled) return;
+          setFile({ name: "Leave Approval.xlsx", base64: reader.result, type: blob.type, ext: "xlsx", blob });
+          setMarker(null); setWorkflow([]); setPlacingSlot(null);
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) { console.error(e); notify("Failed to load leave template", "error"); }
+    })();
+    return () => { cancelled = true; };
+  }, [requestType]);
+
+  const buildXlsxBlob = () => {
+    const wb = xlsxWbRef.current;
+    if (!wb) return null;
+    const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    return new File([new Uint8Array(out)], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  };
 
   const handleFile = e => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -551,6 +634,22 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
     };
     reader.readAsDataURL(f);
   };
+
+  // ---------- aspect ratio to lock the marker rectangle to ----------
+  // When placing a signer's marker in workflow mode, snap the rectangle to that
+  // signer's signature aspect so the requestor sees the exact footprint that will
+  // be stamped on approval. Single mode and unknown aspects fall back to free-form.
+  const lockedAspect = useMemo(() => {
+    if (mode !== "workflow" || !placingSlot) return null;
+    const step = workflow[placingSlot.stepIdx];
+    if (!step) return null;
+    const signerSlot = step.signers?.[placingSlot.signerIdx];
+    if (!signerSlot) return null;
+    const team = teams.find(t => t.id === step.teamId);
+    const approver = (team?.approvers || []).find(a => a.id === signerSlot.userId);
+    const a = approver?.signatureAspect;
+    return (a && a > 0 && isFinite(a)) ? a : null;
+  }, [mode, placingSlot, workflow, teams]);
 
   // ---------- markers shown on the doc ----------
   const allMarkers = useMemo(() => {
@@ -633,20 +732,24 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   }));
 
   // ---------- submit ----------
-  const canSubmitSingle = file && marker && targetTeam;
-  const canSubmitWorkflow = file && workflow.length > 0
+  const isLeave = requestType === "leave";
+  const effectiveFile = !!file;
+  const canSubmitSingle = isLeave ? (effectiveFile && targetTeam) : (effectiveFile && marker && targetTeam);
+  const canSubmitWorkflow = effectiveFile && workflow.length > 0
     && workflow.every(st => st.teamId && st.signers.length > 0
         && st.signers.every(s => s.userId && s.x != null));
 
   const submit = async () => {
     setBusy(true);
     try {
+      const submitFile = isLeave ? (buildXlsxBlob() || file.blob) : file.blob;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: file.blob, targetTeamId: targetTeam, marker, instantApproval, note, requestType, orientation });
+        const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, instantApproval, note, requestType });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
-        await addRequest({ file: file.blob, workflow, instantApproval, note, requestType, orientation });
+        await addRequest({ file: submitFile, workflow, instantApproval, note, requestType });
       }
       notify("Request submitted", "success");
       onDone();
@@ -678,31 +781,41 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
             </div>
           </Section>
 
-          {/* 1. upload */}
-          <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
-            {!file ? (
-              <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
-                <Upload size={24} className="opacity-50 mb-3" />
-                <div className="font-medium">Click to select a file</div>
-                <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
-                <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
-              </label>
-            ) : (
-              <div className="card p-5 flex items-center gap-4">
-                {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{file.name}</div>
-                  <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
+          {/* 1. upload / leave template */}
+          {isLeave ? (
+            <Section n="01" title="Leave Request Form" desc="Edit the cells directly in the spreadsheet below.">
+              {file ? (
+                <XlsxViewer file={file} markers={[]} cellEditable lockedCells={new Set(["F10","F11","F12","F13","F20","H24","H26"])} onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
+              ) : (
+                <div className="card p-10 text-sm opacity-50 text-center">Loading template…</div>
+              )}
+            </Section>
+          ) : (
+            <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
+              {!file ? (
+                <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
+                  <Upload size={24} className="opacity-50 mb-3" />
+                  <div className="font-medium">Click to select a file</div>
+                  <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
+                  <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
+                </label>
+              ) : (
+                <div className="card p-5 flex items-center gap-4">
+                  {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{file.name}</div>
+                    <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
+                  </div>
+                  <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
+                    <X size={12} /> Remove
+                  </button>
                 </div>
-                <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
-                  <X size={12} /> Remove
-                </button>
-              </div>
-            )}
-          </Section>
+              )}
+            </Section>
+          )}
 
           {/* 2. mode + instant */}
-          {file && (
+          {effectiveFile && (
             <Section n="02" title="Approval flow" desc="Pick how this document should be approved.">
               <div className="grid sm:grid-cols-2 gap-3">
                 <button onClick={() => setMode("single")}
@@ -731,24 +844,24 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 3a. single mode: pick team + place marker */}
-          {file && mode === "single" && (
+          {!isLeave && effectiveFile && mode === "single" && (
             <Section n="03" title="Mark the signature field" desc="Click and drag on the document to set the signature box.">
               <DocPreview file={file} markers={allMarkers} editable
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-                orientation={orientation}
-                onOrientationChange={setOrientation}
-                onFirstPageOrientation={setOrientation} />
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               {marker && (
                 <div className="mt-3 text-xs font-mono opacity-60">
                   Placed on page {marker.page} · {Math.round(marker.x)}% × {Math.round(marker.y)}% · {Math.round(marker.w)}% wide
                   <button className="ml-3 underline" onClick={() => setMarker(null)}>Reset</button>
                 </div>
               )}
+              <div className="mt-3 text-xs opacity-60">
+                The signature will fill this exact rectangle. A "Digitally signed by … · date" line is added below it automatically.
+              </div>
             </Section>
           )}
 
-          {file && mode === "single" && marker && (
-            <Section n="04" title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
+          {effectiveFile && mode === "single" && (isLeave || marker) && (
+            <Section n={isLeave ? "03" : "04"} title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
               <div className="grid sm:grid-cols-3 gap-3">
                 {teams.map(t => {
                   const active = targetTeam === t.id;
@@ -767,16 +880,17 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 3b. workflow mode */}
-          {file && mode === "workflow" && (
+          {!isLeave && effectiveFile && mode === "workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
-              <DocPreview file={file} markers={allMarkers} editable
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-                orientation={orientation}
-                onOrientationChange={setOrientation}
-                onFirstPageOrientation={setOrientation} />
+              <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
-                  Click and drag on the document to place this signer's box. <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
+                  Click and drag on the document to place this signer's box.{" "}
+                  {lockedAspect
+                    ? <span>Aspect is locked to the signer's signature so what you draw is what gets stamped.</span>
+                    : <span>(Once this signer uploads a signature, the box will lock to its aspect.)</span>}
+                  <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
                 </div>
               )}
 
@@ -831,8 +945,8 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           )}
 
           {/* 5. submit */}
-          {file && (mode === "single" ? (marker && targetTeam) : workflow.length > 0) && (
-            <Section n={mode === "single" ? "05" : "04"} title="Add a note (optional)" desc="">
+          {effectiveFile && (mode === "single" ? ((isLeave || marker) && targetTeam) : workflow.length > 0) && (
+            <Section n={isLeave ? "04" : (mode === "single" ? "05" : "04")} title="Add a note (optional)" desc="">
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the approver(s)…" />
               <div className="flex justify-end mt-4 gap-3">
                 <button className="btn-ghost" onClick={onDone}>Cancel</button>
@@ -943,18 +1057,16 @@ function BackHeader({ back, title, step }) {
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, orientation, onOrientationChange, onFirstPageOrientation }) {
+function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages}
-      orientation={orientation} onOrientationChange={onOrientationChange}
-      onFirstPageOrientation={onFirstPageOrientation} />;
+      onPages={onPages} lockedAspect={lockedAspect} />;
   }
-  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} />;
+  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} />;
 }
 
 // Convert a rectangle between viewport-space % and MediaBox-space % for an arbitrary
@@ -977,14 +1089,13 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, orientation, onOrientationChange, onFirstPageOrientation }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
-  const [pageDims, setPageDims] = useState([]); // [{ width, height }, ...]
 
   useEffect(() => {
     let cancelled = false;
-    setPdf(null); setErr(null); setPageDims([]);
+    setPdf(null); setErr(null);
     (async () => {
       try {
         const loadingTask = pdfjsLib.getDocument({ url: file.base64 });
@@ -992,18 +1103,6 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
         if (cancelled) return;
         setPdf(doc);
         onPages?.(doc.numPages);
-        const dims = [];
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i);
-          const vp = page.getViewport({ scale: 1, rotation: 0 });
-          dims.push({ width: vp.width, height: vp.height });
-        }
-        if (cancelled) return;
-        setPageDims(dims);
-        if (dims.length > 0) {
-          const first = dims[0].width > dims[0].height ? "landscape" : "portrait";
-          onFirstPageOrientation?.(first);
-        }
       } catch (e) {
         if (!cancelled) setErr(e.message || String(e));
       }
@@ -1014,56 +1113,57 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   if (err) return <div className="card p-6 text-sm" style={{ color: "#9B2C2C" }}>Could not render PDF: {err}</div>;
   if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
 
-  // Fall back to portrait while page dims are still loading, so the JSX below never
-  // gets undefined. Once dims arrive, RequestEditor will have called setOrientation
-  // via onFirstPageOrientation and re-rendered us with the correct value.
-  const activeOrientation = orientation
-    || (pageDims[0] ? (pageDims[0].width > pageDims[0].height ? "landscape" : "portrait") : "portrait");
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-  const pageRotations = pageDims.map(d =>
-    (d.width > d.height ? "landscape" : "portrait") === activeOrientation ? 0 : 90
-  );
 
   return (
     <div className="card overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
-        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"} · {activeOrientation}</div>
-        {editable && (
-          <div className="flex gap-1">
-            <button
-              onClick={() => onOrientationChange?.("portrait")}
-              className={`btn-ghost text-xs ${activeOrientation === "portrait" ? "ring-1" : ""}`}
-              title="Display every page in portrait orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
-            >Portrait</button>
-            <button
-              onClick={() => onOrientationChange?.("landscape")}
-              className={`btn-ghost text-xs ${activeOrientation === "landscape" ? "ring-1" : ""}`}
-              title="Display every page in landscape orientation. Pages whose native orientation differs will be rotated 90° clockwise when the request is submitted."
-            >Landscape</button>
-          </div>
-        )}
+        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
       </div>
       <div style={{ maxHeight: 720, overflowY: "auto", backgroundColor: "#E8E3D5" }}>
         {pages.map(p => (
           <PdfPage key={p} pdf={pdf} pageNum={p}
-            rotation={pageRotations[p - 1] || 0}
+            rotation={0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
+            lockedAspect={lockedAspect}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
         ))}
       </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Pick Portrait or Landscape, then click-drag where the signature should go. The orientation is baked into the PDF on submit.</div>}
+      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click-drag where the signature should go.</div>}
     </div>
   );
 }
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0 }) {
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+
+  // Constrain a viewport %-rectangle to satisfy lockedAspect (signature width/height
+  // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger
+  // dimension. Returns null if there's no lock or canvas hasn't measured yet.
+  const lockRect = (vx, vy, vw, vh) => {
+    if (!lockedAspect || !size.w || !size.h) return null;
+    // Target viewport ratio so that the resulting MediaBox rectangle has aspect α.
+    // At rotation 0: vw_px / vh_px = α   →   vw/vh = α * (canvas_h / canvas_w).
+    const target = lockedAspect * (size.h / size.w);
+    const currentRatio = vw / Math.max(vh, 0.0001);
+    if (currentRatio > target) {
+      // Too wide → shrink width to match height
+      vw = vh * target;
+    } else {
+      // Too tall → shrink height to match width
+      vh = vw / target;
+    }
+    // Keep inside page bounds (anchor at vx, vy)
+    if (vx + vw > 100) vw = Math.max(1, 100 - vx);
+    if (vy + vh > 100) vh = Math.max(1, 100 - vy);
+    return { vx, vy, vw, vh };
+  };
 
   // Cancel any in-progress drag when the user rotates the page
   useEffect(() => { setDrawing(null); }, [rotation]);
@@ -1136,12 +1236,27 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     if (vy < 0) vy = 0;
     if (vx + vw > 100) vx = Math.max(0, 100 - vw);
     if (vy + vh > 100) vy = Math.max(0, 100 - vh);
+    // Snap to the signer's signature aspect when one is known
+    const locked = lockRect(vx, vy, vw, vh);
+    if (locked) { vx = locked.vx; vy = locked.vy; vw = locked.vw; vh = locked.vh; }
     // Convert viewport-space coords (what the user clicked at the current rotation) to
     // MediaBox-space coords for storage and stamping.
     const m = viewportToMediabox(rotation, vx, vy, vw, vh);
     onAddMarker(m.x, m.y, m.w, m.h);
     setDrawing(null);
   };
+
+  // Live drag preview, locked to aspect if applicable
+  const previewRect = (() => {
+    if (!drawing) return null;
+    const vx = Math.min(drawing.sx, drawing.x);
+    const vy = Math.min(drawing.sy, drawing.y);
+    let vw = Math.abs(drawing.x - drawing.sx);
+    let vh = Math.abs(drawing.y - drawing.sy);
+    const locked = lockRect(vx, vy, vw, vh);
+    if (locked) { vw = locked.vw; vh = locked.vh; }
+    return { vx, vy, vw, vh };
+  })();
 
   return (
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
@@ -1167,11 +1282,11 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
             onUpdate={updateHandler}
             onDelete={deleteHandler} />;
         })}
-        {drawing && (
+        {previewRect && (
           <div style={{
             position: "absolute",
-            left: `${Math.min(drawing.sx, drawing.x)}%`, top: `${Math.min(drawing.sy, drawing.y)}%`,
-            width: `${Math.abs(drawing.x - drawing.sx)}%`, height: `${Math.abs(drawing.y - drawing.sy)}%`,
+            left: `${previewRect.vx}%`, top: `${previewRect.vy}%`,
+            width: `${previewRect.vw}%`, height: `${previewRect.vh}%`,
             border: "2px dashed #B8894A", backgroundColor: "rgba(184,137,74,.18)", pointerEvents: "none"
           }} />
         )}
@@ -1286,25 +1401,121 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature }) {
-  const [sheets, setSheets] = useState([]);
+function xlsxBorderCss(bd) {
+  if (!bd) return {};
+  const w = { thin: "1px", medium: "2px" };
+  const s = {};
+  if (bd.t) s.borderTop = `${w[bd.t] || "1px"} solid #333`;
+  if (bd.b) s.borderBottom = `${w[bd.b] || "1px"} solid #333`;
+  if (bd.l) s.borderLeft = `${w[bd.l] || "1px"} solid #333`;
+  if (bd.r) s.borderRight = `${w[bd.r] || "1px"} solid #333`;
+  return s;
+}
+
+function xlsxCellStyle(sty) {
+  if (!sty) return {};
+  const css = {};
+  if (sty.b) css.fontWeight = "bold";
+  if (sty.fs) css.fontSize = `${sty.fs}pt`;
+  if (sty.ha) css.textAlign = sty.ha;
+  if (sty.va === "center") css.verticalAlign = "middle";
+  else if (sty.va === "top") css.verticalAlign = "top";
+  if (sty.wr) css.whiteSpace = "normal";
+  return { ...css, ...xlsxBorderCss(sty.bd) };
+}
+
+function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, lockedCells, onWorkbookReady, styleMap }) {
+  const [wb, setWb] = useState(null);
+  const [sheetNames, setSheetNames] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
+  const [grid, setGrid] = useState([]);
   const [drawing, setDrawing] = useState(null);
+  const [editTick, setEditTick] = useState(0);
   const pageRef = useRef(null);
 
   useEffect(() => {
-    try {
-      const b64 = file.base64.split(",")[1];
-      const bin = atob(b64);
-      const u8 = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-      const wb = XLSX.read(u8, { type: "array" });
-      const sh = wb.SheetNames.map(n => ({ name: n, html: XLSX.utils.sheet_to_html(wb.Sheets[n], { id: "t" }) }));
-      setSheets(sh);
-      setActiveSheet(sh[0]?.name);
-      onPages?.(sh.length);
-    } catch (e) { console.error(e); }
+    let cancelled = false;
+    (async () => {
+      try {
+        let u8;
+        if (file.base64.startsWith("blob:")) {
+          const resp = await fetch(file.base64);
+          const buf = await resp.arrayBuffer();
+          u8 = new Uint8Array(buf);
+        } else {
+          const b64 = file.base64.split(",")[1];
+          const bin = atob(b64);
+          u8 = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        }
+        if (cancelled) return;
+        const workbook = XLSX.read(u8, { type: "array", cellDates: true });
+        setWb(workbook);
+        setSheetNames(workbook.SheetNames);
+        const firstVisible = cellEditable
+          ? (workbook.SheetNames.find(s => s !== "Sheet1") || workbook.SheetNames[0])
+          : workbook.SheetNames[0];
+        setActiveSheet(firstVisible);
+        onPages?.(workbook.SheetNames.length);
+        onWorkbookReady?.(workbook);
+      } catch (e) { console.error(e); }
+    })();
+    return () => { cancelled = true; };
   }, [file.base64]);
+
+  useEffect(() => {
+    if (!wb || !activeSheet) { setGrid([]); return; }
+    const ws = wb.Sheets[activeSheet];
+    if (!ws || !ws["!ref"]) { setGrid([]); return; }
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    const merges = ws["!merges"] || [];
+    const merged = {};
+    for (const m of merges) {
+      for (let r = m.s.r; r <= m.e.r; r++)
+        for (let c = m.s.c; c <= m.e.c; c++)
+          if (r !== m.s.r || c !== m.s.c) merged[`${r}:${c}`] = true;
+    }
+    const findMerge = (r, c) => merges.find(m => m.s.r === r && m.s.c === c);
+    const rows = [];
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const cells = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        if (merged[`${r}:${c}`]) continue;
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        const m = findMerge(r, c);
+        let display = "";
+        if (cell) {
+          if (cell.t === "d" && cell.v instanceof Date) {
+            display = cell.v.toLocaleDateString();
+          } else if (cell.w) {
+            display = cell.w;
+          } else if (cell.v != null) {
+            display = String(cell.v);
+          }
+        }
+        cells.push({
+          addr, r, c, display,
+          colSpan: m ? m.e.c - m.s.c + 1 : 1,
+          rowSpan: m ? m.e.r - m.s.r + 1 : 1
+        });
+      }
+      rows.push(cells);
+    }
+    setGrid(rows);
+  }, [wb, activeSheet, editTick]);
+
+  const handleCellEdit = (addr, newVal) => {
+    if (!wb || !activeSheet) return;
+    const ws = wb.Sheets[activeSheet];
+    if (newVal === "") {
+      delete ws[addr];
+    } else {
+      const num = Number(newVal);
+      ws[addr] = isNaN(num) || newVal.trim() === "" ? { t: "s", v: newVal } : { t: "n", v: num };
+    }
+    setEditTick(t => t + 1);
+  };
 
   const onDown = (e) => {
     if (!editable || !onAddMarker) return;
@@ -1340,22 +1551,79 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
     setDrawing(null);
   };
 
-  const active = sheets.find(s => s.name === activeSheet);
+  const visibleSheets = cellEditable ? sheetNames.filter(s => s !== "Sheet1") : sheetNames;
+  const sm = styleMap?.styles || {};
+  const rh = styleMap?.rowHeights || {};
+  const cw = styleMap?.colWidths || {};
+  const hasStyles = Object.keys(sm).length > 0;
+
   return (
     <div className="card overflow-hidden">
-      <div className="flex border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
-        {sheets.map(s => (
-          <button key={s.name} onClick={() => setActiveSheet(s.name)}
-            className={`px-4 py-2 text-xs font-medium ${activeSheet === s.name ? "" : "opacity-50"}`}
-            style={{ borderBottom: activeSheet === s.name ? "2px solid #B8894A" : "2px solid transparent" }}>
-            {s.name}
-          </button>
-        ))}
-      </div>
-      <div ref={pageRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={() => setDrawing(null)}
-           style={{ position: "relative", minHeight: 400, maxHeight: 720, overflow: "auto", cursor: editable ? "crosshair" : "default" }}>
-        <style>{`.xlsx-wrap table { border-collapse: collapse; font-size: 13px; } .xlsx-wrap td, .xlsx-wrap th { border: 1px solid rgba(15,26,46,.15); padding: 6px 10px; }`}</style>
-        <div className="xlsx-wrap p-3" dangerouslySetInnerHTML={{ __html: active?.html || "" }} />
+      {visibleSheets.length > 1 && (
+        <div className="flex border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+          {visibleSheets.map(s => (
+            <button key={s} onClick={() => setActiveSheet(s)}
+              className={`px-4 py-2 text-xs font-medium ${activeSheet === s ? "" : "opacity-50"}`}
+              style={{ borderBottom: activeSheet === s ? "2px solid #B8894A" : "2px solid transparent" }}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      <div ref={pageRef}
+           onMouseDown={editable ? onDown : undefined} onMouseMove={editable ? onMove : undefined}
+           onMouseUp={editable ? onUp : undefined} onMouseLeave={editable ? () => setDrawing(null) : undefined}
+           style={{ position: "relative", minHeight: 400, maxHeight: 720, overflow: "auto", cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
+        <style>{`
+          .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
+          .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
+          .xlsx-grid td.cell-editable { cursor: text; }
+          .xlsx-grid td.cell-editable:hover { background: rgba(184,137,74,.08); }
+          .xlsx-grid td.cell-editable:focus { outline: 2px solid #B8894A; outline-offset: -2px; background: #FFFDF5; }
+          .xlsx-grid td.cell-locked { cursor: default; background: rgba(15,26,46,.03); color: rgba(15,26,46,.55); font-style: italic; }
+        `}</style>
+        <div style={{ padding: "12px 16px" }}>
+          <table className="xlsx-grid">
+            {Object.keys(cw).length > 0 && (
+              <colgroup>
+                {Array.from({ length: 9 }, (_, i) => {
+                  const letter = String.fromCharCode(65 + i);
+                  return <col key={i} style={{ width: cw[letter] ? `${cw[letter]}px` : 130 }} />;
+                })}
+              </colgroup>
+            )}
+            <tbody>
+              {grid.map((row, ri) => {
+                const rowNum = ri + 1;
+                const rowH = rh[String(rowNum)];
+                return (
+                  <tr key={ri} style={rowH ? { height: `${rowH}px` } : undefined}>
+                    {row.map(cell => {
+                      const sty = sm[cell.addr];
+                      const cellCss = sty ? xlsxCellStyle(sty) : (hasStyles ? {} : {});
+                      const isLocked = lockedCells?.has(cell.addr);
+                      const isEditable = cellEditable && !isLocked;
+                      return (
+                        <td key={cell.addr}
+                          colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
+                          rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
+                          className={isLocked ? "cell-locked" : isEditable ? "cell-editable" : ""}
+                          style={cellCss}
+                          contentEditable={isEditable ? true : undefined}
+                          suppressContentEditableWarning
+                          onBlur={isEditable ? e => {
+                            const newVal = e.currentTarget.textContent || "";
+                            if (newVal !== cell.display) handleCellEdit(cell.addr, newVal);
+                          } : undefined}
+                        >{cell.display}</td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         {markers.map((m, i) => (
           <MarkerOverlay key={m.id || i} m={{ ...m, signedDataUrl: m.signedDataUrl || appliedSignature }} />
         ))}
@@ -1369,6 +1637,7 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
         )}
       </div>
       {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click and drag on the active sheet to place a signature.</div>}
+      {cellEditable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click any cell to edit its value.</div>}
     </div>
   );
 }
@@ -1394,6 +1663,7 @@ function PendingList({ items, teams, users, sendReminder, back, notify }) {
                     </button>
                   )}
                   {r.hasSignedFile && <DownloadBtn req={r} />}
+                  {r.hasSignedFile && <PrintBtn req={r} />}
                 </div>
               )} />
           ))}
@@ -1417,6 +1687,7 @@ function ApprovedList({ items, teams, users, back }) {
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
+                  <PrintBtn req={r} />
                 </div>
               )} />
           ))}
@@ -1525,19 +1796,81 @@ function DownloadBtn({ req }) {
   const download = async () => {
     setBusy(true);
     try {
-      // Prefer signed version when available
-      const kind = req.hasSignedFile ? "signed" : "file";
+      const isPdf = req.fileType === "pdf";
+      // For xlsx, the "signed" version is a JSON manifest — always download the original file
+      const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
       const url = await api.getRequestFileBlob(req.id, kind);
       const a = document.createElement("a");
       a.href = url;
-      const ext = req.fileType === "pdf" ? "pdf" : "xlsx";
-      a.download = req.hasSignedFile ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
+      const ext = isPdf ? "pdf" : "xlsx";
+      a.download = (req.hasSignedFile && isPdf) ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (e) { alert(e.message || "Download failed"); }
     finally { setBusy(false); }
   };
   return <button className="btn-ghost text-xs" onClick={download} disabled={busy}><Download size={12} /> {busy ? "…" : "Download"}</button>;
+}
+
+function PrintBtn({ req }) {
+  const [busy, setBusy] = useState(false);
+  const print = async () => {
+    setBusy(true);
+    try {
+      const isPdf = req.fileType === "pdf";
+      const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
+      const url = await api.getRequestFileBlob(req.id, kind);
+
+      if (isPdf) {
+        // PDF: hidden iframe → contentWindow.print()
+        const iframe = document.createElement("iframe");
+        iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+        iframe.src = url;
+        document.body.appendChild(iframe);
+        iframe.onload = () => {
+          try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+          } catch {
+            // Fallback: open in new tab for manual print
+            window.open(url, "_blank");
+          }
+          setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
+        };
+      } else {
+        // Excel/Leave form: parse with SheetJS → render HTML → print via popup
+        const resp = await fetch(url);
+        const buf = await resp.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
+        const visibleSheets = wb.SheetNames.filter(s => s !== "Sheet1");
+        let body = "";
+        (visibleSheets.length ? visibleSheets : wb.SheetNames).forEach(name => {
+          const ws = wb.Sheets[name];
+          if (!ws || !ws["!ref"]) return;
+          body += `<h3 style="font-size:11pt;margin:16px 0 6px">${name}</h3>`;
+          body += XLSX.utils.sheet_to_html(ws, { editable: false });
+        });
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+          <title>${req.fileName}</title>
+          <style>
+            body{font-family:Calibri,Arial,sans-serif;font-size:10pt;margin:12mm;}
+            table{border-collapse:collapse;width:100%;}
+            td,th{border:1px solid #aaa;padding:3px 6px;vertical-align:top;}
+            @media print{body{margin:6mm;}}
+          </style></head><body>${body}</body></html>`;
+        const pw = window.open("", "_blank", "width=900,height=700");
+        if (pw) {
+          pw.document.write(html);
+          pw.document.close();
+          pw.focus();
+          setTimeout(() => { pw.print(); }, 400);
+        }
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) { alert(e.message || "Print failed"); }
+    finally { setBusy(false); }
+  };
+  return <button className="btn-ghost text-xs" onClick={print} disabled={busy}><Printer size={12} /> {busy ? "…" : "Print"}</button>;
 }
 
 function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
@@ -1563,13 +1896,18 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
 function PreviewDrawer({ req, onClose, users, teams }) {
   const [file, setFile] = useState(null);
+  const [leaveStyles, setLeaveStyles] = useState(null);
   useEffect(() => {
     let url = null;
     (async () => {
       try {
-        const kind = req.hasSignedFile ? "signed" : "file";
+        const isPdf = req.fileType === "pdf";
+        const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
         url = await api.getRequestFileBlob(req.id, kind);
         setFile({ name: req.fileName, base64: url, ext: req.fileType === "pdf" ? "pdf" : "xlsx" });
+        if (req.requestType === "leave" && req.fileType !== "pdf") {
+          fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
+        }
       } catch (e) { console.error(e); }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
@@ -1595,7 +1933,7 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         <div className="p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
-            <DocPreview file={file} markers={markers} />
+            <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
@@ -1814,15 +2152,22 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
 
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
+  const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [previewing, setPreviewing] = useState(false);
+  const [sigUrl, setSigUrl] = useState(null);
   useEffect(() => {
     let url = null;
     (async () => {
       try {
-        const kind = req.hasSignedFile ? "signed" : "file";
+        const isPdf = req.fileType === "pdf";
+        const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
         url = await api.getRequestFileBlob(req.id, kind);
         setFile({ name: req.fileName, base64: url, ext: req.fileType === "pdf" ? "pdf" : "xlsx" });
+        if (req.requestType === "leave" && req.fileType !== "pdf") {
+          fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
+        }
       } catch (e) { console.error(e); }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
@@ -1844,8 +2189,21 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   }
   const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
 
-  // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place)
-  const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams, { highlightUserId: user.id });
+  const enterPreview = async () => {
+    try {
+      const url = await api.getSignatureBlob(user.id);
+      if (!url) { notify("Could not load your signature", "error"); return; }
+      setSigUrl(url);
+      setPreviewing(true);
+    } catch { notify("Failed to load signature preview", "error"); }
+  };
+
+  // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place).
+  // In preview mode, overlay the approver's signature image at the marked position.
+  const baseMarkers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams, { highlightUserId: user.id });
+  const markers = (previewing && sigUrl)
+    ? baseMarkers.map(m => (isWorkflow ? m.highlight : true) ? { ...m, signedDataUrl: sigUrl } : m)
+    : baseMarkers;
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
@@ -1864,20 +2222,35 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         </div>
         <div className="p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? <DocPreview file={file} markers={markers} /> : <div className="text-sm opacity-50">Loading…</div>}
+          {file ? <DocPreview file={file} markers={markers} styleMap={leaveStyles} /> : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
 
           {canApprove && (
             <div className="sticky bottom-0 mt-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
-              <div className="text-xs opacity-60">
-                {isWorkflow
-                  ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
-                  : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
-              </div>
-              <div className="flex gap-3">
-                <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
-                <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Approve & sign</button>
-              </div>
+              {previewing ? (
+                <>
+                  <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
+                    <Eye size={13} />
+                    <span>Review how your signature will appear on the document.</span>
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> Go back</button>
+                    <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Confirm approval</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-xs opacity-60">
+                    {isWorkflow
+                      ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
+                      : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
+                    <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> Preview & approve</button>
+                  </div>
+                </>
+              )}
             </div>
           )}
           {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
@@ -1934,6 +2307,7 @@ function ApproverApproved({ items, back, users, teams }) {
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
+                  <PrintBtn req={r} />
                 </div>
               )} />
           ))}
@@ -2380,7 +2754,7 @@ function AdminDocuments({ requests, users, teams, back }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<DownloadBtn req={r} />} />
+              actions={<div className="flex gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
           ))}
       </div>
     </div>
@@ -2552,8 +2926,11 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
-  const [drawing, setDrawing] = useState(false);
   const [empty, setEmpty] = useState(true);
+  const drawingRef = useRef(false);
+  const pointsRef = useRef([]);
+  const lastVelRef = useRef(0);
+  const lastWidthRef = useRef(2.0);
   const [currentSigUrl, setCurrentSigUrl] = useState(null);
 
   // Fetch the current signature image, if any, so the user can see what's stored.
@@ -2572,21 +2949,93 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
   useEffect(() => {
     const c = canvasRef.current; if (!c) return;
     const r = c.getBoundingClientRect();
-    c.width = r.width * 2; c.height = r.height * 2;
-    const ctx = c.getContext("2d");
-    ctx.scale(2, 2);
-    ctx.strokeStyle = "#0F1A2E"; ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    c.width = r.width * 3; c.height = r.height * 3;
+    c.getContext("2d").scale(3, 3);
   }, [mode]);
 
   const pos = e => {
     const r = canvasRef.current.getBoundingClientRect();
     const t = e.touches ? e.touches[0] : e;
-    return { x: t.clientX - r.left, y: t.clientY - r.top };
+    return { x: t.clientX - r.left, y: t.clientY - r.top, t: Date.now() };
   };
-  const start = e => { setDrawing(true); const { x, y } = pos(e); const ctx = canvasRef.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(x, y); };
-  const move = e => { if (!drawing) return; e.preventDefault(); const { x, y } = pos(e); const ctx = canvasRef.current.getContext("2d"); ctx.lineTo(x, y); ctx.stroke(); setEmpty(false); };
-  const end = () => setDrawing(false);
-  const clear = () => { const c = canvasRef.current; const ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); setEmpty(true); };
+
+  const start = e => {
+    if (e.touches) e.preventDefault();
+    drawingRef.current = true;
+    const p = pos(e);
+    pointsRef.current = [p];
+    lastVelRef.current = 0;
+    lastWidthRef.current = 2.0;
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.fillStyle = "#0F1A2E";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    setEmpty(false);
+  };
+
+  const move = e => {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const p = pos(e);
+    const pts = pointsRef.current;
+    const prev = pts[pts.length - 1];
+    const dx = p.x - prev.x, dy = p.y - prev.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1.5) return;
+    const dt = Math.max(1, p.t - prev.t);
+    const vel = (dist / dt) * 1000;
+    const sVel = lastVelRef.current * 0.4 + vel * 0.6;
+    lastVelRef.current = sVel;
+    const frac = Math.min(sVel / 800, 1);
+    const rawW = 3.2 - 2.6 * frac;
+    const w = lastWidthRef.current * 0.55 + rawW * 0.45;
+    lastWidthRef.current = w;
+    pts.push(p);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.strokeStyle = "#0F1A2E";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = w;
+    if (pts.length >= 3) {
+      const a = pts[pts.length - 3], b = pts[pts.length - 2];
+      ctx.beginPath();
+      ctx.moveTo((a.x + b.x) / 2, (a.y + b.y) / 2);
+      ctx.quadraticCurveTo(b.x, b.y, (b.x + p.x) / 2, (b.y + p.y) / 2);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+    setEmpty(false);
+  };
+
+  const end = () => {
+    if (drawingRef.current && pointsRef.current.length >= 2) {
+      const pts = pointsRef.current;
+      const last = pts[pts.length - 1], prev = pts[pts.length - 2];
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.strokeStyle = "#0F1A2E";
+      ctx.lineCap = "round";
+      ctx.lineWidth = lastWidthRef.current;
+      ctx.beginPath();
+      ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+    }
+    drawingRef.current = false;
+    pointsRef.current = [];
+  };
+
+  const clear = () => {
+    const c = canvasRef.current;
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    setEmpty(true);
+    lastWidthRef.current = 2.0;
+    lastVelRef.current = 0;
+  };
 
   const handleUpload = e => {
     const f = e.target.files?.[0]; if (!f) return;

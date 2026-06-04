@@ -1,0 +1,99 @@
+name: Deploy OneSign to EC2 (UAT)
+on:
+  push:
+    branches: [UAT]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: changes
+        run: |
+          BASE=${{ github.event.before }}
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git rev-parse HEAD~1)
+          fi
+          echo "Comparing $BASE..HEAD"
+          if git diff --name-only "$BASE" HEAD | grep -q '^client/'; then
+            echo "client=true" >> $GITHUB_OUTPUT
+          else
+            echo "client=false" >> $GITHUB_OUTPUT
+          fi
+          if git diff --name-only "$BASE" HEAD | grep -q '^server/'; then
+            echo "server=true" >> $GITHUB_OUTPUT
+          else
+            echo "server=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install client dependencies
+        if: steps.changes.outputs.client == 'true'
+        run: cd client && npm ci
+
+      - name: Build client
+        if: steps.changes.outputs.client == 'true'
+        run: cd client && npm run build
+        env:
+          CI: false
+          GENERATE_SOURCEMAP: false
+
+      - name: Copy client build to EC2
+        if: steps.changes.outputs.client == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          source: "client/dist/"
+          target: "/home/ubuntu/OneSign"
+          overwrite: true
+
+      - name: Copy server to EC2
+        if: steps.changes.outputs.server == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          source: "server/"
+          target: "/home/ubuntu/OneSign"
+          overwrite: true
+
+      - name: Restart backend on EC2
+        if: steps.changes.outputs.server == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server
+            npm ci --omit=dev
+            pm2 delete onesign_backend_uat 2>/dev/null || true
+            PORT=5101 pm2 start src/index.js --name onesign_backend_uat --cwd /home/ubuntu/OneSign/server
+            pm2 save
+
+      - name: Ensure nginx serves .mjs with correct MIME type
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          script: |
+            if ! grep -q 'mjs' /etc/nginx/mime.types 2>/dev/null; then
+              sudo sed -i 's|application/javascript\s\+js;|application/javascript  js mjs;|' /etc/nginx/mime.types
+            fi
+            sudo nginx -t && sudo systemctl reload nginx

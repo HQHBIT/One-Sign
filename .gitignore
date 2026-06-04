@@ -11,3 +11,4 @@ server/uploads/signed/*
 .DS_Store
 *.log
 .vite
+client/public/pdf.worker.min.js
