@@ -4,7 +4,7 @@ import {
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
-  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff
+  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
@@ -1663,6 +1663,7 @@ function PendingList({ items, teams, users, sendReminder, back, notify }) {
                     </button>
                   )}
                   {r.hasSignedFile && <DownloadBtn req={r} />}
+                  {r.hasSignedFile && <PrintBtn req={r} />}
                 </div>
               )} />
           ))}
@@ -1686,6 +1687,7 @@ function ApprovedList({ items, teams, users, back }) {
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
+                  <PrintBtn req={r} />
                 </div>
               )} />
           ))}
@@ -1808,6 +1810,67 @@ function DownloadBtn({ req }) {
     finally { setBusy(false); }
   };
   return <button className="btn-ghost text-xs" onClick={download} disabled={busy}><Download size={12} /> {busy ? "…" : "Download"}</button>;
+}
+
+function PrintBtn({ req }) {
+  const [busy, setBusy] = useState(false);
+  const print = async () => {
+    setBusy(true);
+    try {
+      const isPdf = req.fileType === "pdf";
+      const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
+      const url = await api.getRequestFileBlob(req.id, kind);
+
+      if (isPdf) {
+        // PDF: hidden iframe → contentWindow.print()
+        const iframe = document.createElement("iframe");
+        iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+        iframe.src = url;
+        document.body.appendChild(iframe);
+        iframe.onload = () => {
+          try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+          } catch {
+            // Fallback: open in new tab for manual print
+            window.open(url, "_blank");
+          }
+          setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
+        };
+      } else {
+        // Excel/Leave form: parse with SheetJS → render HTML → print via popup
+        const resp = await fetch(url);
+        const buf = await resp.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
+        const visibleSheets = wb.SheetNames.filter(s => s !== "Sheet1");
+        let body = "";
+        (visibleSheets.length ? visibleSheets : wb.SheetNames).forEach(name => {
+          const ws = wb.Sheets[name];
+          if (!ws || !ws["!ref"]) return;
+          body += `<h3 style="font-size:11pt;margin:16px 0 6px">${name}</h3>`;
+          body += XLSX.utils.sheet_to_html(ws, { editable: false });
+        });
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+          <title>${req.fileName}</title>
+          <style>
+            body{font-family:Calibri,Arial,sans-serif;font-size:10pt;margin:12mm;}
+            table{border-collapse:collapse;width:100%;}
+            td,th{border:1px solid #aaa;padding:3px 6px;vertical-align:top;}
+            @media print{body{margin:6mm;}}
+          </style></head><body>${body}</body></html>`;
+        const pw = window.open("", "_blank", "width=900,height=700");
+        if (pw) {
+          pw.document.write(html);
+          pw.document.close();
+          pw.focus();
+          setTimeout(() => { pw.print(); }, 400);
+        }
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) { alert(e.message || "Print failed"); }
+    finally { setBusy(false); }
+  };
+  return <button className="btn-ghost text-xs" onClick={print} disabled={busy}><Printer size={12} /> {busy ? "…" : "Print"}</button>;
 }
 
 function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
@@ -2244,6 +2307,7 @@ function ApproverApproved({ items, back, users, teams }) {
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
+                  <PrintBtn req={r} />
                 </div>
               )} />
           ))}
@@ -2690,7 +2754,7 @@ function AdminDocuments({ requests, users, teams, back }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<DownloadBtn req={r} />} />
+              actions={<div className="flex gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
           ))}
       </div>
     </div>
