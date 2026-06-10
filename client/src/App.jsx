@@ -3,7 +3,7 @@ import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
-  RefreshCw, Send, Inbox, Archive, ChevronRight, Undo2, Trash2,
+  RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -1057,16 +1057,16 @@ function BackHeader({ back, title, step }) {
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null }) {
+function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fill = false }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} />;
+      onPages={onPages} lockedAspect={lockedAspect} fill={fill} />;
   }
-  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} />;
+  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
 }
 
 // Convert a rectangle between viewport-space % and MediaBox-space % for an arbitrary
@@ -1089,7 +1089,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -1120,7 +1120,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
         <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
       </div>
-      <div style={{ maxHeight: 720, overflowY: "auto", backgroundColor: "#E8E3D5" }}>
+      <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "#E8E3D5" }}>
         {pages.map(p => (
           <PdfPage key={p} pdf={pdf} pageNum={p}
             rotation={0}
@@ -1362,7 +1362,8 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
   });
 
   return (
-    <div style={{
+    <div data-sig-jump={m.highlight !== false ? "true" : undefined}
+      style={{
       position: "absolute",
       left: `${m.x}%`, top: `${m.y}%`,
       width: `${m.w}%`, height: `${m.h}%`,
@@ -1424,7 +1425,7 @@ function xlsxCellStyle(sty) {
   return { ...css, ...xlsxBorderCss(sty.bd) };
 }
 
-function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, lockedCells, onWorkbookReady, styleMap }) {
+function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, lockedCells, onWorkbookReady, styleMap, fill = false }) {
   const [wb, setWb] = useState(null);
   const [sheetNames, setSheetNames] = useState([]);
   const [activeSheet, setActiveSheet] = useState(null);
@@ -1573,7 +1574,7 @@ function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSign
       <div ref={pageRef}
            onMouseDown={editable ? onDown : undefined} onMouseMove={editable ? onMove : undefined}
            onMouseUp={editable ? onUp : undefined} onMouseLeave={editable ? () => setDrawing(null) : undefined}
-           style={{ position: "relative", minHeight: 400, maxHeight: 720, overflow: "auto", cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
+           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
         <style>{`
           .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
           .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
@@ -2154,6 +2155,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [reason, setReason] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
+  const bodyRef = useRef(null);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -2202,76 +2204,93 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
     ? baseMarkers.map(m => (isWorkflow ? m.highlight : true) ? { ...m, signedDataUrl: sigUrl } : m)
     : baseMarkers;
 
+  const jumpToSig = () => {
+    const el = bodyRef.current?.querySelector("[data-sig-jump]");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    else bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
+  };
+
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
-      <div className="w-full max-w-4xl overflow-auto anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
-        <div className="p-6 flex items-center justify-between border-b" style={{ borderColor: "rgba(15,26,46,.1)" }}>
-          <div>
-            <div className="font-display text-2xl">{req.fileName}</div>
-            <div className="text-xs opacity-60 mt-1">
+      <div className="w-full max-w-4xl flex flex-col anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
+
+        {/* ── Fixed header with Jump-to-Signature ── */}
+        <div className="px-6 py-4 flex items-center gap-3 border-b shrink-0" style={{ borderColor: "rgba(15,26,46,.1)" }}>
+          <div className="min-w-0 flex-1">
+            <div className="font-display text-xl truncate">{req.fileName}</div>
+            <div className="text-xs opacity-60 mt-0.5">
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            {canApprove && markers.length > 0 && (
+              <button onClick={jumpToSig} className="btn-primary text-xs" title="Jump to signature zone"
+                style={{ backgroundColor: "#B8894A" }}>
+                <ChevronDown size={13} /> Go to signature
+              </button>
+            )}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
         </div>
-        <div className="p-6">
-          {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? <DocPreview file={file} markers={markers} styleMap={leaveStyles} /> : <div className="text-sm opacity-50">Loading…</div>}
-          {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
 
-          {canApprove && (
-            <div className="sticky bottom-0 mt-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
-              {previewing ? (
-                <>
-                  <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
-                    <Eye size={13} />
-                    <span>Review how your signature will appear on the document.</span>
-                  </div>
-                  <div className="flex gap-3 shrink-0">
-                    <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> Go back</button>
-                    <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Confirm approval</button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-xs opacity-60">
-                    {isWorkflow
-                      ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
-                      : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
-                  </div>
-                  <div className="flex gap-3 shrink-0">
-                    <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
-                    <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> Preview & approve</button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-          {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
-            <div className="sticky bottom-0 mt-6 py-4 border-t text-xs opacity-70 flex items-center gap-2"
-              style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
-              <Clock size={12} /> Awaiting signature from <span className="font-medium">{nextPendingUser.userName}</span> before it reaches you.
-            </div>
-          )}
-          {pendingApproved && req.approverId === user.id && !req.instantApproval && (
-            <div className="sticky bottom-0 mt-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
-              <div className="text-xs opacity-70 flex items-center gap-2">
-                <Clock size={12} /> You have until <span className="font-mono"><Countdown until={req.approvedAt + APPROVAL_WINDOW_MS} /></span> to change your mind.
-              </div>
-              <div className="flex gap-2">
-                <button className="btn-ghost" onClick={async () => { await undoApproval(req.id); onClose(); }} title="Silently undo your approval">
-                  <Undo2 size={14} /> Withdraw
-                </button>
-                <button className="btn-danger" onClick={() => setRejectOpen(true)} title="Reject with a reason — requestor is notified by email">
-                  <XCircle size={14} /> Reject with reason
-                </button>
-              </div>
-            </div>
-          )}
+        {/* ── Single scrollable body ── */}
+        <div ref={bodyRef} className="flex-1 overflow-y-auto p-6">
+          {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
+          {file ? <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill /> : <div className="text-sm opacity-50">Loading…</div>}
+          {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
+
+        {/* ── Pinned action bar(s) ── */}
+        {canApprove && (
+          <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+            {previewing ? (
+              <>
+                <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
+                  <Eye size={13} />
+                  <span>Review how your signature will appear on the document.</span>
+                </div>
+                <div className="flex gap-3 shrink-0">
+                  <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> Go back</button>
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Confirm approval</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs opacity-60">
+                  {isWorkflow
+                    ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
+                    : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
+                </div>
+                <div className="flex gap-3 shrink-0">
+                  <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
+                  <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> Preview & approve</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
+          <div className="shrink-0 px-6 py-4 border-t text-xs opacity-70 flex items-center gap-2"
+            style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+            <Clock size={12} /> Awaiting signature from <span className="font-medium">{nextPendingUser.userName}</span> before it reaches you.
+          </div>
+        )}
+        {pendingApproved && req.approverId === user.id && !req.instantApproval && (
+          <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+            <div className="text-xs opacity-70 flex items-center gap-2">
+              <Clock size={12} /> You have until <span className="font-mono"><Countdown until={req.approvedAt + APPROVAL_WINDOW_MS} /></span> to change your mind.
+            </div>
+            <div className="flex gap-2">
+              <button className="btn-ghost" onClick={async () => { await undoApproval(req.id); onClose(); }} title="Silently undo your approval">
+                <Undo2 size={14} /> Withdraw
+              </button>
+              <button className="btn-danger" onClick={() => setRejectOpen(true)} title="Reject with a reason — requestor is notified by email">
+                <XCircle size={14} /> Reject with reason
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {rejectOpen && (
