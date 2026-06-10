@@ -123,6 +123,26 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
   } catch (e) { next(e); }
 });
 
+// ---------- set / change a requestor's team (department) ----------
+// PUT /api/users/:id/team  body: { teamId: "t_..." | null }
+// Admin-only. Used by the team-membership editor to (re)assign a requestor
+// without having to delete and recreate the user. Sending teamId: null clears
+// the assignment. Validates that the user is a requestor and the team exists.
+router.put("/:id/team", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { teamId } = req.body || {};
+    const target = await queryOne("SELECT id, role FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    if (target.role !== "requestor") return res.status(400).json({ error: "Only requestors have a department" });
+    if (teamId) {
+      const team = await queryOne("SELECT id FROM teams WHERE id = ?", [teamId]);
+      if (!team) return res.status(404).json({ error: "Team not found" });
+    }
+    await execute("UPDATE users SET team_id = ? WHERE id = ?", [teamId || null, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // ---------- delete ----------
 router.delete("/:id", authRequired, requireRole("admin"), async (req, res, next) => {
   try {

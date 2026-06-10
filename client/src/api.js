@@ -59,6 +59,9 @@ export const api = {
   createUser(data) { return this.fetch("/api/users", { method: "POST", body: JSON.stringify(data) }); },
   bulkCreateUsers(rows) { return this.fetch("/api/users/bulk", { method: "POST", body: JSON.stringify({ rows }) }); },
   deleteUser(id) { return this.fetch(`/api/users/${id}`, { method: "DELETE" }); },
+  setUserTeam(userId, teamId) {
+    return this.fetch(`/api/users/${userId}/team`, { method: "PUT", body: JSON.stringify({ teamId: teamId || null }) });
+  },
 
   setMySignature(dataUrl) {
     return this.fetch("/api/users/me/signature", {
