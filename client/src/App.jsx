@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
@@ -6,11 +6,24 @@ import {
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer
 } from "lucide-react";
-import * as XLSX from "xlsx";
-import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import { api } from "./api.js";
+import {
+  ROLES, ROLE_LABELS, STATUS, STATUS_LABELS,
+  APPROVAL_WINDOW_MS, REMINDER_COOLDOWN_MS,
+  COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor
+} from "./lib/constants.js";
+import { uid, fmt, fmtShort } from "./lib/format.js";
+import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
+import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+// Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
+// only when a document is actually previewed. Keeps the login + dashboard
+// initial bundle small.
+const ViewerModule = () => import("./viewer.jsx");
+const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview })));
+const XlsxViewer = lazy(() => ViewerModule().then(m => ({ default: m.XlsxViewer })));
+const ViewerFallback = () =>
+  <div className="card p-10 text-sm opacity-50 text-center">Loading viewer…</div>;
 
 // FileX icon shim (lucide doesn't always export it)
 const FileX = (props) => <FileText {...props} />;
@@ -19,64 +32,8 @@ const FileX = (props) => <FileText {...props} />;
    HQHB SIGNFLOW — React client (talks to Node/Express + MySQL)
    ------------------------------------------------------------
    Data layer: API (see ./api.js). No browser storage except JWT.
+   Constants + helpers live in ./lib/.
    ============================================================ */
-
-// ---------- constants ----------
-const APPROVAL_WINDOW_MS = 60 * 60 * 1000;
-const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-
-// Request type taxonomy — shared between Quick Actions, NewRequest type picker, and the
-// approver's pending list filter. Keys must match the allowedTypes list on the server.
-const REQUEST_TYPES = [
-  { key: "leave",    label: "Leave Approval",    desc: "Time-off, leave forms, attendance approvals.", color: "#2D5F2F" },
-  { key: "document", label: "Document Approval", desc: "Policies, memos, contracts, letters.",         color: "#1B5A7A" },
-  { key: "expense",  label: "Expense Approval",  desc: "Reimbursements, advances, vouchers.",          color: "#9B6A2C" },
-  { key: "invoice",  label: "Invoice / PO",      desc: "Purchase orders, vendor invoices.",            color: "#7A4E8C" },
-  { key: "general",  label: "Other",             desc: "Anything else needing a signature.",           color: "#0F1A2E" }
-];
-const requestTypeLabel = (key) => REQUEST_TYPES.find(t => t.key === key)?.label || "Other";
-const requestTypeColor = (key) => REQUEST_TYPES.find(t => t.key === key)?.color || "#0F1A2E";
-
-const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-const fmt = ts => new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-const fmtShort = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-
-// ---------- browser-back handling ----------
-// The SPA uses state-based navigation (no React Router). Without this, clicking the
-// browser back button leaves the site entirely (typically to whatever was loaded
-// before — Google homepage, etc.). The hook below intercepts back navigation and
-// closes the topmost sub-view / drawer / modal instead, only letting the user out
-// of the site once they're back at the home dashboard.
-const __backStack = [];
-let __suppressNextPop = false;
-if (typeof window !== "undefined" && !window.__sfBackInit) {
-  window.__sfBackInit = true;
-  window.addEventListener("popstate", () => {
-    if (__suppressNextPop) { __suppressNextPop = false; return; }
-    const top = __backStack.pop();
-    if (top) top.handler();
-  });
-}
-function useBackHandler(active, onBack) {
-  const handlerRef = useRef(onBack);
-  handlerRef.current = onBack;
-  useEffect(() => {
-    if (!active) return;
-    const entry = { handler: () => handlerRef.current?.() };
-    __backStack.push(entry);
-    window.history.pushState({ sf: true }, "");
-    return () => {
-      const idx = __backStack.indexOf(entry);
-      if (idx === -1) return; // already popped by browser-back
-      __backStack.splice(idx, 1);
-      if (idx === __backStack.length) {
-        // We were on top — pop our sentinel without re-triggering the global handler
-        __suppressNextPop = true;
-        window.history.back();
-      }
-    };
-  }, [active]);
-}
 
 // ============================================================
 //   ROOT APP
@@ -88,13 +45,14 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [requests, setRequests] = useState([]);
   const [emails, setEmails] = useState([]);
-  const [toast, setToast] = useState(null);
+  const [toasts, setToasts] = useState([]); // queue — multiple notifications stack
   const [tick, setTick] = useState(0);
 
-  const notify = (msg, kind = "info") => {
-    setToast({ msg, kind, id: Date.now() });
-    setTimeout(() => setToast(null), 3800);
-  };
+  const notify = useCallback((msg, kind = "info") => {
+    const id = uid("t");
+    setToasts(t => [...t, { msg, kind, id }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3800);
+  }, []);
 
   // ---- data refresh based on role ----
   const refresh = useCallback(async (forUser = user) => {
@@ -138,11 +96,26 @@ export default function App() {
     })();
   }, []);
 
-  // ---- periodic refresh every 30s for countdown + server-side finalisation visibility ----
+  // ---- refresh strategy ----
+  // The countdown for the approval-window pill needs to tick at least every
+  // minute, so we keep a 1-minute tick for clock-driven UI. Data, however, is
+  // refreshed only when the tab regains focus or visibility — cutting idle API
+  // chatter (and mobile battery) and removing the every-30s thundering-herd.
   useEffect(() => {
     if (!user) return;
-    const i = setInterval(() => { setTick(x => x + 1); refresh(user); }, 30_000);
-    return () => clearInterval(i);
+    const tickTimer = setInterval(() => setTick(x => x + 1), 60_000);
+    const onActive = () => {
+      if (document.visibilityState !== "visible") return;
+      setTick(x => x + 1);
+      refresh(user);
+    };
+    window.addEventListener("focus", onActive);
+    document.addEventListener("visibilitychange", onActive);
+    return () => {
+      clearInterval(tickTimer);
+      window.removeEventListener("focus", onActive);
+      document.removeEventListener("visibilitychange", onActive);
+    };
   }, [user, refresh]);
 
   // ---- auth actions ----
@@ -197,10 +170,14 @@ export default function App() {
   const saveUsers = async () => { if (user?.role === "admin") setUsers(await api.listUsers()); };
   const saveTeams = async () => { setTeams(await api.listTeams()); };
 
+  // Custom confirmation dialog — replaces native window.confirm()
+  const { confirm, ConfirmHost } = useConfirm();
+
   // ---- render ----
   if (!booted) return <BootScreen />;
 
   return (
+    <ConfirmContext.Provider value={confirm}>
     <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "#F5F1E8", color: "#0F1A2E" }}>
       <StyleTag />
       {!user ? (
@@ -221,8 +198,10 @@ export default function App() {
           tick={tick}
         />
       )}
-      {toast && <Toast toast={toast} />}
+      <ToastStack toasts={toasts} />
+      <ConfirmHost />
     </div>
+    </ConfirmContext.Provider>
   );
 }
 
@@ -292,14 +271,23 @@ function BootScreen() {
   </div>;
 }
 
+function ToastStack({ toasts }) {
+  if (!toasts || toasts.length === 0) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 items-end" style={{ pointerEvents: "none" }}>
+      {toasts.map(t => <Toast key={t.id} toast={t} />)}
+    </div>
+  );
+}
+
 function Toast({ toast }) {
   const colors = {
     success: { bg: "#2D5F2F", fg: "#F5F1E8" },
-    error: { bg: "#9B2C2C", fg: "#F5F1E8" },
-    info: { bg: "#0F1A2E", fg: "#F5F1E8" }
+    error:   { bg: "#9B2C2C", fg: "#F5F1E8" },
+    info:    { bg: "#0F1A2E", fg: "#F5F1E8" }
   }[toast.kind] || { bg: "#0F1A2E", fg: "#F5F1E8" };
   return (
-    <div className="fixed bottom-6 right-6 z-50 anim-in" style={{ backgroundColor: colors.bg, color: colors.fg, padding: "12px 18px", borderRadius: 8, boxShadow: "0 10px 40px -10px rgba(0,0,0,.4)", fontSize: 14, maxWidth: 360 }}>
+    <div className="anim-in" style={{ backgroundColor: colors.bg, color: colors.fg, padding: "12px 18px", borderRadius: 8, boxShadow: "0 10px 40px -10px rgba(0,0,0,.4)", fontSize: 14, maxWidth: 360, pointerEvents: "auto" }}>
       {toast.msg}
     </div>
   );
@@ -571,8 +559,6 @@ function StatusPill({ status }) {
 // ============================================================
 //   NEW REQUEST  — supports single approver OR multi-step workflow
 // ============================================================
-const STEP_COLORS = ["#B8894A", "#2D5F2F", "#7A4E8C", "#1B5A7A", "#9B6A2C", "#5A2D5F"];
-
 function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType }) {
   const [file, setFile] = useState(null);
   const [mode, setMode] = useState("single"); // "single" | "workflow"
@@ -612,6 +598,8 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
         if (stylesJson) setLeaveStyleMap(stylesJson);
 
         // --- Clear all pre-filled data; stamp today's date on non-leave date cells ---
+        // Dynamic import: xlsx ships in the lazy viewer chunk so it only loads when needed.
+        const XLSX = await import("xlsx");
         const workbook = XLSX.read(templateU8, { type: "array", cellDates: true });
         const ws = workbook.Sheets["New Format"];
         if (ws) {
@@ -651,9 +639,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
     return () => { cancelled = true; };
   }, [requestType]);
 
-  const buildXlsxBlob = () => {
+  const buildXlsxBlob = async () => {
     const wb = xlsxWbRef.current;
     if (!wb) return null;
+    const XLSX = await import("xlsx");
     const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
     return new File([new Uint8Array(out)], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   };
@@ -780,7 +769,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   const submit = async () => {
     setBusy(true);
     try {
-      const submitFile = isLeave ? (buildXlsxBlob() || file.blob) : file.blob;
+      const submitFile = isLeave ? ((await buildXlsxBlob()) || file.blob) : file.blob;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
         const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
@@ -823,7 +812,9 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {isLeave ? (
             <Section n="01" title="Leave Request Form" desc="Edit the cells directly in the spreadsheet below.">
               {file ? (
-                <XlsxViewer file={file} markers={[]} cellEditable lockedCells={new Set(["F10","F11","F12","F13","F20","H24","H26"])} onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
+                <Suspense fallback={<ViewerFallback />}>
+                  <XlsxViewer file={file} markers={[]} cellEditable lockedCells={new Set(["F10","F11","F12","F13","F20","H24","H26"])} onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
+                </Suspense>
               ) : (
                 <div className="card p-10 text-sm opacity-50 text-center">Loading template…</div>
               )}
@@ -884,8 +875,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {/* 3a. single mode: pick team + place marker */}
           {!isLeave && effectiveFile && mode === "single" && (
             <Section n="03" title="Mark the signature field" desc="Click and drag on the document to set the signature box.">
-              <DocPreview file={file} markers={allMarkers} editable
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              <Suspense fallback={<ViewerFallback />}>
+                <DocPreview file={file} markers={allMarkers} editable
+                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              </Suspense>
               {marker && (
                 <div className="mt-3 text-xs font-mono opacity-60">
                   Placed on page {marker.page} · {Math.round(marker.x)}% × {Math.round(marker.y)}% · {Math.round(marker.w)}% wide
@@ -920,8 +913,10 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
           {/* 3b. workflow mode */}
           {!isLeave && effectiveFile && mode === "workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
-              <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
-                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              <Suspense fallback={<ViewerFallback />}>
+                <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
+                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              </Suspense>
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
                   Click and drag on the document to place this signer's box.{" "}
@@ -1085,601 +1080,6 @@ function BackHeader({ back, title, step }) {
   );
 }
 
-// ============================================================
-//   DOCUMENT PREVIEW (PDF paged · XLSX via SheetJS)
-//   Props:
-//     file:     { ext, base64 }          required
-//     markers:  array of { id?, page, x, y, w, h, label?, color?, signedDataUrl?, highlight? }
-//                 (legacy: pass `marker` singular; it's normalised internally)
-//     editable: boolean — when true, click-drag adds a marker via onAddMarker(page, x, y, w, h)
-//     onAddMarker: (page, x%, y%, w%, h%) => void
-//     onPages:  (count) => void
-// ============================================================
-function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fill = false }) {
-  const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
-  if (!file) return null;
-
-  if (file.ext === "pdf") {
-    return <PdfPagedViewer file={file} markers={list} editable={editable}
-      onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} fill={fill} />;
-  }
-  return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
-}
-
-// Convert a rectangle between viewport-space % and MediaBox-space % for an arbitrary
-// page rotation (0/90/180/270 CW). MediaBox-space % is what's stored and stamped;
-// viewport-space % is what the user clicks at after rotating the displayed page.
-function viewportToMediabox(rotation, vx, vy, vw, vh) {
-  switch (((rotation % 360) + 360) % 360) {
-    case 90:  return { x: vy, y: 100 - vx - vw, w: vh, h: vw };
-    case 180: return { x: 100 - vx - vw, y: 100 - vy - vh, w: vw, h: vh };
-    case 270: return { x: 100 - vy - vh, y: vx, w: vh, h: vw };
-    default:  return { x: vx, y: vy, w: vw, h: vh };
-  }
-}
-function mediaboxToViewport(rotation, mx, my, mw, mh) {
-  switch (((rotation % 360) + 360) % 360) {
-    case 90:  return { x: 100 - my - mh, y: mx, w: mh, h: mw };
-    case 180: return { x: 100 - mx - mw, y: 100 - my - mh, w: mw, h: mh };
-    case 270: return { x: my, y: 100 - mx - mw, w: mh, h: mw };
-    default:  return { x: mx, y: my, w: mw, h: mh };
-  }
-}
-
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false }) {
-  const [pdf, setPdf] = useState(null);
-  const [err, setErr] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setPdf(null); setErr(null);
-    (async () => {
-      try {
-        const loadingTask = pdfjsLib.getDocument({ url: file.base64 });
-        const doc = await loadingTask.promise;
-        if (cancelled) return;
-        setPdf(doc);
-        onPages?.(doc.numPages);
-      } catch (e) {
-        if (!cancelled) setErr(e.message || String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [file.base64]);
-
-  if (err) return <div className="card p-6 text-sm" style={{ color: "#9B2C2C" }}>Could not render PDF: {err}</div>;
-  if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
-
-  const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-
-  return (
-    <div className="card overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
-        <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
-      </div>
-      <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "#E8E3D5" }}>
-        {pages.map(p => (
-          <PdfPage key={p} pdf={pdf} pageNum={p}
-            rotation={0}
-            markers={markers.filter(m => (m.page || 1) === p)}
-            editable={editable}
-            lockedAspect={lockedAspect}
-            onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
-            onUpdateMarker={onUpdateMarker}
-            onDeleteMarker={onDeleteMarker} />
-        ))}
-      </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click-drag where the signature should go.</div>}
-    </div>
-  );
-}
-
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null }) {
-  const canvasRef = useRef(null);
-  const wrapRef = useRef(null);
-  const [drawing, setDrawing] = useState(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-
-  // Constrain a viewport %-rectangle to satisfy lockedAspect (signature width/height
-  // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger
-  // dimension. Returns null if there's no lock or canvas hasn't measured yet.
-  const lockRect = (vx, vy, vw, vh) => {
-    if (!lockedAspect || !size.w || !size.h) return null;
-    // Target viewport ratio so that the resulting MediaBox rectangle has aspect α.
-    // At rotation 0: vw_px / vh_px = α   →   vw/vh = α * (canvas_h / canvas_w).
-    const target = lockedAspect * (size.h / size.w);
-    const currentRatio = vw / Math.max(vh, 0.0001);
-    if (currentRatio > target) {
-      // Too wide → shrink width to match height
-      vw = vh * target;
-    } else {
-      // Too tall → shrink height to match width
-      vh = vw / target;
-    }
-    // Keep inside page bounds (anchor at vx, vy)
-    if (vx + vw > 100) vw = Math.max(1, 100 - vx);
-    if (vy + vh > 100) vh = Math.max(1, 100 - vy);
-    return { vx, vy, vw, vh };
-  };
-
-  // Cancel any in-progress drag when the user rotates the page
-  useEffect(() => { setDrawing(null); }, [rotation]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const page = await pdf.getPage(pageNum);
-      const wrapEl = wrapRef.current;
-      const padX = 24;
-      const containerW = Math.max(200, (wrapEl?.clientWidth || 800) - padX);
-      // Render at the user's chosen rotation. The stamp itself is always drawn
-      // horizontally in MediaBox regardless of this rotation.
-      const baseViewport = page.getViewport({ scale: 1, rotation });
-      const cssScale = containerW / baseViewport.width;
-      const dpr = window.devicePixelRatio || 1;
-      const viewport = page.getViewport({ scale: cssScale * dpr, rotation });
-      const cssW = baseViewport.width * cssScale;
-      const cssH = baseViewport.height * cssScale;
-      const canvas = canvasRef.current;
-      if (!canvas || cancelled) return;
-      const ctx = canvas.getContext("2d");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
-      setSize({ w: cssW, h: cssH });
-      try {
-        await page.render({ canvasContext: ctx, viewport }).promise;
-      } catch (e) { /* render aborted */ }
-    })();
-    return () => { cancelled = true; };
-  }, [pdf, pageNum, rotation]);
-
-  const xy = (e) => {
-    const r = canvasRef.current.getBoundingClientRect();
-    return {
-      x: ((e.clientX - r.left) / r.width) * 100,
-      y: ((e.clientY - r.top) / r.height) * 100
-    };
-  };
-
-  const onDown = (e) => {
-    if (!editable || !onAddMarker) return;
-    const { x, y } = xy(e);
-    setDrawing({ sx: x, sy: y, x, y });
-  };
-  const onMove = (e) => {
-    if (!drawing) return;
-    const { x, y } = xy(e);
-    setDrawing({ ...drawing, x, y });
-  };
-  const onUp = () => {
-    if (!drawing) return;
-    const dragW = Math.abs(drawing.x - drawing.sx);
-    const dragH = Math.abs(drawing.y - drawing.sy);
-    let vx, vy, vw, vh;
-    // If user just clicked without a meaningful drag, centre a default-sized box on the click.
-    if (dragW < 4 && dragH < 2) {
-      vw = 22; vh = 6;
-      vx = drawing.sx - vw / 2;
-      vy = drawing.sy - vh / 2;
-    } else {
-      vx = Math.min(drawing.sx, drawing.x);
-      vy = Math.min(drawing.sy, drawing.y);
-      vw = dragW; vh = dragH;
-    }
-    // Clamp inside the viewport
-    if (vx < 0) vx = 0;
-    if (vy < 0) vy = 0;
-    if (vx + vw > 100) vx = Math.max(0, 100 - vw);
-    if (vy + vh > 100) vy = Math.max(0, 100 - vh);
-    // Snap to the signer's signature aspect when one is known
-    const locked = lockRect(vx, vy, vw, vh);
-    if (locked) { vx = locked.vx; vy = locked.vy; vw = locked.vw; vh = locked.vh; }
-    // Convert viewport-space coords (what the user clicked at the current rotation) to
-    // MediaBox-space coords for storage and stamping.
-    const m = viewportToMediabox(rotation, vx, vy, vw, vh);
-    onAddMarker(m.x, m.y, m.w, m.h);
-    setDrawing(null);
-  };
-
-  // Live drag preview, locked to aspect if applicable
-  const previewRect = (() => {
-    if (!drawing) return null;
-    const vx = Math.min(drawing.sx, drawing.x);
-    const vy = Math.min(drawing.sy, drawing.y);
-    let vw = Math.abs(drawing.x - drawing.sx);
-    let vh = Math.abs(drawing.y - drawing.sy);
-    const locked = lockRect(vx, vy, vw, vh);
-    if (locked) { vw = locked.vw; vh = locked.vh; }
-    return { vx, vy, vw, vh };
-  })();
-
-  return (
-    <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
-      <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)" }}
-           onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={() => setDrawing(null)}>
-        <canvas ref={canvasRef} style={{ display: "block", cursor: editable ? "crosshair" : "default" }} />
-        {markers.map((m, i) => {
-          // Convert MediaBox coords (storage) → viewport coords for display at current rotation
-          const v = mediaboxToViewport(rotation, m.x, m.y, m.w, m.h);
-          const updateHandler = (editable && onUpdateMarker)
-            ? (vpNext) => {
-                // Convert viewport coords back to MediaBox before propagating up
-                const mb = viewportToMediabox(rotation, vpNext.x, vpNext.y, vpNext.w, vpNext.h);
-                onUpdateMarker(m.id, { x: mb.x, y: mb.y, w: mb.w, h: mb.h, page: pageNum });
-              }
-            : undefined;
-          const deleteHandler = (editable && onDeleteMarker)
-            ? () => onDeleteMarker(m.id)
-            : undefined;
-          return <MarkerOverlay key={m.id || i}
-            m={{ ...m, x: v.x, y: v.y, w: v.w, h: v.h }}
-            editable={editable}
-            onUpdate={updateHandler}
-            onDelete={deleteHandler} />;
-        })}
-        {previewRect && (
-          <div style={{
-            position: "absolute",
-            left: `${previewRect.vx}%`, top: `${previewRect.vy}%`,
-            width: `${previewRect.vw}%`, height: `${previewRect.vh}%`,
-            border: "2px dashed #B8894A", backgroundColor: "rgba(184,137,74,.18)", pointerEvents: "none"
-          }} />
-        )}
-      </div>
-      <div className="text-[10px] tracking-widest uppercase opacity-40 mt-2">Page {pageNum}</div>
-    </div>
-  );
-}
-
-function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
-  const color = m.color || "#B8894A";
-  const isSigned = !!m.signedDataUrl;
-  const highlight = m.highlight;
-  const interactive = !!(editable && onUpdate);
-
-  // ---- drag handlers (move + resize) ----
-  function startDrag(e, kind) {
-    if (!interactive) return;
-    e.stopPropagation();
-    e.preventDefault();
-    const parent = e.currentTarget.closest("[data-marker-parent]") || e.currentTarget.parentElement;
-    const parentRect = parent.getBoundingClientRect();
-    const startX = e.clientX, startY = e.clientY;
-    const startM = { x: m.x, y: m.y, w: m.w, h: m.h };
-
-    const move = (e2) => {
-      const dxPct = ((e2.clientX - startX) / parentRect.width) * 100;
-      const dyPct = ((e2.clientY - startY) / parentRect.height) * 100;
-      let nx = startM.x, ny = startM.y, nw = startM.w, nh = startM.h;
-      if (kind === "move") {
-        nx = clamp(startM.x + dxPct, 0, 100 - startM.w);
-        ny = clamp(startM.y + dyPct, 0, 100 - startM.h);
-      } else if (kind === "nw") {
-        nx = clamp(startM.x + dxPct, 0, startM.x + startM.w - 2);
-        ny = clamp(startM.y + dyPct, 0, startM.y + startM.h - 1);
-        nw = startM.x + startM.w - nx;
-        nh = startM.y + startM.h - ny;
-      } else if (kind === "ne") {
-        ny = clamp(startM.y + dyPct, 0, startM.y + startM.h - 1);
-        nh = startM.y + startM.h - ny;
-        nw = clamp(startM.w + dxPct, 2, 100 - startM.x);
-      } else if (kind === "sw") {
-        nx = clamp(startM.x + dxPct, 0, startM.x + startM.w - 2);
-        nw = startM.x + startM.w - nx;
-        nh = clamp(startM.h + dyPct, 1, 100 - startM.y);
-      } else if (kind === "se") {
-        nw = clamp(startM.w + dxPct, 2, 100 - startM.x);
-        nh = clamp(startM.h + dyPct, 1, 100 - startM.y);
-      }
-      onUpdate({ x: nx, y: ny, w: nw, h: nh });
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  }
-
-  const handleStyle = (corner) => ({
-    position: "absolute",
-    width: 10, height: 10,
-    backgroundColor: color,
-    border: "2px solid #FAF7F0",
-    borderRadius: 2,
-    cursor: corner === "nw" ? "nwse-resize" : corner === "ne" ? "nesw-resize"
-          : corner === "sw" ? "nesw-resize" : "nwse-resize",
-    ...(corner === "nw" ? { left: -6, top: -6 } : {}),
-    ...(corner === "ne" ? { right: -6, top: -6 } : {}),
-    ...(corner === "sw" ? { left: -6, bottom: -6 } : {}),
-    ...(corner === "se" ? { right: -6, bottom: -6 } : {}),
-    pointerEvents: "auto"
-  });
-
-  return (
-    <div data-sig-jump={m.highlight !== false ? "true" : undefined}
-      style={{
-      position: "absolute",
-      left: `${m.x}%`, top: `${m.y}%`,
-      width: `${m.w}%`, height: `${m.h}%`,
-      border: `2px ${highlight ? "solid" : "dashed"} ${highlight ? "#B8894A" : color}`,
-      backgroundColor: isSigned ? "transparent" : (highlight ? "rgba(184,137,74,.18)" : `${color}1A`),
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: 10, color: color, fontWeight: 600,
-      pointerEvents: interactive ? "auto" : "none",
-      cursor: interactive ? "move" : "default",
-      boxShadow: highlight ? "0 0 0 2px rgba(184,137,74,.35)" : "none"
-    }}
-      onMouseDown={interactive ? (e) => startDrag(e, "move") : undefined}>
-      {isSigned ? (
-        <img src={m.signedDataUrl} alt="signature" style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
-      ) : (
-        <span style={{ padding: "2px 4px", backgroundColor: "rgba(255,255,255,.85)", borderRadius: 3, lineHeight: 1.1, textAlign: "center", pointerEvents: "none" }}>
-          {m.label || "SIGN HERE"}
-        </span>
-      )}
-      {interactive && (
-        <>
-          <div style={handleStyle("nw")} onMouseDown={(e) => startDrag(e, "nw")} />
-          <div style={handleStyle("ne")} onMouseDown={(e) => startDrag(e, "ne")} />
-          <div style={handleStyle("sw")} onMouseDown={(e) => startDrag(e, "sw")} />
-          <div style={handleStyle("se")} onMouseDown={(e) => startDrag(e, "se")} />
-          {onDelete && (
-            <button onMouseDown={(e) => { e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); onDelete(); }}
-              title="Remove marker"
-              style={{ position: "absolute", top: -10, right: -10, width: 18, height: 18, borderRadius: 9, backgroundColor: "#9B2C2C", color: "#F5F1E8", border: "2px solid #FAF7F0", fontSize: 11, lineHeight: "12px", padding: 0, cursor: "pointer", pointerEvents: "auto" }}>×</button>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-function xlsxBorderCss(bd) {
-  if (!bd) return {};
-  const w = { thin: "1px", medium: "2px" };
-  const s = {};
-  if (bd.t) s.borderTop = `${w[bd.t] || "1px"} solid #333`;
-  if (bd.b) s.borderBottom = `${w[bd.b] || "1px"} solid #333`;
-  if (bd.l) s.borderLeft = `${w[bd.l] || "1px"} solid #333`;
-  if (bd.r) s.borderRight = `${w[bd.r] || "1px"} solid #333`;
-  return s;
-}
-
-function xlsxCellStyle(sty) {
-  if (!sty) return {};
-  const css = {};
-  if (sty.b) css.fontWeight = "bold";
-  if (sty.fs) css.fontSize = `${sty.fs}pt`;
-  if (sty.ha) css.textAlign = sty.ha;
-  if (sty.va === "center") css.verticalAlign = "middle";
-  else if (sty.va === "top") css.verticalAlign = "top";
-  if (sty.wr) css.whiteSpace = "normal";
-  return { ...css, ...xlsxBorderCss(sty.bd) };
-}
-
-function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appliedSignature, cellEditable, lockedCells, onWorkbookReady, styleMap, fill = false }) {
-  const [wb, setWb] = useState(null);
-  const [sheetNames, setSheetNames] = useState([]);
-  const [activeSheet, setActiveSheet] = useState(null);
-  const [grid, setGrid] = useState([]);
-  const [drawing, setDrawing] = useState(null);
-  const [editTick, setEditTick] = useState(0);
-  const pageRef = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        let u8;
-        if (file.base64.startsWith("blob:")) {
-          const resp = await fetch(file.base64);
-          const buf = await resp.arrayBuffer();
-          u8 = new Uint8Array(buf);
-        } else {
-          const b64 = file.base64.split(",")[1];
-          const bin = atob(b64);
-          u8 = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-        }
-        if (cancelled) return;
-        const workbook = XLSX.read(u8, { type: "array", cellDates: true });
-        setWb(workbook);
-        setSheetNames(workbook.SheetNames);
-        const firstVisible = cellEditable
-          ? (workbook.SheetNames.find(s => s !== "Sheet1") || workbook.SheetNames[0])
-          : workbook.SheetNames[0];
-        setActiveSheet(firstVisible);
-        onPages?.(workbook.SheetNames.length);
-        onWorkbookReady?.(workbook);
-      } catch (e) { console.error(e); }
-    })();
-    return () => { cancelled = true; };
-  }, [file.base64]);
-
-  useEffect(() => {
-    if (!wb || !activeSheet) { setGrid([]); return; }
-    const ws = wb.Sheets[activeSheet];
-    if (!ws || !ws["!ref"]) { setGrid([]); return; }
-    const range = XLSX.utils.decode_range(ws["!ref"]);
-    const merges = ws["!merges"] || [];
-    const merged = {};
-    for (const m of merges) {
-      for (let r = m.s.r; r <= m.e.r; r++)
-        for (let c = m.s.c; c <= m.e.c; c++)
-          if (r !== m.s.r || c !== m.s.c) merged[`${r}:${c}`] = true;
-    }
-    const findMerge = (r, c) => merges.find(m => m.s.r === r && m.s.c === c);
-    const rows = [];
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const cells = [];
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        if (merged[`${r}:${c}`]) continue;
-        const addr = XLSX.utils.encode_cell({ r, c });
-        const cell = ws[addr];
-        const m = findMerge(r, c);
-        let display = "";
-        if (cell) {
-          if (cell.t === "d" && cell.v instanceof Date) {
-            display = cell.v.toLocaleDateString();
-          } else if (cell.w) {
-            display = cell.w;
-          } else if (cell.v != null) {
-            display = String(cell.v);
-          }
-        }
-        cells.push({
-          addr, r, c, display,
-          colSpan: m ? m.e.c - m.s.c + 1 : 1,
-          rowSpan: m ? m.e.r - m.s.r + 1 : 1
-        });
-      }
-      rows.push(cells);
-    }
-    setGrid(rows);
-  }, [wb, activeSheet, editTick]);
-
-  const handleCellEdit = (addr, newVal) => {
-    if (!wb || !activeSheet) return;
-    const ws = wb.Sheets[activeSheet];
-    if (newVal === "") {
-      delete ws[addr];
-    } else {
-      const num = Number(newVal);
-      ws[addr] = isNaN(num) || newVal.trim() === "" ? { t: "s", v: newVal } : { t: "n", v: num };
-    }
-    setEditTick(t => t + 1);
-  };
-
-  const onDown = (e) => {
-    if (!editable || !onAddMarker) return;
-    const r = pageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 100;
-    const y = ((e.clientY - r.top) / r.height) * 100;
-    setDrawing({ sx: x, sy: y, x, y });
-  };
-  const onMove = (e) => {
-    if (!drawing) return;
-    const r = pageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 100;
-    const y = ((e.clientY - r.top) / r.height) * 100;
-    setDrawing({ ...drawing, x, y });
-  };
-  const onUp = () => {
-    if (!drawing) return;
-    const dragW = Math.abs(drawing.x - drawing.sx);
-    const dragH = Math.abs(drawing.y - drawing.sy);
-    let x, y, w, h;
-    if (dragW < 4 && dragH < 2) {
-      w = 22; h = 6;
-      x = drawing.sx - w / 2;
-      y = drawing.sy - h / 2;
-    } else {
-      x = Math.min(drawing.sx, drawing.x);
-      y = Math.min(drawing.sy, drawing.y);
-      w = dragW; h = dragH;
-    }
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    onAddMarker(1, x, y, w, h);
-    setDrawing(null);
-  };
-
-  const visibleSheets = cellEditable ? sheetNames.filter(s => s !== "Sheet1") : sheetNames;
-  const sm = styleMap?.styles || {};
-  const rh = styleMap?.rowHeights || {};
-  const cw = styleMap?.colWidths || {};
-  const hasStyles = Object.keys(sm).length > 0;
-
-  return (
-    <div className="card overflow-hidden">
-      {visibleSheets.length > 1 && (
-        <div className="flex border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
-          {visibleSheets.map(s => (
-            <button key={s} onClick={() => setActiveSheet(s)}
-              className={`px-4 py-2 text-xs font-medium ${activeSheet === s ? "" : "opacity-50"}`}
-              style={{ borderBottom: activeSheet === s ? "2px solid #B8894A" : "2px solid transparent" }}>
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-      <div ref={pageRef}
-           onMouseDown={editable ? onDown : undefined} onMouseMove={editable ? onMove : undefined}
-           onMouseUp={editable ? onUp : undefined} onMouseLeave={editable ? () => setDrawing(null) : undefined}
-           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
-        <style>{`
-          .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
-          .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
-          .xlsx-grid td.cell-editable { cursor: text; }
-          .xlsx-grid td.cell-editable:hover { background: rgba(184,137,74,.08); }
-          .xlsx-grid td.cell-editable:focus { outline: 2px solid #B8894A; outline-offset: -2px; background: #FFFDF5; }
-          .xlsx-grid td.cell-locked { cursor: default; background: rgba(15,26,46,.03); color: rgba(15,26,46,.55); font-style: italic; }
-        `}</style>
-        <div style={{ padding: "12px 16px" }}>
-          <table className="xlsx-grid">
-            {Object.keys(cw).length > 0 && (
-              <colgroup>
-                {Array.from({ length: 9 }, (_, i) => {
-                  const letter = String.fromCharCode(65 + i);
-                  return <col key={i} style={{ width: cw[letter] ? `${cw[letter]}px` : 130 }} />;
-                })}
-              </colgroup>
-            )}
-            <tbody>
-              {grid.map((row, ri) => {
-                const rowNum = ri + 1;
-                const rowH = rh[String(rowNum)];
-                return (
-                  <tr key={ri} style={rowH ? { height: `${rowH}px` } : undefined}>
-                    {row.map(cell => {
-                      const sty = sm[cell.addr];
-                      const cellCss = sty ? xlsxCellStyle(sty) : (hasStyles ? {} : {});
-                      const isLocked = lockedCells?.has(cell.addr);
-                      const isEditable = cellEditable && !isLocked;
-                      return (
-                        <td key={cell.addr}
-                          colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
-                          rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
-                          className={isLocked ? "cell-locked" : isEditable ? "cell-editable" : ""}
-                          style={cellCss}
-                          contentEditable={isEditable ? true : undefined}
-                          suppressContentEditableWarning
-                          onBlur={isEditable ? e => {
-                            const newVal = e.currentTarget.textContent || "";
-                            if (newVal !== cell.display) handleCellEdit(cell.addr, newVal);
-                          } : undefined}
-                        >{cell.display}</td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {markers.map((m, i) => (
-          <MarkerOverlay key={m.id || i} m={{ ...m, signedDataUrl: m.signedDataUrl || appliedSignature }} />
-        ))}
-        {drawing && (
-          <div style={{
-            position: "absolute",
-            left: `${Math.min(drawing.sx, drawing.x)}%`, top: `${Math.min(drawing.sy, drawing.y)}%`,
-            width: `${Math.abs(drawing.x - drawing.sx)}%`, height: `${Math.abs(drawing.y - drawing.sy)}%`,
-            border: "2px dashed #B8894A", backgroundColor: "rgba(184,137,74,.18)", pointerEvents: "none"
-          }} />
-        )}
-      </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click and drag on the active sheet to place a signature.</div>}
-      {cellEditable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click any cell to edit its value.</div>}
-    </div>
-  );
-}
 
 // ============================================================
 //   PENDING · APPROVED · REJECTED LISTS (Requestor)
@@ -1880,6 +1280,8 @@ function PrintBtn({ req }) {
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       } else {
         // Excel / Leave form: parse with SheetJS → render as HTML table → auto-print
+        // Dynamic import keeps xlsx in the lazy viewer chunk.
+        const XLSX = await import("xlsx");
         const resp = await fetch(url);
         const buf = await resp.arrayBuffer();
         const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
@@ -1934,6 +1336,7 @@ function PreviewDrawer({ req, onClose, users, teams }) {
   const [file, setFile] = useState(null);
   const [leaveStyles, setLeaveStyles] = useState(null);
   useBackHandler(true, onClose);
+  useEscapeKey(true, onClose);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -1970,7 +1373,9 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         <div className="p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
-            <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+            <Suspense fallback={<ViewerFallback />}>
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+            </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
@@ -2197,6 +1602,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
   useBackHandler(true, onClose);
+  useEscapeKey(true, onClose);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -2278,7 +1684,11 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {/* ── Single scrollable body ── */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill /> : <div className="text-sm opacity-50">Loading…</div>}
+          {file ? (
+            <Suspense fallback={<ViewerFallback />}>
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
+            </Suspense>
+          ) : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
 
@@ -2457,13 +1867,20 @@ function AdminView(props) {
 function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [adding, setAdding] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const confirm = useConfirmation();
 
   const add = async data => {
     try { await api.createUser(data); notify("User added", "success"); await saveUsers(); return true; }
     catch (e) { notify(e.message, "error"); return false; }
   };
   const remove = async (id, name) => {
-    if (!confirm(`Delete ${name || "this user"}?\n\nTheir name will be replaced by "(deleted user)" on past requests, but the documents themselves stay intact. In-flight workflows where they were a pending signer will need to be re-routed.`)) return;
+    const ok = await confirm({
+      title: `Delete ${name || "this user"}?`,
+      message: "Their name will be replaced by \"(deleted user)\" on past requests, but the documents themselves stay intact. In-flight workflows where they were a pending signer will need to be re-routed.",
+      confirmLabel: "Delete user",
+      destructive: true
+    });
+    if (!ok) return;
     try { await api.deleteUser(id); notify("User removed", "success"); await saveUsers(); }
     catch (e) { notify(e.message, "error"); }
   };
@@ -2520,6 +1937,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
 // ============================================================
 function OnboardUserWizard({ teams, users, onCancel, onSave }) {
   const [step, setStep] = useState(0);
+  useEscapeKey(true, onCancel);
   const [f, setF] = useState({
     name: "", email: "", password: "",
     role: "requestor",
@@ -2849,13 +2267,20 @@ function BulkUserModal({ teams, onClose, onImport }) {
 
 function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
   const [name, setName] = useState("");
+  const confirm = useConfirmation();
   const add = async () => {
     if (!name.trim()) return;
     try { await api.createTeam(name.trim()); setName(""); notify("Team added", "success"); await saveTeams(); }
     catch (e) { notify(e.message, "error"); }
   };
-  const remove = async id => {
-    if (!confirm("Remove this team? Approvers will lose authority over it.")) return;
+  const remove = async (id, teamName) => {
+    const ok = await confirm({
+      title: `Remove ${teamName || "this team"}?`,
+      message: "Approvers will lose authority over it and any members will be unassigned. Past requests are kept intact.",
+      confirmLabel: "Remove team",
+      destructive: true
+    });
+    if (!ok) return;
     try { await api.deleteTeam(id); notify("Team removed", "success"); await saveTeams(); await saveUsers(); }
     catch (e) { notify(e.message, "error"); }
   };
@@ -2874,7 +2299,7 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
       <div className="grid md:grid-cols-2 gap-5 mt-8">
         {teams.map(t => (
           <TeamCard key={t.id} team={t} teams={teams} users={users}
-            onRemove={() => remove(t.id)}
+            onRemove={() => remove(t.id, t.name)}
             onChanged={async () => { await saveTeams(); await saveUsers(); }}
             notify={notify} />
         ))}
@@ -2890,6 +2315,7 @@ function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
   const [addApproverOpen, setAddApproverOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [busy, setBusy] = useState(null); // userId currently being mutated
+  const confirm = useConfirmation();
 
   const approvers = users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(team.id));
   const members = users.filter(u => u.team === team.id);
@@ -2913,7 +2339,13 @@ function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
     finally { setBusy(null); }
   };
   const revoke = async (userId, name) => {
-    if (!confirm(`Revoke ${name}'s authority over ${team.name}?`)) return;
+    const ok = await confirm({
+      title: `Revoke ${name}'s authority?`,
+      message: `${name} will no longer be able to sign documents routed to ${team.name}.`,
+      confirmLabel: "Revoke authority",
+      destructive: true
+    });
+    if (!ok) return;
     setBusy(userId);
     try { await api.revokeAuthority(team.id, userId); notify("Authority revoked", "success"); await onChanged(); }
     catch (e) { notify(e.message || "Failed", "error"); }
@@ -2926,7 +2358,13 @@ function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
     finally { setBusy(null); }
   };
   const removeMember = async (userId, name) => {
-    if (!confirm(`Remove ${name} from ${team.name}?\n\nThey'll have no department until reassigned.`)) return;
+    const ok = await confirm({
+      title: `Remove ${name} from ${team.name}?`,
+      message: "They'll have no department until reassigned.",
+      confirmLabel: "Remove member",
+      destructive: true
+    });
+    if (!ok) return;
     setBusy(userId);
     try { await api.setUserTeam(userId, null); notify("Member removed", "success"); await onChanged(); }
     catch (e) { notify(e.message || "Failed", "error"); }
@@ -3332,6 +2770,7 @@ function trimSignatureCanvas(srcCanvas) {
 }
 
 function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUserId }) {
+  useEscapeKey(!!onCancel, onCancel);
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
@@ -3545,6 +2984,7 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
 //   MODAL SHELL
 // ============================================================
 function ModalShell({ title, onClose, children }) {
+  useEscapeKey(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.65)" }} onClick={onClose}>
       <div className="card p-6 max-w-xl w-full max-h-[90vh] overflow-auto" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
