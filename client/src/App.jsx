@@ -2502,7 +2502,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
           </div>
         ))}
       </div>
-      {adding && <UserFormModal teams={teams} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
+      {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
       {bulkOpen && <BulkUserModal teams={teams} onClose={() => setBulkOpen(false)} onImport={async rows => {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }
         catch (e) { notify(e.message, "error"); }
@@ -2511,95 +2511,302 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   );
 }
 
-function UserFormModal({ teams, onCancel, onSave }) {
-  const [f, setF] = useState({ name: "", email: "", password: "", role: "requestor", signingAuthorityTeams: [], team: "" });
+// ============================================================
+//   ONBOARD USER WIZARD — replaces the single-modal user form
+//   Step 1: Identity (name / email / password)
+//   Step 2: Role + assignment (signing authority for approvers,
+//           department for requestors, nothing for admins)
+//   Step 3: Review & confirm
+// ============================================================
+function OnboardUserWizard({ teams, users, onCancel, onSave }) {
+  const [step, setStep] = useState(0);
+  const [f, setF] = useState({
+    name: "", email: "", password: "",
+    role: "requestor",
+    signingAuthorityTeams: [],
+    team: ""
+  });
   const [touched, setTouched] = useState({});
   const [showPwd, setShowPwd] = useState(false);
-  const mark = k => setTouched(t => ({ ...t, [k]: true }));
+  const [busy, setBusy] = useState(false);
 
-  const missing = [];
-  if (!f.name.trim()) missing.push("name");
-  if (!f.email.trim()) missing.push("email");
-  if (!f.password.trim()) missing.push("password");
-  const disabled = missing.length > 0;
+  const mark = k => setTouched(t => ({ ...t, [k]: true }));
+  const missing = ["name", "email", "password"].filter(k => !f[k].trim());
+  const canAdvanceIdentity = missing.length === 0;
 
   const Req = () => <span style={{ color: "#9B2C2C" }}>*</span>;
-  const errStyle = (k) => (touched[k] && !f[k].trim()) ? { borderColor: "#9B2C2C", boxShadow: "0 0 0 3px rgba(155,44,44,.12)" } : {};
+  const errStyle = (k) => (touched[k] && !f[k].trim())
+    ? { borderColor: "#9B2C2C", boxShadow: "0 0 0 3px rgba(155,44,44,.12)" } : {};
+
+  const next = () => {
+    if (step === 0) {
+      setTouched({ name: true, email: true, password: true });
+      if (!canAdvanceIdentity) return;
+    }
+    setStep(s => Math.min(s + 1, 2));
+  };
+  const prev = () => setStep(s => Math.max(s - 1, 0));
+
+  const save = async () => {
+    setBusy(true);
+    try { await onSave(f); }
+    finally { setBusy(false); }
+  };
+
+  const steps = [
+    { n: "01", label: "Identity" },
+    { n: "02", label: "Role & assignment" },
+    { n: "03", label: "Confirm" }
+  ];
+
+  const roleCards = [
+    { key: "requestor", icon: UserPlus, label: "Requestor",  desc: "Submits documents for approval. Belongs to a single department." },
+    { key: "approver",  icon: Stamp,    label: "Approver",   desc: "Signs documents. Can hold signing authority over multiple teams." },
+    { key: "admin",     icon: Shield,   label: "Administrator", desc: "Full control of users, teams, signatures, and audit." }
+  ];
+
+  // Team preview info for the assignment step
+  const teamMembers = (teamId) => users.filter(u => u.team === teamId).length;
+  const teamApprovers = (teamId) => users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(teamId)).length;
 
   return (
-    <ModalShell title="Add user" onClose={onCancel}>
-      <form autoComplete="off" onSubmit={e => e.preventDefault()}>
-      {/* Honeypot fields to absorb browser autofill */}
-      <input type="text" name="username" autoComplete="username" style={{ display: "none" }} tabIndex={-1} aria-hidden="true" />
-      <input type="password" name="password" autoComplete="current-password" style={{ display: "none" }} tabIndex={-1} aria-hidden="true" />
-      <div className="space-y-3">
-        <div>
-          <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Name <Req /></label>
-          <input autoFocus className="w-full" name="newuser_name" autoComplete="off" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} onBlur={() => mark("name")} style={errStyle("name")} />
-        </div>
-        <div>
-          <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Email <Req /></label>
-          <input className="w-full" type="email" name="newuser_email" autoComplete="off" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} onBlur={() => mark("email")} style={errStyle("email")} />
-        </div>
-        <div>
-          <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Password <Req /></label>
-          <div style={{ position: "relative" }}>
-            <input className="w-full" type={showPwd ? "text" : "password"} name="newuser_password" autoComplete="new-password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} onBlur={() => mark("password")} style={{ ...errStyle("password"), paddingRight: 40 }} placeholder="At least 6 characters" />
-            <button type="button" onClick={() => setShowPwd(s => !s)}
-              title={showPwd ? "Hide password" : "Show password"}
-              style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", cursor: "pointer", padding: 4, opacity: 0.6, display: "flex", alignItems: "center" }}>
-              {showPwd ? <EyeOff size={15} /> : <EyeIcon size={15} />}
-            </button>
-          </div>
-        </div>
-        <div>
-          <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Role</label>
-          <select value={f.role} onChange={e => setF({ ...f, role: e.target.value })} className="w-full">
-            <option value="requestor">Requestor</option><option value="approver">Approver</option><option value="admin">Admin</option>
-          </select>
-        </div>
-        {f.role === "requestor" && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.65)" }} onClick={onCancel}>
+      <div className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-auto" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-2">
           <div>
-            <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Team</label>
-            <select value={f.team} onChange={e => setF({ ...f, team: e.target.value })} className="w-full">
-              <option value="">— none —</option>
-              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <div className="text-[10px] tracking-widest uppercase opacity-50">Onboard a user</div>
+            <div className="font-display text-2xl">{steps[step].label}</div>
           </div>
-        )}
-        {f.role === "approver" && (
-          <div>
-            <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Signing authority</label>
-            <div className="grid gap-2">
-              {teams.map(t => (
-                <label key={t.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={f.signingAuthorityTeams.includes(t.id)} onChange={e => {
-                    const v = e.target.checked
-                      ? [...f.signingAuthorityTeams, t.id]
-                      : f.signingAuthorityTeams.filter(x => x !== t.id);
-                    setF({ ...f, signingAuthorityTeams: v });
-                  }} /> {t.name}
-                </label>
-              ))}
+          <button onClick={onCancel} className="btn-ghost text-xs"><X size={14} /></button>
+        </div>
+
+        {/* Step indicator */}
+        <div className="flex items-center gap-2 mt-4 mb-6">
+          {steps.map((s, i) => {
+            const active = i === step;
+            const done = i < step;
+            return (
+              <div key={s.n} className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium"
+                    style={{
+                      backgroundColor: active ? "#0F1A2E" : done ? "#B8894A" : "rgba(15,26,46,.08)",
+                      color: (active || done) ? "#F5F1E8" : "rgba(15,26,46,.6)"
+                    }}>
+                    {done ? <Check size={11} /> : i + 1}
+                  </div>
+                  <div className="text-[10px] tracking-wider uppercase" style={{ opacity: active ? 1 : 0.5 }}>{s.label}</div>
+                </div>
+                {i < steps.length - 1 && <div className="flex-1 h-px" style={{ backgroundColor: done ? "#B8894A" : "rgba(15,26,46,.12)" }} />}
+              </div>
+            );
+          })}
+        </div>
+
+        <form autoComplete="off" onSubmit={e => e.preventDefault()}>
+          {/* Honeypot to absorb browser autofill */}
+          <input type="text" name="username" autoComplete="username" style={{ display: "none" }} tabIndex={-1} aria-hidden="true" />
+          <input type="password" name="password" autoComplete="current-password" style={{ display: "none" }} tabIndex={-1} aria-hidden="true" />
+
+          {/* ─── STEP 1: Identity ─── */}
+          {step === 0 && (
+            <div className="space-y-3 anim-in">
+              <div>
+                <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Full name <Req /></label>
+                <input autoFocus className="w-full" name="wiz_name" autoComplete="off"
+                  value={f.name} onChange={e => setF({ ...f, name: e.target.value })}
+                  onBlur={() => mark("name")} style={errStyle("name")} />
+              </div>
+              <div>
+                <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Work email <Req /></label>
+                <input className="w-full" type="email" name="wiz_email" autoComplete="off"
+                  value={f.email} onChange={e => setF({ ...f, email: e.target.value })}
+                  onBlur={() => mark("email")} style={errStyle("email")} />
+              </div>
+              <div>
+                <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Initial password <Req /></label>
+                <div style={{ position: "relative" }}>
+                  <input className="w-full" type={showPwd ? "text" : "password"} name="wiz_password" autoComplete="new-password"
+                    value={f.password} onChange={e => setF({ ...f, password: e.target.value })}
+                    onBlur={() => mark("password")} style={{ ...errStyle("password"), paddingRight: 40 }}
+                    placeholder="At least 6 characters" />
+                  <button type="button" onClick={() => setShowPwd(s => !s)}
+                    title={showPwd ? "Hide password" : "Show password"}
+                    style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", cursor: "pointer", padding: 4, opacity: 0.6, display: "flex", alignItems: "center" }}>
+                    {showPwd ? <EyeOff size={15} /> : <EyeIcon size={15} />}
+                  </button>
+                </div>
+                <div className="text-xs opacity-60 mt-1">They can change this once they sign in.</div>
+              </div>
+              {missing.length > 0 && Object.keys(touched).length > 0 && (
+                <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "#7F2323" }}>
+                  Required: {missing.join(", ")}
+                </div>
+              )}
             </div>
-            <div className="text-xs opacity-60 mt-2">Approvers without any signing authority won't be selectable in workflows.</div>
+          )}
+
+          {/* ─── STEP 2: Role + assignment ─── */}
+          {step === 1 && (
+            <div className="anim-in">
+              <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Role</div>
+              <div className="grid sm:grid-cols-3 gap-2 mb-5">
+                {roleCards.map(rc => {
+                  const active = f.role === rc.key;
+                  const Icon = rc.icon;
+                  return (
+                    <button key={rc.key} type="button"
+                      onClick={() => setF({ ...f, role: rc.key, signingAuthorityTeams: [], team: "" })}
+                      className={`card p-3 text-left tile-hover ${active ? "ring-2" : ""}`}
+                      style={{
+                        borderColor: active ? "#B8894A" : undefined,
+                        backgroundColor: active ? "rgba(184,137,74,.08)" : undefined
+                      }}>
+                      <Icon size={16} className="opacity-70 mb-2" />
+                      <div className="font-medium text-sm">{rc.label}</div>
+                      <div className="text-xs opacity-60 mt-0.5">{rc.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Approver — multi-select signing authority */}
+              {f.role === "approver" && (
+                <div>
+                  <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Approver's list — sign for which teams?</div>
+                  {teams.length === 0 ? (
+                    <div className="card p-4 text-sm opacity-60">No teams exist yet. Create teams from the "Teams & authority" tab first.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {teams.map(t => {
+                        const checked = f.signingAuthorityTeams.includes(t.id);
+                        return (
+                          <label key={t.id} className="card p-3 flex items-center gap-3 cursor-pointer tile-hover"
+                            style={{ borderColor: checked ? "#B8894A" : undefined, backgroundColor: checked ? "rgba(184,137,74,.08)" : undefined }}>
+                            <input type="checkbox" checked={checked} onChange={e => {
+                              const v = e.target.checked
+                                ? [...f.signingAuthorityTeams, t.id]
+                                : f.signingAuthorityTeams.filter(x => x !== t.id);
+                              setF({ ...f, signingAuthorityTeams: v });
+                            }} />
+                            <Building2 size={16} className="opacity-70" />
+                            <div className="flex-1">
+                              <div className="font-medium text-sm">{t.name}</div>
+                              <div className="text-xs opacity-60">{teamApprovers(t.id)} approver(s) · {teamMembers(t.id)} member(s)</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="text-xs opacity-60 mt-3">Without any signing authority, this approver won't appear in workflows.</div>
+                </div>
+              )}
+
+              {/* Requestor — pick department */}
+              {f.role === "requestor" && (
+                <div>
+                  <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Department</div>
+                  {teams.length === 0 ? (
+                    <div className="card p-4 text-sm opacity-60">No teams exist yet. Create teams first.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="card p-3 flex items-center gap-3 cursor-pointer tile-hover"
+                        style={{ borderColor: f.team === "" ? "#B8894A" : undefined, backgroundColor: f.team === "" ? "rgba(184,137,74,.08)" : undefined }}>
+                        <input type="radio" name="team_pick" checked={f.team === ""} onChange={() => setF({ ...f, team: "" })} />
+                        <div className="flex-1">
+                          <div className="font-medium text-sm">No department</div>
+                          <div className="text-xs opacity-60">Can be assigned later from the team page.</div>
+                        </div>
+                      </label>
+                      {teams.map(t => (
+                        <label key={t.id} className="card p-3 flex items-center gap-3 cursor-pointer tile-hover"
+                          style={{ borderColor: f.team === t.id ? "#B8894A" : undefined, backgroundColor: f.team === t.id ? "rgba(184,137,74,.08)" : undefined }}>
+                          <input type="radio" name="team_pick" checked={f.team === t.id} onChange={() => setF({ ...f, team: t.id })} />
+                          <Building2 size={16} className="opacity-70" />
+                          <div className="flex-1">
+                            <div className="font-medium text-sm">{t.name}</div>
+                            <div className="text-xs opacity-60">{teamMembers(t.id)} current member(s)</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Admin — nothing to assign */}
+              {f.role === "admin" && (
+                <div className="card p-4 text-sm opacity-70">
+                  <Shield size={14} className="inline-block mr-1.5 opacity-70" />
+                  Administrators have full access — no team assignment needed.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ─── STEP 3: Review ─── */}
+          {step === 2 && (
+            <div className="anim-in">
+              <div className="text-xs tracking-wider uppercase opacity-70 mb-3">Review and confirm</div>
+              <div className="card p-5 space-y-3">
+                <Row label="Name" value={f.name} />
+                <Row label="Email" value={<span className="font-mono text-xs">{f.email}</span>} />
+                <Row label="Password" value={<span className="font-mono text-xs">{"•".repeat(Math.min(f.password.length, 12))}</span>} />
+                <Row label="Role" value={<span className="pill pill-pending">{f.role}</span>} />
+                {f.role === "approver" && (
+                  <Row label="Signing authority" value={
+                    f.signingAuthorityTeams.length === 0
+                      ? <span className="opacity-60">— none yet —</span>
+                      : <div className="flex flex-wrap gap-1.5">
+                          {f.signingAuthorityTeams.map(id => {
+                            const t = teams.find(x => x.id === id);
+                            return <span key={id} className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>{t?.name || id}</span>;
+                          })}
+                        </div>
+                  } />
+                )}
+                {f.role === "requestor" && (
+                  <Row label="Department" value={
+                    f.team
+                      ? <span className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>{teams.find(t => t.id === f.team)?.name || f.team}</span>
+                      : <span className="opacity-60">— none —</span>
+                  } />
+                )}
+              </div>
+              <div className="text-xs opacity-60 mt-3">An email is not auto-sent — share the credentials with the user manually.</div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div className="flex items-center justify-between mt-6 gap-2">
+            <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
+            <div className="flex gap-2">
+              {step > 0 && <button type="button" className="btn-ghost" onClick={prev}><ArrowLeft size={13} /> Back</button>}
+              {step < 2
+                ? <button type="button" className="btn-primary" onClick={next} disabled={step === 0 && !canAdvanceIdentity}
+                    title={step === 0 && !canAdvanceIdentity ? `Fill in: ${missing.join(", ")}` : "Continue"}>
+                    Continue <ArrowRight size={13} />
+                  </button>
+                : <button type="button" className="btn-primary" onClick={save} disabled={busy}>
+                    {busy ? "Creating…" : <><Check size={13} /> Create user</>}
+                  </button>}
+            </div>
           </div>
-        )}
+        </form>
       </div>
-      {disabled && (
-        <div className="mt-4 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "#7F2323" }}>
-          Required: {missing.join(", ")}
-        </div>
-      )}
-      <div className="flex justify-end gap-2 mt-5">
-        <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button type="button" className="btn-primary" onClick={() => { setTouched({ name: true, email: true, password: true }); if (!disabled) onSave(f); }}
-          title={disabled ? `Fill in: ${missing.join(", ")}` : "Save user"}>
-          Save user
-        </button>
-      </div>
-      </form>
-    </ModalShell>
+    </div>
+  );
+}
+
+// Tiny helper for the review step
+function Row({ label, value }) {
+  return (
+    <div className="flex items-start gap-3 text-sm">
+      <div className="text-[10px] tracking-wider uppercase opacity-50 w-32 shrink-0 mt-1">{label}</div>
+      <div className="flex-1">{value || <span className="opacity-50">—</span>}</div>
+    </div>
   );
 }
 
@@ -2659,26 +2866,170 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
         <input placeholder="New team name" value={name} onChange={e => setName(e.target.value)} className="flex-1" />
         <button className="btn-primary" onClick={add}><Plus size={14} /> Add team</button>
       </div>
+      {teams.length === 0 && (
+        <div className="card p-10 text-sm opacity-60 text-center mt-8">
+          No teams yet. Create one above to get started.
+        </div>
+      )}
       <div className="grid md:grid-cols-2 gap-5 mt-8">
-        {teams.map(t => {
-          const approvers = users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(t.id));
-          const members = users.filter(u => u.team === t.id);
-          return (
-            <div key={t.id} className="card p-5">
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-3">
-                  <Building2 size={18} />
-                  <div className="font-display text-xl">{t.name}</div>
-                </div>
-                <button onClick={() => remove(t.id)} className="opacity-40 hover:opacity-100"><Trash2 size={13} /></button>
+        {teams.map(t => (
+          <TeamCard key={t.id} team={t} teams={teams} users={users}
+            onRemove={() => remove(t.id)}
+            onChanged={async () => { await saveTeams(); await saveUsers(); }}
+            notify={notify} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+//   TEAM CARD — editable approvers + department members
+// ============================================================
+function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
+  const [addApproverOpen, setAddApproverOpen] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [busy, setBusy] = useState(null); // userId currently being mutated
+
+  const approvers = users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(team.id));
+  const members = users.filter(u => u.team === team.id);
+
+  // Eligible to grant approver authority on this team:
+  //   any approver not already authorised here
+  const eligibleApprovers = users.filter(u =>
+    u.role === "approver" && !(u.signingAuthorityTeams || []).includes(team.id)
+  );
+
+  // Eligible to assign as a department member:
+  //   any requestor not already in this team
+  const eligibleMembers = users.filter(u =>
+    u.role === "requestor" && u.team !== team.id
+  );
+
+  const grant = async (userId) => {
+    setBusy(userId);
+    try { await api.grantAuthority(team.id, userId); notify("Authority granted", "success"); await onChanged(); setAddApproverOpen(false); }
+    catch (e) { notify(e.message || "Failed", "error"); }
+    finally { setBusy(null); }
+  };
+  const revoke = async (userId, name) => {
+    if (!confirm(`Revoke ${name}'s authority over ${team.name}?`)) return;
+    setBusy(userId);
+    try { await api.revokeAuthority(team.id, userId); notify("Authority revoked", "success"); await onChanged(); }
+    catch (e) { notify(e.message || "Failed", "error"); }
+    finally { setBusy(null); }
+  };
+  const assignMember = async (userId) => {
+    setBusy(userId);
+    try { await api.setUserTeam(userId, team.id); notify("Member assigned", "success"); await onChanged(); setAddMemberOpen(false); }
+    catch (e) { notify(e.message || "Failed", "error"); }
+    finally { setBusy(null); }
+  };
+  const removeMember = async (userId, name) => {
+    if (!confirm(`Remove ${name} from ${team.name}?\n\nThey'll have no department until reassigned.`)) return;
+    setBusy(userId);
+    try { await api.setUserTeam(userId, null); notify("Member removed", "success"); await onChanged(); }
+    catch (e) { notify(e.message || "Failed", "error"); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div className="card p-5">
+      {/* Header */}
+      <div className="flex justify-between items-start">
+        <div className="flex items-center gap-3">
+          <Building2 size={18} />
+          <div className="font-display text-xl">{team.name}</div>
+        </div>
+        <button onClick={onRemove} className="opacity-40 hover:opacity-100" title="Delete team"><Trash2 size={13} /></button>
+      </div>
+
+      {/* Approvers section */}
+      <div className="mt-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs tracking-wider uppercase opacity-50">Approvers ({approvers.length})</div>
+          {eligibleApprovers.length > 0 && (
+            <button className="btn-ghost text-xs" onClick={() => setAddApproverOpen(o => !o)}>
+              <Plus size={11} /> Add
+            </button>
+          )}
+        </div>
+        {approvers.length === 0 ? (
+          <div className="text-xs opacity-50 italic py-2">No approvers yet.</div>
+        ) : (
+          <div className="space-y-1">
+            {approvers.map(a => (
+              <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                {a.hasSignature
+                  ? <PenTool size={11} style={{ color: "#B8894A" }} />
+                  : <PenTool size={11} className="opacity-30" />}
+                <span className="flex-1">{a.name}</span>
+                {!a.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
+                <button onClick={() => revoke(a.id, a.name)} disabled={busy === a.id}
+                  className="opacity-40 hover:opacity-100 text-xs" title="Revoke authority">
+                  {busy === a.id ? "…" : <X size={12} />}
+                </button>
               </div>
-              <div className="mt-4 text-xs tracking-wider uppercase opacity-50">Approvers ({approvers.length})</div>
-              <div className="text-sm mt-1">{approvers.map(a => a.name).join(", ") || "— none —"}</div>
-              <div className="mt-3 text-xs tracking-wider uppercase opacity-50">Members ({members.length})</div>
-              <div className="text-sm mt-1">{members.map(m => m.name).join(", ") || "—"}</div>
-            </div>
-          );
-        })}
+            ))}
+          </div>
+        )}
+        {addApproverOpen && eligibleApprovers.length > 0 && (
+          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "#FAF7F0" }}>
+            {eligibleApprovers.map(u => (
+              <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
+                onClick={() => grant(u.id)} disabled={busy === u.id}>
+                <PenTool size={11} className={u.hasSignature ? "" : "opacity-30"} style={u.hasSignature ? { color: "#B8894A" } : {}} />
+                <span className="flex-1">{u.name}</span>
+                {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
+                <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Members section */}
+      <div className="mt-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs tracking-wider uppercase opacity-50">Department members ({members.length})</div>
+          {eligibleMembers.length > 0 && (
+            <button className="btn-ghost text-xs" onClick={() => setAddMemberOpen(o => !o)}>
+              <Plus size={11} /> Add
+            </button>
+          )}
+        </div>
+        {members.length === 0 ? (
+          <div className="text-xs opacity-50 italic py-2">No members yet.</div>
+        ) : (
+          <div className="space-y-1">
+            {members.map(m => (
+              <div key={m.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                <UserPlus size={11} className="opacity-50" />
+                <span className="flex-1">{m.name}</span>
+                <button onClick={() => removeMember(m.id, m.name)} disabled={busy === m.id}
+                  className="opacity-40 hover:opacity-100 text-xs" title="Remove from department">
+                  {busy === m.id ? "…" : <X size={12} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {addMemberOpen && eligibleMembers.length > 0 && (
+          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "#FAF7F0" }}>
+            {eligibleMembers.map(u => {
+              const currentTeam = teams.find(t => t.id === u.team);
+              return (
+                <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
+                  onClick={() => assignMember(u.id)} disabled={busy === u.id}>
+                  <UserPlus size={11} className="opacity-50" />
+                  <span className="flex-1">{u.name}</span>
+                  {currentTeam && <span className="text-[10px] opacity-50">from {currentTeam.name}</span>}
+                  <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
