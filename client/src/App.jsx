@@ -41,6 +41,43 @@ const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toStr
 const fmt = ts => new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 const fmtShort = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
+// ---------- browser-back handling ----------
+// The SPA uses state-based navigation (no React Router). Without this, clicking the
+// browser back button leaves the site entirely (typically to whatever was loaded
+// before — Google homepage, etc.). The hook below intercepts back navigation and
+// closes the topmost sub-view / drawer / modal instead, only letting the user out
+// of the site once they're back at the home dashboard.
+const __backStack = [];
+let __suppressNextPop = false;
+if (typeof window !== "undefined" && !window.__sfBackInit) {
+  window.__sfBackInit = true;
+  window.addEventListener("popstate", () => {
+    if (__suppressNextPop) { __suppressNextPop = false; return; }
+    const top = __backStack.pop();
+    if (top) top.handler();
+  });
+}
+function useBackHandler(active, onBack) {
+  const handlerRef = useRef(onBack);
+  handlerRef.current = onBack;
+  useEffect(() => {
+    if (!active) return;
+    const entry = { handler: () => handlerRef.current?.() };
+    __backStack.push(entry);
+    window.history.pushState({ sf: true }, "");
+    return () => {
+      const idx = __backStack.indexOf(entry);
+      if (idx === -1) return; // already popped by browser-back
+      __backStack.splice(idx, 1);
+      if (idx === __backStack.length) {
+        // We were on top — pop our sentinel without re-triggering the global handler
+        __suppressNextPop = true;
+        window.history.back();
+      }
+    };
+  }, [active]);
+}
+
 // ============================================================
 //   ROOT APP
 // ============================================================
@@ -418,6 +455,7 @@ function RequestorView(props) {
   const approved = my.filter(r => r.status === "approved");
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
+  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
@@ -1895,6 +1933,7 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 function PreviewDrawer({ req, onClose, users, teams }) {
   const [file, setFile] = useState(null);
   const [leaveStyles, setLeaveStyles] = useState(null);
+  useBackHandler(true, onClose);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -1992,6 +2031,7 @@ function StepStatusPill({ status }) {
 function ApproverView(props) {
   const { user, requests, teams } = props;
   const [tab, setTab] = useState("home");
+  useBackHandler(tab !== "home", () => setTab("home"));
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSignedInWorkflow = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id && s.status === "signed"));
   const mine = requests.filter(r => {
@@ -2156,6 +2196,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
+  useBackHandler(true, onClose);
   useEffect(() => {
     let url = null;
     (async () => {
@@ -2386,6 +2427,7 @@ function ApproverAuthority({ user, teams, back, users, requests }) {
 // ============================================================
 function AdminView(props) {
   const [tab, setTab] = useState("home");
+  useBackHandler(tab !== "home", () => setTab("home"));
   if (tab === "users") return <AdminUsers {...props} back={() => setTab("home")} />;
   if (tab === "teams") return <AdminTeams {...props} back={() => setTab("home")} />;
   if (tab === "signatures") return <AdminSignatures {...props} back={() => setTab("home")} />;
