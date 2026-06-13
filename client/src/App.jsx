@@ -304,7 +304,7 @@ function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-8 py-12 md:p-14 text-center gap-6" style={{ color: "#F5F1E8" }}>
+      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-6 py-8 sm:px-8 sm:py-12 md:p-14 text-center gap-4 sm:gap-6" style={{ color: "#F5F1E8" }}>
         {/* Logo badge */}
         <div className="logo-glow fade-up">
           <img src="/signflow-logo.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
@@ -328,9 +328,9 @@ function LoginScreen({ login }) {
         <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">HQHB - Internal Build</div>
       </div>
       {/* right panel */}
-      <div className="flex items-center justify-center p-8 md:p-16">
+      <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <form onSubmit={submit} className="w-full max-w-sm">
-          <div className="font-display text-3xl mb-2">Sign in</div>
+          <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
           <div className="text-sm opacity-60 mb-8">Use the credentials provided by your administrator.</div>
           <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
           <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus />
@@ -362,7 +362,7 @@ function Shell(props) {
   return (
     <>
       <TopBar user={user} logout={logout} onEditSignature={() => setEditSig(true)} />
-      <main className="max-w-7xl mx-auto px-6 md:px-10 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         {user.role === "requestor" && <RequestorView {...props} />}
         {user.role === "approver" && <ApproverView {...props} />}
         {user.role === "admin" && <AdminView {...props} />}
@@ -395,9 +395,9 @@ function TopBar({ user, logout, onEditSignature }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   return (
     <header className="border-b" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#FAF7F0" }}>
-      <div className="max-w-7xl mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-3 sm:py-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden shrink-0">
             <svg width="32" height="32" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
               <rect width="48" height="48" rx="10" fill="#B8894A"/>
               <rect x="8" y="6" width="20" height="26" rx="2.5" fill="#0F1A2E"/>
@@ -407,23 +407,29 @@ function TopBar({ user, logout, onEditSignature }) {
               <polygon points="38,14 40,10.5 36,12.5" fill="#0F1A2E"/>
             </svg>
           </div>
-          <div>
-            <div className="font-display text-lg leading-tight">HQHB · SignFlow</div>
-            <div className="text-[10px] tracking-widest uppercase opacity-50">{roleLabel} console</div>
+          <div className="min-w-0">
+            <div className="font-display text-base sm:text-lg leading-tight truncate">HQHB · SignFlow</div>
+            <div className="text-[9px] sm:text-[10px] tracking-widest uppercase opacity-50">{roleLabel} console</div>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right hidden sm:block">
-            <div className="text-sm font-medium">{user.name}</div>
-            <div className="text-xs opacity-60 font-mono">{user.email}</div>
+        <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
+          <div className="text-right hidden md:block">
+            <div className="text-sm font-medium truncate max-w-[180px]">{user.name}</div>
+            <div className="text-xs opacity-60 font-mono truncate max-w-[180px]">{user.email}</div>
           </div>
           {onEditSignature && (
-            <button onClick={onEditSignature} className="btn-ghost text-sm" title={user.hasSignature ? "Update your signature" : "Add your signature"}>
-              <PenTool size={14} /> {user.hasSignature ? "Signature" : "Add signature"}
+            <button onClick={onEditSignature}
+              className="btn-ghost text-sm px-2 sm:px-3"
+              title={user.hasSignature ? "Update your signature" : "Add your signature"}>
+              <PenTool size={14} />
+              <span className="hidden sm:inline">{user.hasSignature ? "Signature" : "Add signature"}</span>
             </button>
           )}
-          <button onClick={logout} className="btn-ghost text-sm" title="Sign out">
-            <LogOut size={14} /> Sign out
+          <button onClick={logout}
+            className="btn-ghost text-sm px-2 sm:px-3"
+            title="Sign out">
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Sign out</span>
           </button>
         </div>
       </div>
@@ -478,7 +484,7 @@ function RequestorView(props) {
         </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-5 mt-10">
+      <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
       {my.filter(r => r.status === "rejected").length > 0 && (
@@ -523,27 +529,28 @@ function RecentActivity({ my, teams }) {
 function Hero({ title, subtitle }) {
   return (
     <div>
-      <div className="text-xs tracking-widest uppercase opacity-50 mb-2">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</div>
-      <h1 className="font-display text-5xl md:text-6xl leading-[1.05]">{title}</h1>
-      <p className="mt-3 text-base opacity-60 max-w-xl">{subtitle}</p>
+      <div className="text-[10px] sm:text-xs tracking-widest uppercase opacity-50 mb-1.5 sm:mb-2">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</div>
+      <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.05]">{title}</h1>
+      <p className="mt-2 sm:mt-3 text-sm sm:text-base opacity-60 max-w-xl">{subtitle}</p>
     </div>
   );
 }
 
 function Tile({ icon: Icon, title, desc, badge, color = "#0F1A2E", onClick }) {
   return (
-    <button onClick={onClick} className="card tile-hover text-left p-6 relative overflow-hidden block w-full">
-      <div className="flex items-start justify-between mb-8">
-        <div className="w-11 h-11 rounded-lg flex items-center justify-center" style={{ backgroundColor: color, color: "#F5F1E8" }}>
-          <Icon size={20} />
+    <button onClick={onClick} className="card tile-hover text-left p-5 sm:p-6 relative overflow-hidden block w-full">
+      <div className="flex items-start justify-between mb-5 sm:mb-8">
+        <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center" style={{ backgroundColor: color, color: "#F5F1E8" }}>
+          <Icon size={18} className="sm:hidden" />
+          <Icon size={20} className="hidden sm:block" />
         </div>
         {badge != null && badge > 0 && (
-          <div className="text-2xl font-display" style={{ color }}>{badge}</div>
+          <div className="text-xl sm:text-2xl font-display" style={{ color }}>{badge}</div>
         )}
       </div>
-      <div className="font-display text-xl mb-1.5">{title}</div>
-      <div className="text-sm opacity-60 leading-relaxed">{desc}</div>
-      <div className="mt-4 flex items-center gap-1 text-xs tracking-wider uppercase opacity-50">
+      <div className="font-display text-lg sm:text-xl mb-1 sm:mb-1.5">{title}</div>
+      <div className="text-xs sm:text-sm opacity-60 leading-relaxed">{desc}</div>
+      <div className="mt-3 sm:mt-4 flex items-center gap-1 text-[10px] sm:text-xs tracking-wider uppercase opacity-50">
         Open <ChevronRight size={12} />
       </div>
     </button>
@@ -788,7 +795,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
   return (
     <div>
       <BackHeader back={onDone} title="Make a new request" />
-      <div className="grid lg:grid-cols-3 gap-6 mt-8">
+      <div className="grid lg:grid-cols-3 gap-4 sm:gap-6 mt-6 sm:mt-8">
         <div className="lg:col-span-2 space-y-6">
 
           {/* 0. type */}
@@ -1056,11 +1063,11 @@ function AddSignerControl({ team, existing, onAdd }) {
 function Section({ n, title, desc, children }) {
   return (
     <div>
-      <div className="flex items-baseline gap-3 mb-3">
+      <div className="flex items-baseline gap-2 sm:gap-3 mb-2 sm:mb-3">
         <span className="font-mono text-xs opacity-50">{n}</span>
-        <h3 className="font-display text-xl">{title}</h3>
+        <h3 className="font-display text-lg sm:text-xl">{title}</h3>
       </div>
-      {desc && <p className="text-sm opacity-60 mb-4 ml-8">{desc}</p>}
+      {desc && <p className="text-xs sm:text-sm opacity-60 mb-3 sm:mb-4 ml-6 sm:ml-8">{desc}</p>}
       <div className="ml-0 sm:ml-8">{children}</div>
     </div>
   );
@@ -1068,14 +1075,14 @@ function Section({ n, title, desc, children }) {
 
 function BackHeader({ back, title, step }) {
   return (
-    <div className="flex items-center justify-between">
-      <div>
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
         <button onClick={back} className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 flex items-center gap-1 mb-2">
           <ChevronRight size={12} style={{ transform: "rotate(180deg)" }} /> Back
         </button>
-        <h1 className="font-display text-4xl">{title}</h1>
+        <h1 className="font-display text-2xl sm:text-3xl md:text-4xl leading-tight">{title}</h1>
       </div>
-      {step && <div className="text-xs tracking-wider uppercase opacity-50">{step}</div>}
+      {step && <div className="text-[10px] sm:text-xs tracking-wider uppercase opacity-50 shrink-0 pt-1">{step}</div>}
     </div>
   );
 }
@@ -1193,29 +1200,38 @@ function RequestRow({ r, teams, users, i, actions, subtitle }) {
   const typeColor = requestTypeColor(typeKey);
 
   return (
-    <div className={`px-5 py-4 flex items-center gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.08)" }}>
-      <div className="w-9 h-9 rounded-md flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
+    <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.08)" }}>
+      <div className="w-9 h-9 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
         {r.fileType === "pdf" ? <FileText size={15} /> : <FileSpreadsheet size={15} />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="font-medium truncate flex items-center gap-2">
+        <div className="font-medium text-sm sm:text-base truncate flex items-center gap-2">
           {r.fileName}
           {r.instantApproval && <span title="Instant approval" style={{ color: "#B8894A" }}><Zap size={11} /></span>}
           {r.workflow?.length > 0 && <span title="Multi-step workflow" className="opacity-60"><GitBranch size={11} /></span>}
         </div>
-        <div className="text-xs opacity-60 mt-0.5 flex items-center gap-2 flex-wrap">
+        <div className="text-xs opacity-60 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 7px", borderRadius: 4, backgroundColor: `${typeColor}1A`, color: typeColor, fontWeight: 500 }}>
             {typeLabel}
           </span>
-          <span>{team?.name} · from {requestorName} · {fmtShort(r.createdAt)}</span>
-          {approverName && !workflowLine && <span>· {r.status === "rejected" ? "rejected" : "approved"} by {approverName}</span>}
+          <span className="truncate">{team?.name} · {fmtShort(r.createdAt)}</span>
+          <span className="hidden sm:inline">· from {requestorName}</span>
+          {approverName && !workflowLine && <span className="hidden md:inline">· {r.status === "rejected" ? "rejected" : "approved"} by {approverName}</span>}
           {r.status === "approved_pending" && r.approvedAt && !r.instantApproval && <span>· <Countdown until={r.approvedAt + APPROVAL_WINDOW_MS} /></span>}
         </div>
-        {workflowLine && <div className="text-xs mt-0.5 opacity-70">{workflowLine}</div>}
+        {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}
         {subtitle && <div className="text-xs mt-1" style={{ color: "#9B2C2C" }}>{subtitle}</div>}
+        {/* On mobile, actions move below content. On desktop they're inline. */}
+        <div className="flex sm:hidden items-center gap-2 mt-2">
+          <StatusPill status={r.status} />
+          <div className="flex-1" />
+          {actions}
+        </div>
       </div>
-      <StatusPill status={r.status} />
-      {actions}
+      <div className="hidden sm:flex items-center gap-3 shrink-0">
+        <StatusPill status={r.status} />
+        {actions}
+      </div>
     </div>
   );
 }
@@ -1358,19 +1374,19 @@ function PreviewDrawer({ req, onClose, users, teams }) {
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
       <div className="bg-white w-full max-w-4xl overflow-auto anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
-        <div className="p-6 flex items-center justify-between border-b" style={{ borderColor: "rgba(15,26,46,.1)" }}>
-          <div>
-            <div className="font-display text-2xl">{req.fileName}</div>
-            <div className="text-xs opacity-60 mt-1">
+        <div className="p-4 sm:p-6 flex items-center justify-between gap-2 border-b" style={{ borderColor: "rgba(15,26,46,.1)" }}>
+          <div className="min-w-0 flex-1">
+            <div className="font-display text-lg sm:text-2xl truncate">{req.fileName}</div>
+            <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 sm:mt-1 truncate">
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
         </div>
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
             <Suspense fallback={<ViewerFallback />}>
@@ -1464,7 +1480,7 @@ function ApproverView(props) {
   return (
     <div>
       <Hero title={`Good day, ${user.name.split(" ")[0]}`} subtitle="Documents are routed to you based on the teams you sign for." />
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5 mt-10">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
     </div>
@@ -1662,18 +1678,18 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
       <div className="w-full max-w-4xl flex flex-col anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
 
         {/* ── Fixed header with Jump-to-Signature ── */}
-        <div className="px-6 py-4 flex items-center gap-3 border-b shrink-0" style={{ borderColor: "rgba(15,26,46,.1)" }}>
+        <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-2 sm:gap-3 border-b shrink-0" style={{ borderColor: "rgba(15,26,46,.1)" }}>
           <div className="min-w-0 flex-1">
-            <div className="font-display text-xl truncate">{req.fileName}</div>
-            <div className="text-xs opacity-60 mt-0.5">
+            <div className="font-display text-base sm:text-xl truncate">{req.fileName}</div>
+            <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 truncate">
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {canApprove && markers.length > 0 && (
-              <button onClick={jumpToSig} className="btn-primary text-xs" title="Jump to signature zone"
+              <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
-                <ChevronDown size={13} /> Go to signature
+                <ChevronDown size={13} /> <span className="hidden sm:inline">Go to signature</span>
               </button>
             )}
             <StatusPill status={req.status} />
@@ -1682,7 +1698,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         </div>
 
         {/* ── Single scrollable body ── */}
-        <div ref={bodyRef} className="flex-1 overflow-y-auto p-6">
+        <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
           {file ? (
             <Suspense fallback={<ViewerFallback />}>
@@ -1694,28 +1710,29 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
         {/* ── Pinned action bar(s) ── */}
         {canApprove && (
-          <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+          <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
             {previewing ? (
               <>
                 <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
                   <Eye size={13} />
-                  <span>Review how your signature will appear on the document.</span>
+                  <span className="hidden sm:inline">Review how your signature will appear on the document.</span>
+                  <span className="sm:hidden">Preview your signature</span>
                 </div>
-                <div className="flex gap-3 shrink-0">
-                  <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> Go back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> Confirm approval</button>
+                <div className="flex gap-2 sm:gap-3 shrink-0">
+                  <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> <span className="hidden sm:inline">Confirm </span>approval</button>
                 </div>
               </>
             ) : (
               <>
-                <div className="text-xs opacity-60">
+                <div className="text-xs opacity-60 hidden sm:block">
                   {isWorkflow
                     ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
                     : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
                 </div>
-                <div className="flex gap-3 shrink-0">
+                <div className="flex gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
-                  <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> Preview & approve</button>
+                  <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> <span className="hidden sm:inline">Preview & </span>approve</button>
                 </div>
               </>
             )}
@@ -1837,31 +1854,473 @@ function ApproverAuthority({ user, teams, back, users, requests }) {
 // ============================================================
 function AdminView(props) {
   const [tab, setTab] = useState("home");
-  useBackHandler(tab !== "home", () => setTab("home"));
+  const [docsTeamId, setDocsTeamId] = useState(null); // when set, opens AdminDocuments pre-filtered to this team
+  useBackHandler(tab !== "home", () => { setDocsTeamId(null); setTab("home"); });
+  if (tab === "onboard") return <OnboardTeam {...props} back={() => setTab("home")} />;
   if (tab === "users") return <AdminUsers {...props} back={() => setTab("home")} />;
-  if (tab === "teams") return <AdminTeams {...props} back={() => setTab("home")} />;
+  if (tab === "teams") return <AdminTeams {...props}
+    onViewDocuments={(teamId) => { setDocsTeamId(teamId); setTab("documents"); }}
+    back={() => setTab("home")} />;
   if (tab === "signatures") return <AdminSignatures {...props} back={() => setTab("home")} />;
-  if (tab === "documents") return <AdminDocuments {...props} back={() => setTab("home")} />;
+  if (tab === "documents") return <AdminDocuments {...props}
+    defaultTeamId={docsTeamId || "all"}
+    back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
 
   const { users, teams, requests, emails } = props;
   const tiles = [
-    { key: "users", icon: UserPlus, title: "Users", desc: "Create and bulk-upload users across roles.", badge: users.length, color: "#B8894A" },
-    { key: "teams", icon: Building2, title: "Teams & authority", desc: "Define teams and grant signing authority.", badge: teams.length },
+    { key: "onboard", icon: UserPlus, title: "Onboard team", desc: "Add a team, bulk-upload members from Excel, then email credentials in one flow.", color: "#B8894A" },
+    { key: "users", icon: Users, title: "Users", desc: "Manage individual users and signing authority.", badge: users.length },
+    { key: "teams", icon: Building2, title: "Teams & authority", desc: "Define teams and edit memberships.", badge: teams.length },
     { key: "signatures", icon: PenTool, title: "Signatures", desc: "Upload signatures in bulk on behalf of users." },
-    { key: "documents", icon: FileText, title: "All documents", desc: "Download any file end-to-end for audit.", badge: requests.length },
+    { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
-    { key: "emails", icon: Mail, title: "SendGrid log", desc: "Simulated email sends — inspect every notification.", badge: emails.length }
+    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length }
   ];
   return (
     <div>
       <Hero title="Administration" subtitle="Everything the organisation needs to run SignFlow." />
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 mt-10">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
     </div>
   );
+}
+
+// ============================================================
+//   ONBOARD TEAM — 4-step bulk flow
+//   Step 1: Pick or create team
+//   Step 2: Upload Excel / CSV of users (auto-team-assigned)
+//   Step 3: Review parsed rows, edit role per row, mark signing authority
+//   Step 4: Submit → creates users → optionally batch-emails credentials
+// ============================================================
+function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back }) {
+  const [step, setStep] = useState(0);
+  // Team selection
+  const [mode, setMode] = useState("existing"); // "existing" | "new"
+  const [pickedTeamId, setPickedTeamId] = useState("");
+  const [newTeamName, setNewTeamName] = useState("");
+  // Parsed rows
+  const [rows, setRows] = useState([]);   // [{ name, email, role, asApprover, password? }]
+  const [fileName, setFileName] = useState("");
+  // Send invites
+  const [sendInvites, setSendInvites] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [resultLog, setResultLog] = useState(null); // { created: [], failed: [], invited: 0, inviteErrors: [] }
+
+  // Step 1 advance check
+  const canAdvance1 = mode === "existing" ? !!pickedTeamId : !!newTeamName.trim();
+  // Step 2 advance check
+  const canAdvance2 = rows.length > 0 && rows.every(r => r.name.trim() && r.email.trim() && /@/.test(r.email));
+
+  const handleFile = async e => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFileName(f.name);
+    const ext = f.name.split(".").pop().toLowerCase();
+    try {
+      let parsedRows = [];
+      if (ext === "csv") {
+        const text = await f.text();
+        parsedRows = parseCsv(text);
+      } else if (ext === "xlsx" || ext === "xls") {
+        const buf = await f.arrayBuffer();
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+        parsedRows = rawToRows(raw);
+      } else {
+        notify("Unsupported file — use .xlsx or .csv", "error");
+        return;
+      }
+      // Default every row to requestor; admin can flip individual rows on step 3
+      setRows(parsedRows.map(r => ({
+        name: r.name || "",
+        email: r.email || "",
+        role: r.role && r.role.toLowerCase() === "approver" ? "approver" : "requestor",
+        asApprover: r.role && r.role.toLowerCase() === "approver"
+      })));
+    } catch (err) {
+      notify(`Could not parse file: ${err.message}`, "error");
+    }
+  };
+
+  const addEmptyRow = () => setRows(rs => [...rs, { name: "", email: "", role: "requestor", asApprover: false }]);
+  const updateRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const removeRow = (i) => setRows(rs => rs.filter((_, idx) => idx !== i));
+
+  const submit = async () => {
+    setBusy(true);
+    setResultLog(null);
+    try {
+      // 1. Resolve target team id (create new team first if needed)
+      let teamId = pickedTeamId;
+      if (mode === "new") {
+        const { team } = await api.createTeam(newTeamName.trim());
+        teamId = team.id;
+        await saveTeams();
+      }
+
+      // 2. Create each user. Server generates a temp hash; the welcome email
+      //    will reset to a random password and email plaintext (so we don't
+      //    need to know passwords here).
+      const created = [];
+      const failed = [];
+      for (const r of rows) {
+        try {
+          // Use a placeholder password; invite step will overwrite + email.
+          const placeholderPwd = randomPassword();
+          const payload = {
+            name: r.name.trim(),
+            email: r.email.trim(),
+            password: placeholderPwd,
+            role: r.asApprover ? "approver" : "requestor",
+            ...(r.asApprover
+              ? { signingAuthorityTeams: [teamId] }
+              : { team: teamId })
+          };
+          const { user } = await api.createUser(payload);
+          created.push(user);
+        } catch (e) {
+          failed.push({ row: r, error: e.message || "Failed" });
+        }
+      }
+      await saveUsers();
+      await refresh?.();
+
+      // 3. Send invites in one batch (if enabled)
+      let invited = 0;
+      let inviteErrors = [];
+      if (sendInvites && created.length > 0) {
+        try {
+          const { results } = await api.bulkInvite(created.map(u => u.id));
+          invited = results.filter(r => r.ok).length;
+          inviteErrors = results.filter(r => !r.ok);
+        } catch (e) {
+          inviteErrors.push({ error: e.message || "Bulk invite failed" });
+        }
+      }
+
+      setResultLog({ created, failed, invited, inviteErrors });
+      setStep(3);
+      notify(`Onboarded ${created.length} of ${rows.length} user${rows.length === 1 ? "" : "s"}${sendInvites ? ` · ${invited} invite${invited === 1 ? "" : "s"} sent` : ""}`, "success");
+    } catch (e) {
+      notify(e.message || "Onboarding failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const teamLabel = mode === "existing"
+    ? teams.find(t => t.id === pickedTeamId)?.name
+    : newTeamName.trim();
+
+  const steps = [
+    { label: "Team" },
+    { label: "Upload" },
+    { label: "Review" },
+    { label: "Done" }
+  ];
+
+  return (
+    <div>
+      <BackHeader back={back} title="Onboard a team" step={`Step ${Math.min(step + 1, steps.length)} of ${steps.length}`} />
+
+      {/* Step indicator */}
+      <div className="flex items-center gap-2 mt-6 mb-8">
+        {steps.map((s, i) => {
+          const active = i === step;
+          const done = i < step;
+          return (
+            <div key={s.label} className="flex items-center gap-2 flex-1">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium"
+                  style={{
+                    backgroundColor: active ? "#0F1A2E" : done ? "#B8894A" : "rgba(15,26,46,.08)",
+                    color: (active || done) ? "#F5F1E8" : "rgba(15,26,46,.6)"
+                  }}>
+                  {done ? <Check size={11} /> : i + 1}
+                </div>
+                <div className="text-[10px] tracking-wider uppercase hidden sm:inline" style={{ opacity: active ? 1 : 0.5 }}>{s.label}</div>
+              </div>
+              {i < steps.length - 1 && <div className="flex-1 h-px" style={{ backgroundColor: done ? "#B8894A" : "rgba(15,26,46,.12)" }} />}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ─── STEP 1: Team ─── */}
+      {step === 0 && (
+        <div className="card p-6 max-w-2xl anim-in">
+          <div className="text-xs tracking-wider uppercase opacity-70 mb-3">Pick the team you're onboarding</div>
+          <div className="grid sm:grid-cols-2 gap-3 mb-5">
+            <button type="button" onClick={() => setMode("existing")}
+              className={`card p-3 text-left tile-hover ${mode === "existing" ? "ring-2" : ""}`}
+              style={{ borderColor: mode === "existing" ? "#B8894A" : undefined, backgroundColor: mode === "existing" ? "rgba(184,137,74,.08)" : undefined }}>
+              <Building2 size={16} className="opacity-70 mb-2" />
+              <div className="font-medium text-sm">Existing team</div>
+              <div className="text-xs opacity-60">Add members to a team already in the system.</div>
+            </button>
+            <button type="button" onClick={() => setMode("new")}
+              className={`card p-3 text-left tile-hover ${mode === "new" ? "ring-2" : ""}`}
+              style={{ borderColor: mode === "new" ? "#B8894A" : undefined, backgroundColor: mode === "new" ? "rgba(184,137,74,.08)" : undefined }}>
+              <Plus size={16} className="opacity-70 mb-2" />
+              <div className="font-medium text-sm">Create new team</div>
+              <div className="text-xs opacity-60">Spin up a team and add the first members in one go.</div>
+            </button>
+          </div>
+
+          {mode === "existing" ? (
+            <div>
+              <label className="text-xs tracking-wider uppercase opacity-70 block mb-2">Choose a team</label>
+              {teams.length === 0 ? (
+                <div className="text-sm opacity-60">No teams exist yet — switch to "Create new team".</div>
+              ) : (
+                <select className="w-full" value={pickedTeamId} onChange={e => setPickedTeamId(e.target.value)}>
+                  <option value="">— select —</option>
+                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs tracking-wider uppercase opacity-70 block mb-2">New team name</label>
+              <input className="w-full" placeholder="e.g. Finance Team"
+                value={newTeamName} onChange={e => setNewTeamName(e.target.value)} autoFocus />
+            </div>
+          )}
+
+          <div className="flex justify-end mt-6 gap-2">
+            <button className="btn-ghost" onClick={back}>Cancel</button>
+            <button className="btn-primary" onClick={() => setStep(1)} disabled={!canAdvance1}>Continue <ArrowRight size={13} /></button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── STEP 2: Upload ─── */}
+      {step === 1 && (
+        <div className="anim-in">
+          <div className="card p-6 mb-5">
+            <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Upload member list</div>
+            <div className="text-sm opacity-70 mb-4">
+              File format: <span className="font-mono text-xs">.xlsx</span> or <span className="font-mono text-xs">.csv</span>.
+              Required columns: <span className="font-mono text-xs">name</span>, <span className="font-mono text-xs">email</span>. Optional: <span className="font-mono text-xs">role</span> (<span className="font-mono text-xs">requestor</span> / <span className="font-mono text-xs">approver</span>) — defaults to requestor.
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="btn-primary cursor-pointer">
+                <Upload size={13} /> Choose file
+                <input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={handleFile} />
+              </label>
+              <button className="btn-ghost" onClick={addEmptyRow}><Plus size={13} /> Add row manually</button>
+              {fileName && <div className="text-xs opacity-60 font-mono">{fileName}</div>}
+            </div>
+          </div>
+
+          {rows.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+                <div className="col-span-4">Name</div>
+                <div className="col-span-5">Email</div>
+                <div className="col-span-2">Role</div>
+                <div className="col-span-1"></div>
+              </div>
+              {rows.map((r, i) => {
+                const emailOk = r.email && /@/.test(r.email);
+                return (
+                  <div key={i} className="grid grid-cols-12 items-center px-4 py-2 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+                    <div className="col-span-4">
+                      <input value={r.name} onChange={e => updateRow(i, { name: e.target.value })}
+                        className="w-full text-sm" placeholder="Full name" />
+                    </div>
+                    <div className="col-span-5">
+                      <input value={r.email} onChange={e => updateRow(i, { email: e.target.value })}
+                        className="w-full text-sm font-mono"
+                        style={!emailOk && r.email ? { borderColor: "#9B2C2C" } : {}}
+                        placeholder="email@hqhb.in" />
+                    </div>
+                    <div className="col-span-2">
+                      <select value={r.asApprover ? "approver" : "requestor"} className="w-full text-sm"
+                        onChange={e => updateRow(i, { asApprover: e.target.value === "approver", role: e.target.value })}>
+                        <option value="requestor">Requestor</option>
+                        <option value="approver">Approver</option>
+                      </select>
+                    </div>
+                    <div className="col-span-1 text-right">
+                      <button className="opacity-40 hover:opacity-100" onClick={() => removeRow(i)}><X size={13} /></button>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="px-4 py-3 text-xs opacity-60">{rows.length} row{rows.length === 1 ? "" : "s"} ready</div>
+            </div>
+          )}
+
+          <div className="flex justify-end mt-6 gap-2">
+            <button className="btn-ghost" onClick={() => setStep(0)}><ArrowLeft size={13} /> Back</button>
+            <button className="btn-primary" onClick={() => setStep(2)} disabled={!canAdvance2}>Continue <ArrowRight size={13} /></button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── STEP 3: Review & confirm ─── */}
+      {step === 2 && (
+        <div className="anim-in max-w-3xl">
+          <div className="card p-5 mb-5">
+            <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Summary</div>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <div><Building2 size={13} className="inline-block mr-1 opacity-70" /> Team: <span className="font-medium">{teamLabel}</span>{mode === "new" && <span className="pill pill-pending text-[10px] ml-2">new</span>}</div>
+              <div>· {rows.filter(r => !r.asApprover).length} requestor{rows.filter(r => !r.asApprover).length === 1 ? "" : "s"}</div>
+              <div>· {rows.filter(r => r.asApprover).length} approver{rows.filter(r => r.asApprover).length === 1 ? "" : "s"}</div>
+            </div>
+          </div>
+
+          <div className="card p-5 mb-5">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={sendInvites} onChange={e => setSendInvites(e.target.checked)} className="mt-1" />
+              <div>
+                <div className="font-medium text-sm flex items-center gap-2">
+                  <Mail size={13} style={{ color: "#B8894A" }} /> Send welcome emails with credentials
+                </div>
+                <div className="text-xs opacity-60 mt-0.5">
+                  Each user receives an email with a freshly generated password. You won't see the passwords — they go straight to the user.
+                  If SendGrid isn't configured the emails are logged under <span className="font-mono">Email log</span> instead.
+                </div>
+              </div>
+            </label>
+          </div>
+
+          <div className="card overflow-hidden">
+            <div className="px-4 py-3 text-xs tracking-wider uppercase opacity-60 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>Members to create</div>
+            {rows.map((r, i) => (
+              <div key={i} className="px-4 py-2.5 border-b text-sm flex items-center gap-3" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+                <div className="flex-1">
+                  <div className="font-medium">{r.name || <span className="opacity-50">—</span>}</div>
+                  <div className="text-xs opacity-60 font-mono">{r.email}</div>
+                </div>
+                <span className="pill" style={{
+                  backgroundColor: r.asApprover ? "rgba(184,137,74,.18)" : "rgba(15,26,46,.06)",
+                  color: r.asApprover ? "#8B6914" : "#0F1A2E"
+                }}>{r.asApprover ? "approver" : "requestor"}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap justify-end mt-6 gap-2">
+            <button className="btn-ghost" onClick={() => setStep(1)}><ArrowLeft size={13} /> Back</button>
+            <button className="btn-primary" onClick={submit} disabled={busy}>
+              {busy ? "Onboarding…" : <><Check size={13} /> {sendInvites ? "Create users & send invites" : "Create users"}</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── STEP 4: Result ─── */}
+      {step === 3 && resultLog && (
+        <div className="anim-in max-w-3xl">
+          <div className="card p-6 mb-5" style={{ borderLeft: "4px solid #2D5F2F" }}>
+            <div className="flex items-center gap-3 mb-2">
+              <CheckCircle size={20} style={{ color: "#2D5F2F" }} />
+              <div className="font-display text-2xl">Team onboarded</div>
+            </div>
+            <div className="text-sm opacity-75">
+              {resultLog.created.length} user{resultLog.created.length === 1 ? "" : "s"} created in <span className="font-medium">{teamLabel}</span>.
+              {sendInvites && <> {resultLog.invited} invite email{resultLog.invited === 1 ? "" : "s"} sent.</>}
+            </div>
+          </div>
+
+          {resultLog.failed.length > 0 && (
+            <div className="card p-4 mb-5" style={{ borderLeft: "4px solid #9B2C2C", backgroundColor: "rgba(155,44,44,.04)" }}>
+              <div className="text-sm font-medium mb-2" style={{ color: "#7F2323" }}>{resultLog.failed.length} failed</div>
+              {resultLog.failed.map((f, i) => (
+                <div key={i} className="text-xs opacity-75 mb-1">{f.row.email} — {f.error}</div>
+              ))}
+            </div>
+          )}
+
+          {sendInvites && resultLog.inviteErrors.length > 0 && (
+            <div className="card p-4 mb-5" style={{ borderLeft: "4px solid #B8894A" }}>
+              <div className="text-sm font-medium mb-2" style={{ color: "#8B6914" }}>{resultLog.inviteErrors.length} invite{resultLog.inviteErrors.length === 1 ? "" : "s"} failed</div>
+              {resultLog.inviteErrors.map((e, i) => (
+                <div key={i} className="text-xs opacity-75 mb-1">{e.id || "(batch)"} — {e.error || "unknown"}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <button className="btn-ghost" onClick={() => {
+              // Reset to start a new flow
+              setStep(0); setMode("existing"); setPickedTeamId(""); setNewTeamName("");
+              setRows([]); setFileName(""); setResultLog(null);
+            }}>Onboard another team</button>
+            <button className="btn-primary" onClick={back}>Done</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- helpers used by OnboardTeam ----
+
+/** Tolerant CSV parser — handles quoted values, escaped quotes, CRLF, BOM. */
+function parseCsv(text) {
+  // Strip BOM
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let i = 0, field = "", row = [], inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQ = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ""; i++; continue; }
+    if (c === '\r') { i++; continue; }
+    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rawToRows(rows);
+}
+
+/** Map raw 2D array (first row = header) into [{ name, email, role }]. */
+function rawToRows(raw) {
+  if (!raw || raw.length < 1) return [];
+  const header = raw[0].map(h => String(h || "").trim().toLowerCase());
+  const nameCol = header.findIndex(h => h === "name" || h === "full name" || h === "fullname");
+  const emailCol = header.findIndex(h => h === "email" || h === "e-mail" || h === "mail");
+  const roleCol = header.findIndex(h => h === "role" || h === "type");
+  // If no header is detected, assume order: name, email, role
+  const isHeaderRow = nameCol !== -1 && emailCol !== -1;
+  const startRow = isHeaderRow ? 1 : 0;
+  const nC = isHeaderRow ? nameCol : 0;
+  const eC = isHeaderRow ? emailCol : 1;
+  const rC = isHeaderRow ? roleCol : 2;
+  const out = [];
+  for (let i = startRow; i < raw.length; i++) {
+    const r = raw[i];
+    if (!r || r.length === 0) continue;
+    const name = String(r[nC] || "").trim();
+    const email = String(r[eC] || "").trim();
+    if (!name && !email) continue;
+    const role = rC >= 0 ? String(r[rC] || "").trim().toLowerCase() : "";
+    out.push({ name, email, role });
+  }
+  return out;
+}
+
+/** Local-only placeholder password — server overwrites via invite step. */
+function randomPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < 12; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
 }
 
 function AdminUsers({ users, teams, saveUsers, back, notify }) {
@@ -1888,11 +2347,13 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   return (
     <div>
       <BackHeader back={back} title="Users" step={`${users.length} total`} />
-      <div className="flex justify-end gap-3 mt-6 mb-4">
-        <button className="btn-ghost" onClick={() => setBulkOpen(true)}><Upload size={14} /> Bulk upload CSV</button>
+      <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mt-6 mb-4">
+        <button className="btn-ghost" onClick={() => setBulkOpen(true)}><Upload size={14} /> <span className="hidden sm:inline">Bulk upload CSV</span><span className="sm:hidden">Bulk</span></button>
         <button className="btn-primary" onClick={() => setAdding(true)}><Plus size={14} /> Add user</button>
       </div>
-      <div className="card overflow-hidden">
+
+      {/* Desktop table */}
+      <div className="card overflow-hidden hidden md:block">
         <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
           <div className="col-span-3">Name</div>
           <div className="col-span-3">Email</div>
@@ -1919,6 +2380,31 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
           </div>
         ))}
       </div>
+
+      {/* Mobile stacked cards */}
+      <div className="card overflow-hidden md:hidden">
+        {users.map(u => (
+          <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {u.hasSignature && <PenTool size={11} style={{ color: "#B8894A" }} className="shrink-0" />}
+                <div className="font-medium text-sm truncate">{u.name}</div>
+              </div>
+              <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
+            </div>
+            <div className="text-xs font-mono opacity-70 truncate mb-2">{u.email}</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="pill pill-pending">{u.role}</span>
+              <span className="text-xs opacity-70">
+                {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
+                {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
+                {u.role === "admin" && "—"}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
       {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
       {bulkOpen && <BulkUserModal teams={teams} onClose={() => setBulkOpen(false)} onImport={async rows => {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }
@@ -2265,7 +2751,7 @@ function BulkUserModal({ teams, onClose, onImport }) {
   );
 }
 
-function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
+function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDocuments }) {
   const [name, setName] = useState("");
   const confirm = useConfirmation();
   const add = async () => {
@@ -2301,6 +2787,7 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
           <TeamCard key={t.id} team={t} teams={teams} users={users}
             onRemove={() => remove(t.id, t.name)}
             onChanged={async () => { await saveTeams(); await saveUsers(); }}
+            onViewDocuments={onViewDocuments ? () => onViewDocuments(t.id) : null}
             notify={notify} />
         ))}
       </div>
@@ -2311,7 +2798,7 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify }) {
 // ============================================================
 //   TEAM CARD — editable approvers + department members
 // ============================================================
-function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
+function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, notify }) {
   const [addApproverOpen, setAddApproverOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [busy, setBusy] = useState(null); // userId currently being mutated
@@ -2374,12 +2861,19 @@ function TeamCard({ team, teams, users, onRemove, onChanged, notify }) {
   return (
     <div className="card p-5">
       {/* Header */}
-      <div className="flex justify-between items-start">
-        <div className="flex items-center gap-3">
-          <Building2 size={18} />
-          <div className="font-display text-xl">{team.name}</div>
+      <div className="flex justify-between items-start gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <Building2 size={18} className="shrink-0" />
+          <div className="font-display text-lg sm:text-xl truncate">{team.name}</div>
         </div>
-        <button onClick={onRemove} className="opacity-40 hover:opacity-100" title="Delete team"><Trash2 size={13} /></button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onViewDocuments && (
+            <button onClick={onViewDocuments} className="btn-ghost text-xs" title="View this team's documents">
+              <FileText size={12} /> <span className="hidden sm:inline">Documents</span>
+            </button>
+          )}
+          <button onClick={onRemove} className="opacity-40 hover:opacity-100" title="Delete team"><Trash2 size={13} /></button>
+        </div>
       </div>
 
       {/* Approvers section */}
@@ -2584,19 +3078,58 @@ function BulkSignatureModal({ users, onClose, onDone }) {
   );
 }
 
-function AdminDocuments({ requests, users, teams, back }) {
+function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
   const [filter, setFilter] = useState("all");
-  const list = requests.filter(r => filter === "all" || r.status === filter || (filter === "approved" && r.status === "approved_pending"));
+  const [teamId, setTeamId] = useState(defaultTeamId || "all");
+  const teamName = teamId === "all" ? "All teams" : (teams.find(t => t.id === teamId)?.name || "—");
+
+  const list = requests.filter(r => {
+    if (teamId !== "all" && r.targetTeamId !== teamId) return false;
+    if (filter === "all") return true;
+    if (filter === "approved") return r.status === "approved" || r.status === "approved_pending";
+    return r.status === filter;
+  });
+
+  // Stats for the chip row
+  const inTeam = teamId === "all" ? requests : requests.filter(r => r.targetTeamId === teamId);
+  const stats = {
+    all: inTeam.length,
+    pending: inTeam.filter(r => r.status === "pending" || r.status === "approved_pending").length,
+    approved: inTeam.filter(r => r.status === "approved" || r.status === "approved_pending").length,
+    rejected: inTeam.filter(r => r.status === "rejected").length
+  };
+
   return (
     <div>
-      <BackHeader back={back} title="All documents" step={`${requests.length} total`} />
-      <div className="flex gap-2 mt-6 mb-4">
+      <BackHeader back={back} title={teamId === "all" ? "All documents" : `${teamName} · Documents`} step={`${inTeam.length} total`} />
+
+      {/* Team picker */}
+      <div className="card p-4 mt-6 flex flex-wrap items-center gap-3">
+        <Building2 size={14} className="opacity-50" />
+        <label className="text-xs tracking-wider uppercase opacity-60">Team</label>
+        <select value={teamId} onChange={e => setTeamId(e.target.value)} className="text-sm">
+          <option value="all">All teams</option>
+          {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <div className="flex-1" />
+        <div className="text-xs opacity-60 hidden sm:block">
+          <span className="font-mono">{stats.pending}</span> pending ·{" "}
+          <span className="font-mono" style={{ color: "#2D5F2F" }}>{stats.approved}</span> approved ·{" "}
+          <span className="font-mono" style={{ color: "#9B2C2C" }}>{stats.rejected}</span> rejected
+        </div>
+      </div>
+
+      {/* Status filter */}
+      <div className="flex flex-wrap gap-2 mt-4 mb-4">
         {["all", "pending", "approved", "rejected"].map(f => (
           <button key={f} onClick={() => setFilter(f)}
-            className={`px-4 py-1.5 rounded-md text-xs tracking-wider uppercase transition ${filter === f ? "" : "opacity-50"}`}
-            style={{ backgroundColor: filter === f ? "#0F1A2E" : "transparent", color: filter === f ? "#F5F1E8" : "#0F1A2E", border: "1px solid rgba(15,26,46,.18)" }}>{f}</button>
+            className={`px-3 py-1.5 rounded-md text-xs tracking-wider uppercase transition ${filter === f ? "" : "opacity-50"}`}
+            style={{ backgroundColor: filter === f ? "#0F1A2E" : "transparent", color: filter === f ? "#F5F1E8" : "#0F1A2E", border: "1px solid rgba(15,26,46,.18)" }}>
+            {f} {stats[f] > 0 && <span className="opacity-60">· {stats[f]}</span>}
+          </button>
         ))}
       </div>
+
       <div className="card overflow-hidden">
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
