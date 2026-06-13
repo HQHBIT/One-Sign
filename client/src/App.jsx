@@ -4,7 +4,8 @@ import {
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
-  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer
+  FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
+  KeyRound
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -1496,6 +1497,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [adding, setAdding] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [invitingId, setInvitingId] = useState(null);
+  const [resettingId, setResettingId] = useState(null);
   const confirm = useConfirmation();
 
   const add = async data => {
@@ -1533,6 +1535,28 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       notify(e.message || "Failed to send invite", "error");
     } finally {
       setInvitingId(null);
+    }
+  };
+  // Admin-initiated password reset. Same flow as invite but uses the
+  // "reset_password" email template so the recipient knows it was deliberate.
+  const resetPassword = async (id, name, email) => {
+    const ok = await confirm({
+      title: `Reset ${name}'s password?`,
+      message: `A new random password will be generated and emailed to ${email}. Their current password will stop working immediately.`,
+      confirmLabel: "Reset password",
+      destructive: true
+    });
+    if (!ok) return;
+    setResettingId(id);
+    try {
+      const r = await api.resetUserPassword(id);
+      if (r.delivered) notify(`Password reset email sent to ${email}`, "success");
+      else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
+      else notify(`Reset logged (SendGrid not configured). Find the password in Admin → Email log.`, "info");
+    } catch (e) {
+      notify(e.message || "Failed to reset password", "error");
+    } finally {
+      setResettingId(null);
     }
   };
 
@@ -1577,6 +1601,14 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                     : <Mail size={13} />}
                 </button>
               )}
+              <button className="opacity-50 hover:opacity-100"
+                onClick={() => resetPassword(u.id, u.name, u.email)}
+                disabled={resettingId === u.id}
+                title="Reset password — generates a fresh password and emails it">
+                {resettingId === u.id
+                  ? <span className="text-xs">…</span>
+                  : <KeyRound size={13} />}
+              </button>
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
           </div>
@@ -1601,6 +1633,12 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                     {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
                   </button>
                 )}
+                <button className="opacity-50 hover:opacity-100"
+                  onClick={() => resetPassword(u.id, u.name, u.email)}
+                  disabled={resettingId === u.id}
+                  title="Reset password">
+                  {resettingId === u.id ? <span className="text-xs">…</span> : <KeyRound size={13} />}
+                </button>
                 <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
               </div>
             </div>
