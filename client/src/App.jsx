@@ -233,6 +233,52 @@ export default function App() {
 }
 
 // ============================================================
+//   SHELL (top nav + role router)
+// ============================================================
+function Shell(props) {
+  const { user, logout, setSignature, notify } = props;
+  const [needsSig, setNeedsSig] = useState(false);
+  const [editSig, setEditSig] = useState(false);
+
+  // require signature for requestor & approver on first login
+  useEffect(() => {
+    if ((user.role === "requestor" || user.role === "approver") && !user.hasSignature) setNeedsSig(true);
+    else setNeedsSig(false);
+  }, [user.id, user.role, user.hasSignature]);
+
+  return (
+    <>
+      <TopBar user={user} logout={logout} onEditSignature={() => setEditSig(true)} />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
+        {user.role === "requestor" && <RequestorView {...props} />}
+        {user.role === "approver" && <ApproverView {...props} />}
+        {user.role === "admin" && <AdminView {...props} />}
+      </main>
+      {needsSig && (
+        <SignatureModal
+          title="Add your signature"
+          subtitle={user.role === "requestor"
+            ? "Every requestor must register a signature before submitting documents."
+            : "Every approver must register a signature before acting on requests."}
+          onCancel={null}
+          onLogout={logout}
+          onSave={async dataUrl => { await setSignature(dataUrl); setNeedsSig(false); notify("Signature saved", "success"); }}
+        />
+      )}
+      {editSig && (
+        <SignatureModal
+          title={user.hasSignature ? "Update your signature" : "Add your signature"}
+          subtitle="Drawing or uploading a new image will replace any existing signature on file."
+          onCancel={() => setEditSig(false)}
+          currentUserId={user.hasSignature ? user.id : null}
+          onSave={async dataUrl => { await setSignature(dataUrl); setEditSig(false); notify("Signature updated", "success"); }}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================================
 //   REQUESTOR VIEW
 // ============================================================
 function RequestorView(props) {
