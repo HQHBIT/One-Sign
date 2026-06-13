@@ -58,10 +58,16 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
 function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
+  // Page 1's native aspect — used so placeholders for unrendered pages reserve
+  // the right vertical space (so scroll position stays stable).
+  const [pageAspect, setPageAspect] = useState(null);
+  // How many pages have actually finished rendering, for the progress chip in
+  // the header. Doesn't need to be precise — it's UX feedback only.
+  const [renderedCount, setRenderedCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setPdf(null); setErr(null);
+    setPdf(null); setErr(null); setPageAspect(null); setRenderedCount(0);
     (async () => {
       try {
         const loadingTask = pdfjsLib.getDocument({ url: file.base64 });
@@ -69,6 +75,11 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
         if (cancelled) return;
         setPdf(doc);
         onPages?.(doc.numPages);
+        // Grab page-1 dimensions so placeholder divs can reserve correct height.
+        const p1 = await doc.getPage(1);
+        if (cancelled) return;
+        const v = p1.getViewport({ scale: 1 });
+        setPageAspect(v.width / v.height);
       } catch (e) {
         if (!cancelled) setErr(e.message || String(e));
       }
@@ -85,10 +96,15 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
     <div className="card overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "var(--c-paper)" }}>
         <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
+        {renderedCount < pdf.numPages && (
+          <div className="text-[10px] opacity-50 tracking-wider uppercase">{renderedCount} / {pdf.numPages} loaded</div>
+        )}
       </div>
       <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "var(--c-paper-2)" }}>
         {pages.map(p => (
-          <PdfPage key={p} pdf={pdf} pageNum={p}
+          <LazyPdfPage key={p} pdf={pdf} pageNum={p}
+            pageAspect={pageAspect}
+            onRendered={() => setRenderedCount(c => c + 1)}
             rotation={0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
@@ -103,7 +119,74 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   );
 }
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null }) {
+// ============================================================
+//   LAZY PDF PAGE
+//   Wraps PdfPage with an IntersectionObserver so we don't try to
+//   render all 63 (or 200) pages simultaneously — which crashes
+//   mobile browsers. Placeholder reserves the right vertical space
+//   using page 1's aspect ratio so scroll position stays stable.
+// ============================================================
+function LazyPdfPage({ pageAspect, onRendered, ...pageProps }) {
+  const placeholderRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+  const [renderedOnce, setRenderedOnce] = useState(false);
+
+  useEffect(() => {
+    if (visible) return;
+    const el = placeholderRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        obs.disconnect();
+      }
+    }, { rootMargin: "400px 0px" }); // start rendering 400px before entering viewport
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visible]);
+
+  const handleRendered = () => {
+    if (renderedOnce) return;
+    setRenderedOnce(true);
+    onRendered?.();
+  };
+
+  if (visible) {
+    return <PdfPage {...pageProps} onRendered={handleRendered} />;
+  }
+
+  // Placeholder: same width as a rendered page, height from page-1 aspect
+  return (
+    <div ref={placeholderRef}
+      data-page-num={pageProps.pageNum}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: 12
+      }}>
+      <div style={{
+        width: "min(800px, calc(100% - 24px))",
+        aspectRatio: pageAspect ? String(pageAspect) : "1 / 1.4142",
+        background: "rgba(15,26,46,.04)",
+        border: "1px dashed rgba(15,26,46,.12)",
+        borderRadius: 4,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "rgba(15,26,46,.4)",
+        fontSize: 11,
+        letterSpacing: ".08em",
+        textTransform: "uppercase"
+      }}>
+        Page {pageProps.pageNum}
+      </div>
+      <div className="text-[10px] tracking-widest uppercase opacity-30 mt-2">Page {pageProps.pageNum}</div>
+    </div>
+  );
+}
+
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, onRendered }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
@@ -159,6 +242,7 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
       setSize({ w: cssW, h: cssH });
       try {
         await page.render({ canvasContext: ctx, viewport }).promise;
+        if (!cancelled) onRendered?.();
       } catch (e) { /* render aborted */ }
     })();
     return () => { cancelled = true; };
@@ -225,7 +309,7 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   })();
 
   return (
-    <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
+    <div ref={wrapRef} data-page-num={pageNum} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
       <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)" }}
            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={() => setDrawing(null)}>
         <canvas ref={canvasRef} style={{ display: "block", cursor: editable ? "crosshair" : "default" }} />

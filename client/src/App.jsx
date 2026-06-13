@@ -745,9 +745,33 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
     : baseMarkers;
 
   const jumpToSig = () => {
+    // If the page containing the signature is already rendered, scroll to the
+    // highlighted marker itself. Otherwise (lazy viewer hasn't mounted that
+    // page's canvas yet — common in long PDFs) scroll to the page's placeholder
+    // by its data-page-num attribute. Once it's in view, the IntersectionObserver
+    // in the viewer will mount the real PdfPage and the marker will appear.
     const el = bodyRef.current?.querySelector("[data-sig-jump]");
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    else bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    // Find which page the highlighted (or first) marker lives on
+    const target = markers.find(m => m.highlight) || markers[0];
+    const pageNum = target?.page;
+    if (pageNum != null) {
+      const pageEl = bodyRef.current?.querySelector(`[data-page-num="${pageNum}"]`);
+      if (pageEl) {
+        pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        // After the page renders, try to centre on the marker
+        setTimeout(() => {
+          const m = bodyRef.current?.querySelector("[data-sig-jump]");
+          if (m) m.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 800);
+        return;
+      }
+    }
+    // Last resort: scroll to the bottom of the viewer
+    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
   };
 
   return (
@@ -1403,6 +1427,7 @@ function randomPassword() {
 function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [adding, setAdding] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [invitingId, setInvitingId] = useState(null);
   const confirm = useConfirmation();
 
   const add = async data => {
@@ -1419,6 +1444,28 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
     if (!ok) return;
     try { await api.deleteUser(id); notify("User removed", "success"); await saveUsers(); }
     catch (e) { notify(e.message, "error"); }
+  };
+  // Generates a fresh random password on the server, hashes it, and emails the
+  // plaintext to the user. Use this to (re)send sign-in credentials at any time.
+  const sendInvite = async (id, name, email) => {
+    const ok = await confirm({
+      title: `Send invite to ${name}?`,
+      message: `A new random password will be generated and emailed to ${email}. Their current password will stop working.`,
+      confirmLabel: "Send invite",
+      destructive: false
+    });
+    if (!ok) return;
+    setInvitingId(id);
+    try {
+      const r = await api.inviteUser(id);
+      if (r.delivered) notify(`Invite email sent to ${email}`, "success");
+      else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
+      else notify(`Invite logged (SendGrid not configured). Find the password in Admin → Email log.`, "info");
+    } catch (e) {
+      notify(e.message || "Failed to send invite", "error");
+    } finally {
+      setInvitingId(null);
+    }
   };
 
   return (
@@ -1451,7 +1498,17 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
               {u.role === "admin" && "—"}
             </div>
-            <div className="col-span-1 text-right">
+            <div className="col-span-1 text-right flex items-center justify-end gap-2">
+              {u.role !== "admin" && (
+                <button className="opacity-50 hover:opacity-100"
+                  onClick={() => sendInvite(u.id, u.name, u.email)}
+                  disabled={invitingId === u.id}
+                  title="Send / resend invite — generates a fresh password and emails it">
+                  {invitingId === u.id
+                    ? <span className="text-xs">…</span>
+                    : <Mail size={13} />}
+                </button>
+              )}
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
           </div>
@@ -1467,7 +1524,17 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                 {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} className="shrink-0" />}
                 <div className="font-medium text-sm truncate">{u.name}</div>
               </div>
-              <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
+              <div className="flex items-center gap-2 shrink-0">
+                {u.role !== "admin" && (
+                  <button className="opacity-50 hover:opacity-100"
+                    onClick={() => sendInvite(u.id, u.name, u.email)}
+                    disabled={invitingId === u.id}
+                    title="Send / resend invite">
+                    {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
+                  </button>
+                )}
+                <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
+              </div>
             </div>
             <div className="text-xs font-mono opacity-70 truncate mb-2">{u.email}</div>
             <div className="flex items-center gap-2 flex-wrap">
