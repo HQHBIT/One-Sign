@@ -1,0 +1,32 @@
+HQHB SignFlow — Team Onboarding Form,,,,
+Filled in by:,[Department head name],,Date:,[YYYY-MM-DD]
+Department / Team name:,[e.g. Finance Team],,,
+,,,,
+INSTRUCTIONS,,,,
+1. Fill in the table below — one row per person who should have an account.,,,,
+2. Roles:,requestor = can submit documents for approval,,,
+,approver = can sign documents routed to this team,,,
+,(leave blank to default to requestor),,,
+3. Save this file when done. Send it back to it@hqhb.in.,,,,
+4. You'll receive a confirmation once everyone has been onboarded and emails sent.,,,,
+,,,,
+,,,,
+TEAM MEMBERS,,,,
+name,email,role,designation (optional),phone (optional)
+[Full Name],[work.email@hqhb.in],requestor,[Manager / Senior Exec / etc.],[+91-xxxxxxxxxx]
+[Full Name],[work.email@hqhb.in],approver,[Director / VP / etc.],[+91-xxxxxxxxxx]
+[Full Name],[work.email@hqhb.in],requestor,,
+[Full Name],[work.email@hqhb.in],requestor,,
+[Full Name],[work.email@hqhb.in],approver,,
+[Full Name],[work.email@hqhb.in],requestor,,
+[Full Name],[work.email@hqhb.in],requestor,,
+[Full Name],[work.email@hqhb.in],,,
+[Full Name],[work.email@hqhb.in],,,
+[Full Name],[work.email@hqhb.in],,,
+[Full Name],[work.email@hqhb.in],,,
+[Full Name],[work.email@hqhb.in],,,
+,,,,
+ADDITIONAL NOTES (optional),,,,
+[Anything IT should know — special access, urgency, preferred sign-in time...]
+,,,,
+END OF FORM,,,,
