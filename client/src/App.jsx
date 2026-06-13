@@ -496,7 +496,11 @@ function PreviewDrawer({ req, onClose, users, teams }) {
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
       <div className="bg-white w-full max-w-4xl overflow-auto anim-in" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
-        <div className="p-4 sm:p-6 flex items-center justify-between gap-2 border-b" style={{ borderColor: "var(--c-ink-10)" }}>
+        <div className="p-4 sm:p-6 flex items-center justify-between gap-2 border-b"
+          style={{
+            borderColor: "var(--c-ink-10)",
+            paddingTop: "max(16px, env(safe-area-inset-top))"
+          }}>
           <div className="min-w-0 flex-1">
             <div className="font-display text-lg sm:text-2xl truncate">{req.fileName}</div>
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 sm:mt-1 truncate">
@@ -779,7 +783,11 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
       <div className="w-full max-w-4xl flex flex-col anim-in" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
 
         {/* ── Fixed header with Jump-to-Signature ── */}
-        <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-2 sm:gap-3 border-b shrink-0" style={{ borderColor: "var(--c-ink-10)" }}>
+        <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-2 sm:gap-3 border-b shrink-0"
+          style={{
+            borderColor: "var(--c-ink-10)",
+            paddingTop: "max(12px, env(safe-area-inset-top))"
+          }}>
           <div className="min-w-0 flex-1">
             <div className="font-display text-base sm:text-xl truncate">{req.fileName}</div>
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 truncate">
@@ -811,7 +819,12 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
         {/* ── Pinned action bar(s) ── */}
         {canApprove && (
-          <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
+          <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3"
+            style={{
+              borderColor: "var(--c-ink-10)",
+              backgroundColor: "var(--c-cream)",
+              paddingBottom: "max(12px, env(safe-area-inset-bottom))"
+            }}>
             {previewing ? (
               <>
                 <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>

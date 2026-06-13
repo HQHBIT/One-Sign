@@ -3,7 +3,16 @@ import { PenTool, LogOut } from "lucide-react";
 export function TopBar({ user, logout, onEditSignature }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   return (
-    <header className="border-b" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-paper)" }}>
+    <header className="border-b sticky top-0 z-30"
+      style={{
+        borderColor: "var(--c-ink-10)",
+        backgroundColor: "var(--c-paper)",
+        // Honour iPhone notch + safe areas so content isn't clipped on devices
+        // with display cutouts. env(safe-area-inset-*) is no-op on desktop.
+        paddingTop: "env(safe-area-inset-top, 0px)",
+        paddingLeft: "env(safe-area-inset-left, 0px)",
+        paddingRight: "env(safe-area-inset-right, 0px)"
+      }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-3 sm:py-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden shrink-0">

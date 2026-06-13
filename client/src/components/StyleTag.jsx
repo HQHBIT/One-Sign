@@ -44,9 +44,16 @@ export function StyleTag() {
       .tile-hover { transition: transform .2s ease, box-shadow .2s ease; }
       .tile-hover:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -14px var(--c-ink-25); }
       .ink-grad { background: linear-gradient(135deg, var(--c-ink) 0%, var(--c-ink-soft) 100%); }
+      /* font-size 16px on small screens so iOS Safari doesn't auto-zoom
+         when an input is focused. Scaled down for tighter desktop layout. */
       input[type="text"], input[type="email"], input[type="password"], textarea, select {
         background: var(--c-paper); border: 1px solid var(--c-ink-18); border-radius: 6px;
-        padding: 10px 12px; font-size: 14px; color: var(--c-ink); outline: none;
+        padding: 10px 12px; font-size: 16px; color: var(--c-ink); outline: none;
+      }
+      @media (min-width: 640px) {
+        input[type="text"], input[type="email"], input[type="password"], textarea, select {
+          font-size: 14px;
+        }
       }
       input:focus, textarea:focus, select:focus { border-color: var(--c-gold); box-shadow: 0 0 0 3px var(--c-gold-15); }
       .btn-primary { background: var(--c-ink); color: var(--c-cream); padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all .15s; border: 1px solid var(--c-ink); }
@@ -64,6 +71,20 @@ export function StyleTag() {
       .pill-approved-pending { background: var(--pill-approved-pending-bg); color: var(--c-earth); }
       .pill-rejected { background: var(--pill-rejected-bg); color: #7A2222; }
       .card { background: var(--c-paper); border: 1px solid var(--c-ink-10); border-radius: 10px; }
+      /* Smooth scrolling everywhere — feels better on iOS */
+      html, body { -webkit-overflow-scrolling: touch; overflow-x: hidden; }
+      /* Prevent layout shift caused by scrollbar appear/disappear on desktop */
+      html { scrollbar-gutter: stable; }
+      /* Remove tap-highlight blue flash on iOS */
+      * { -webkit-tap-highlight-color: transparent; }
+      /* Ensure images never overflow their container */
+      img { max-width: 100%; height: auto; }
+      /* Buttons should be at least 40x40 px so they're easy to hit on touch */
+      @media (max-width: 639px) {
+        button:not([class*="opacity-"]):not(.font-mono):not([style*="position: absolute"]) {
+          min-height: 40px;
+        }
+      }
       .divider-rule { height: 1px; background: linear-gradient(to right, transparent, var(--c-ink-18), transparent); }
       @keyframes slideIn { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       .anim-in { animation: slideIn .3s ease; }
