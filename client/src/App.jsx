@@ -1065,6 +1065,39 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
   const updateRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
   const removeRow = (i) => setRows(rs => rs.filter((_, idx) => idx !== i));
 
+  // Build and download a sample .xlsx with the exact column layout the parser
+  // expects, plus a couple of illustrative rows. Saves the admin from having
+  // to remember or copy the format from the on-screen hint.
+  const downloadTemplate = async (fmt = "xlsx") => {
+    const headers = ["name", "email", "role"];
+    const sample = [
+      ["Jane Finance",   "jane.finance@hqhb.in",   "approver"],
+      ["Karim Ops",      "karim.ops@hqhb.in",      "requestor"],
+      ["Priya Iyer",     "priya.iyer@hqhb.in",     "requestor"]
+    ];
+    try {
+      if (fmt === "csv") {
+        const csv = [headers, ...sample].map(r => r.join(",")).join("\r\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+        triggerDownload(blob, "team-members-template.csv");
+        return;
+      }
+      const XLSX = await import("xlsx");
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+      // Tidy column widths so the file opens nicely in Excel
+      ws["!cols"] = [{ wch: 22 }, { wch: 32 }, { wch: 12 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Members");
+      const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([new Uint8Array(out)], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      triggerDownload(blob, "team-members-template.xlsx");
+    } catch (err) {
+      notify(`Could not build template: ${err.message}`, "error");
+    }
+  };
+
   const submit = async () => {
     setBusy(true);
     setResultLog(null);
@@ -1227,8 +1260,16 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
                 <Upload size={13} /> Choose file
                 <input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={handleFile} />
               </label>
+              <button className="btn-ghost" onClick={() => downloadTemplate("xlsx")}
+                title="Pre-filled Excel template with example rows">
+                <Download size={13} /> Download template
+              </button>
               <button className="btn-ghost" onClick={addEmptyRow}><Plus size={13} /> Add row manually</button>
               {fileName && <div className="text-xs opacity-60 font-mono">{fileName}</div>}
+            </div>
+            <div className="text-xs opacity-50 mt-2">
+              Tip: download the template, fill it in, then upload it back.
+              Need CSV instead? <button className="underline" onClick={() => downloadTemplate("csv")}>get the .csv template</button>.
             </div>
           </div>
 
@@ -1435,6 +1476,20 @@ function randomPassword() {
   let out = "";
   for (let i = 0; i < 12; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
   return out;
+}
+
+/** Fires a browser download for a Blob with the given filename. Used by the
+ *  team-onboarding wizard to deliver the Excel / CSV template. */
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Give Safari a moment to actually start the download before revoking
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
 function AdminUsers({ users, teams, saveUsers, back, notify }) {
