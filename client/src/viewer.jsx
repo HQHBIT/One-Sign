@@ -176,7 +176,11 @@ function LazyPdfPage({ pageAspect, onRendered, ...pageProps }) {
     return <PdfPage {...pageProps} onRendered={handleRendered} />;
   }
 
-  // Placeholder: same width as a rendered page, height from page-1 aspect
+  // Placeholder: must match the rendered PdfPage width EXACTLY so there's no
+  // horizontal shift when a page mounts. Rendered page width is `clientWidth
+  // - 24` (padX = 24 inside PdfPage). The wrapper here uses the same 12px
+  // padding on each side, and the inner block fills 100% — so its rendered
+  // CSS width matches PdfPage's canvas CSS width pixel-for-pixel.
   return (
     <div ref={placeholderRef}
       data-page-num={pageProps.pageNum}
@@ -184,23 +188,24 @@ function LazyPdfPage({ pageAspect, onRendered, ...pageProps }) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        padding: 12
+        padding: 12,
+        width: "100%"
       }}>
       <div style={{
-        width: "min(800px, calc(100% - 24px))",
+        width: "100%",
         aspectRatio: pageAspect ? String(pageAspect) : "1 / 1.4142",
-        background: "rgba(15,26,46,.04)",
-        border: "1px dashed rgba(15,26,46,.12)",
-        borderRadius: 4,
+        background: "var(--c-paper)",
+        boxShadow: "0 2px 12px rgba(0,0,0,.06)",
+        borderRadius: 2,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        color: "rgba(15,26,46,.4)",
+        color: "rgba(15,26,46,.35)",
         fontSize: 11,
         letterSpacing: ".08em",
         textTransform: "uppercase"
       }}>
-        Page {pageProps.pageNum}
+        Page {pageProps.pageNum} · loading…
       </div>
       <div className="text-[10px] tracking-widest uppercase opacity-30 mt-2">Page {pageProps.pageNum}</div>
     </div>
