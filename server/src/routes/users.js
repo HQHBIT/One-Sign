@@ -11,7 +11,9 @@ import { sendEmail } from "../email.js";
 // Generate a friendly random password — 10 chars, mixed case + digits, no easily
 // confused glyphs (no 0/O/1/l/I). Used by the invite endpoint so admins never
 // need to know or transcribe passwords; the user gets it via email.
-function genTempPassword() {
+// Exported so the auth route can reuse the same generator for the public
+// /forgot-password flow.
+export function genTempPassword() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
   let pwd = "";
   for (let i = 0; i < 10; i++) {
@@ -217,6 +219,30 @@ router.post("/bulk-invite", authRequired, requireRole("admin"), async (req, res,
       }
     }
     res.json({ results, total: ids.length, succeeded: results.filter(r => r.ok).length });
+  } catch (e) { next(e); }
+});
+
+// ---------- admin: reset a user's password ----------
+// POST /api/users/:id/reset-password
+// Generates a fresh random temp password, hashes it, and emails the plaintext
+// to the user. Admin-only. The "reset_password" template makes it clear an
+// administrator initiated the change (vs. user-initiated forgot-password).
+router.post("/:id/reset-password", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+
+    const password = genTempPassword();
+    const hash = bcrypt.hashSync(password, 10);
+    await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+
+    const signInUrl = req.protocol + "://" + req.get("host");
+    const result = await sendEmail({
+      to: target.email,
+      template: "reset_password",
+      ctx: { name: target.name, email: target.email, password, signInUrl, byAdmin: true }
+    });
+    res.json({ ok: true, ...result });
   } catch (e) { next(e); }
 });
 

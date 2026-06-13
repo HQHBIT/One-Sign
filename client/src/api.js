@@ -52,6 +52,9 @@ export const api = {
     return Promise.resolve();
   },
   me() { return this.fetch("/api/auth/me"); },
+  forgotPassword(email) {
+    return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+  },
 
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
@@ -73,6 +76,9 @@ export const api = {
   },
   bulkInvite(ids) {
     return this.fetch("/api/users/bulk-invite", { method: "POST", body: JSON.stringify({ ids }) });
+  },
+  resetUserPassword(userId) {
+    return this.fetch(`/api/users/${userId}/reset-password`, { method: "POST" });
   },
 
   setMySignature(dataUrl) {

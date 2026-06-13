@@ -46,6 +46,25 @@ const templates = {
       ``,
       `— HQHB SignFlow`
     ].filter(Boolean).join("\n")
+  }),
+  reset_password: c => ({
+    subject: `Your HQHB SignFlow password has been reset`,
+    body: [
+      `Hello ${c.name},`,
+      ``,
+      c.byAdmin
+        ? `An administrator has reset your password on HQHB SignFlow.`
+        : `You (or someone with your email) requested a password reset on HQHB SignFlow.`,
+      ``,
+      `Sign-in URL:  ${c.signInUrl || "https://signflow.hqhb.in"}`,
+      `Email:        ${c.email}`,
+      `New password: ${c.password}`,
+      ``,
+      `If you didn't request this, please contact your administrator immediately —`,
+      `your old password will no longer work.`,
+      ``,
+      `— HQHB SignFlow`
+    ].join("\n")
   })
 };
 
