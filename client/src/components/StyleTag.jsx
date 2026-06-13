@@ -101,6 +101,8 @@ export function StyleTag() {
       .fade-up-d1 { animation-delay: .12s; }
       .fade-up-d2 { animation-delay: .24s; }
       .fade-up-d3 { animation-delay: .36s; }
+      @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+      .anim-spin { animation: spin 1s linear infinite; }
     `}</style>
   );
 }
