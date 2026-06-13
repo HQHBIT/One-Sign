@@ -1512,7 +1512,31 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   // Set of userIds whose plaintext password is currently revealed in the UI.
   // Default is hidden — admins click the eye icon to reveal.
   const [revealedIds, setRevealedIds] = useState(() => new Set());
+  const [refreshing, setRefreshing] = useState(false);
   const confirm = useConfirmation();
+
+  // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
+  // password column in sync with users who change their own password from a
+  // different tab / session. Tab-focus also triggers a refresh at the App
+  // level — this poll covers the "stayed on this tab" case.
+  useEffect(() => {
+    const id = setInterval(() => {
+      saveUsers().catch(() => {});
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [saveUsers]);
+
+  const manualRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await saveUsers();
+      notify("User list refreshed", "success");
+    } catch (e) {
+      notify(e.message || "Refresh failed", "error");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const toggleReveal = (id) => setRevealedIds(prev => {
     const next = new Set(prev);
@@ -1585,8 +1609,13 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
 
   return (
     <div>
-      <BackHeader back={back} title="Users" step={`${users.length} total`} />
+      <BackHeader back={back} title="Users" step={`${users.length} total · auto-refresh 20s`} />
       <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mt-6 mb-4">
+        <button className="btn-ghost" onClick={manualRefresh} disabled={refreshing}
+          title="Refresh user list now">
+          <RefreshCw size={14} className={refreshing ? "anim-spin" : ""} />
+          <span className="hidden sm:inline">{refreshing ? "Refreshing…" : "Refresh"}</span>
+        </button>
         <button className="btn-ghost" onClick={() => setBulkOpen(true)}><Upload size={14} /> <span className="hidden sm:inline">Bulk upload CSV</span><span className="sm:hidden">Bulk</span></button>
         <button className="btn-primary" onClick={() => setAdding(true)}><Plus size={14} /> Add user</button>
       </div>
