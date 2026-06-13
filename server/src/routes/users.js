@@ -80,10 +80,14 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
     const id = uid("u");
     const hash = bcrypt.hashSync(password, 10);
     const teamId = role === "requestor" ? (team || null) : null;
+    const now = Date.now();
 
+    // Persist the plaintext password chosen at creation so admins can recover
+    // it later from the Users page without doing a reset. Cleared on next
+    // reset / invite / forgot-password.
     await execute(
-      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [id, email, hash, name, role, teamId, Date.now()]
+      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, email, hash, name, role, teamId, now, password, now]
     );
 
     if (role === "approver" && Array.isArray(signingAuthorityTeams)) {
@@ -116,8 +120,8 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
         const id = uid("u");
         const hash = bcrypt.hashSync(r.password, 10);
         await conn.execute(
-          "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now]
+          "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now, r.password, now]
         );
         if (r.role === "approver" && r.teams) {
           const tids = r.teams.split("|").map(s => s.trim()).filter(Boolean);
@@ -163,7 +167,10 @@ router.post("/:id/invite", authRequired, requireRole("admin"), async (req, res, 
 
     const password = genTempPassword();
     const hash = bcrypt.hashSync(password, 10);
-    await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+    await execute(
+      "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
+      [hash, password, Date.now(), target.id]
+    );
 
     const signInUrl = req.protocol + "://" + req.get("host");
     const result = await sendEmail({
@@ -205,7 +212,10 @@ router.post("/bulk-invite", authRequired, requireRole("admin"), async (req, res,
 
         const password = genTempPassword();
         const hash = bcrypt.hashSync(password, 10);
-        await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+        await execute(
+          "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
+          [hash, password, Date.now(), target.id]
+        );
 
         const signInUrl = req.protocol + "://" + req.get("host");
         const r = await sendEmail({
@@ -234,7 +244,10 @@ router.post("/:id/reset-password", authRequired, requireRole("admin"), async (re
 
     const password = genTempPassword();
     const hash = bcrypt.hashSync(password, 10);
-    await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+    await execute(
+      "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
+      [hash, password, Date.now(), target.id]
+    );
 
     const signInUrl = req.protocol + "://" + req.get("host");
     const result = await sendEmail({

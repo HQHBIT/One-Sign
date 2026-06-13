@@ -212,6 +212,17 @@ async function runSchema() {
   // requestor's marker box can snap to that aspect at placement time.
   await tryExec(`ALTER TABLE users ADD COLUMN signature_aspect DOUBLE DEFAULT NULL`);
 
+  // Plaintext copy of the most recent temp password set by the reset / invite
+  // / forgot-password flows. Kept ALONGSIDE the bcrypt hash (which is what we
+  // actually use for authentication). Visible to admins on the Users page so
+  // they can share credentials manually with users who don't have email
+  // access. Persists until the next reset on that user.
+  // SECURITY NOTE: This is an internal-tool tradeoff. Standard apps never
+  // store plaintext passwords. If this code is repurposed for a public
+  // product, remove these columns and rely on the email log instead.
+  await tryExec(`ALTER TABLE users ADD COLUMN last_temp_password VARCHAR(64) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN last_temp_password_at BIGINT DEFAULT NULL`);
+
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
   await tryExec(`ALTER TABLE requests MODIFY COLUMN requestor_id VARCHAR(64) NULL`);
@@ -286,7 +297,11 @@ export async function hydrateUser(row) {
     team: row.team_id,
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
-    signingAuthorityTeams: auth.map(r => r.team_id)
+    signingAuthorityTeams: auth.map(r => r.team_id),
+    // Plaintext most-recent temp password — only meaningful right after reset
+    // / invite / forgot-password. Falls back to null otherwise.
+    lastTempPassword: row.last_temp_password || null,
+    lastTempPasswordAt: row.last_temp_password_at != null ? Number(row.last_temp_password_at) : null
   };
 }
 
