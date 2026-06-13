@@ -76,17 +76,17 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
     return () => { cancelled = true; };
   }, [file.base64]);
 
-  if (err) return <div className="card p-6 text-sm" style={{ color: "#9B2C2C" }}>Could not render PDF: {err}</div>;
+  if (err) return <div className="card p-6 text-sm" style={{ color: "var(--c-rust)" }}>Could not render PDF: {err}</div>;
   if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
 
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
 
   return (
     <div className="card overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "#FAF7F0" }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "var(--c-paper)" }}>
         <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
       </div>
-      <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "#E8E3D5" }}>
+      <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "var(--c-paper-2)" }}>
         {pages.map(p => (
           <PdfPage key={p} pdf={pdf} pageNum={p}
             rotation={0}
