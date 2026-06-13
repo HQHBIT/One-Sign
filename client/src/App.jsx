@@ -100,23 +100,24 @@ export default function App() {
     }
   }, [user]);
 
-  // ---- boot: restore session if the httpOnly cookie is still valid ----
+  // ---- boot: restore session if token exists ----
   useEffect(() => {
     (async () => {
       api.onAuthExpired(() => { setUser(null); notify("Session expired — please sign in again", "error"); });
-      // Always try /me — the browser sends the cookie automatically. If we get a
-      // 401, the user isn't signed in and the login screen renders.
-      try {
-        const me = await api.me();
-        setUser(me.user);
-        const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
-        setTeams(t || []); setRequests(r || []);
-        if (me.user.role === "admin") {
-          const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
-          setUsers(u || []); setEmails(e || []);
+      const token = api.init();
+      if (token) {
+        try {
+          const me = await api.me();
+          setUser(me.user);
+          const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
+          setTeams(t || []); setRequests(r || []);
+          if (me.user.role === "admin") {
+            const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
+            setUsers(u || []); setEmails(e || []);
+          }
+        } catch {
+          api.setToken(null);
         }
-      } catch {
-        // No active session — login screen will render
       }
       setBooted(true);
     })();
@@ -147,10 +148,8 @@ export default function App() {
   // ---- auth actions ----
   const login = async (email, password) => {
     try {
-      // Server sets an httpOnly session cookie on success. The token in the
-      // response body is ignored on the client now — preserved only for
-      // backwards compatibility with older deployments.
-      const { user: u } = await api.login(email, password);
+      const { token, user: u } = await api.login(email, password);
+      api.setToken(token);
       setUser(u);
       await refresh(u);
       notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
@@ -161,7 +160,7 @@ export default function App() {
     }
   };
   const logout = async () => {
-    await api.logout();
+    api.setToken(null);
     setUser(null); setTeams([]); setUsers([]); setRequests([]); setEmails([]);
   };
 

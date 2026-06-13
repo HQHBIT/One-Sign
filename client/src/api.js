@@ -1,35 +1,34 @@
-// ============================================================
-//   API wrapper for SignFlow client
-//   ------------------------------------------------------------
-//   Authentication is via an httpOnly session cookie set by the
-//   server at /api/auth/login. The cookie is sent automatically
-//   on every request because every fetch uses credentials:"include".
-//   The client never reads, writes, or stores the JWT itself.
-// ============================================================
+// API wrapper for SignFlow client.
+// Bearer-token auth via localStorage. Sent on every request as
+// Authorization: Bearer <token>. (httpOnly cookie auth was reverted
+// pending diagnosis — see commit history.)
 
+const TOKEN_KEY = "sf_token";
+
+let _token = null;
 let _onLogout = null;
 
 export const api = {
-  // -------- session lifecycle (kept for API stability) --------
-  /** Returns true if we appear to have a session — best-effort only.
-      Real validity is determined by the server when /me is called. */
-  init() { /* nothing to restore — cookies are managed by the browser */ return true; },
-  setToken(_) { /* deprecated — cookies handle auth */ },
-  getToken() { return null; },
+  // -------- token management --------
+  init() { _token = localStorage.getItem(TOKEN_KEY); return _token; },
+  setToken(t) { _token = t; if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); },
+  getToken() { return _token; },
   onAuthExpired(fn) { _onLogout = fn; },
 
   // -------- low-level fetch --------
   async fetch(path, opts = {}) {
     const headers = { ...(opts.headers || {}) };
+    if (_token) headers.Authorization = `Bearer ${_token}`;
     if (opts.body && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
       headers["Content-Type"] = "application/json";
     }
-    const res = await fetch(path, { ...opts, headers, credentials: "include" });
+    const res = await fetch(path, { ...opts, headers });
     const ct = res.headers.get("content-type") || "";
     // Auth endpoints return 401 for bad credentials — surface the real error message
     // instead of treating it as session expiry.
     const isAuthRequest = path.startsWith("/api/auth/login");
     if (res.status === 401 && !isAuthRequest) {
+      _token = null; localStorage.removeItem(TOKEN_KEY);
       _onLogout?.();
       throw Object.assign(new Error("Session expired"), { status: 401 });
     }
@@ -48,8 +47,9 @@ export const api = {
     return this.fetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
   },
   logout() {
-    // Best-effort: even if the server call fails, the client treats us as logged out.
-    return this.fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    // Local-only — server has no /logout endpoint on this branch.
+    this.setToken(null);
+    return Promise.resolve();
   },
   me() { return this.fetch("/api/auth/me"); },
 
@@ -138,7 +138,3 @@ export const api = {
 };
 
 api.init();
-
-// One-time cleanup: drop any lingering localStorage token from the previous
-// (Bearer-token) auth scheme. The cookie auth handles everything now.
-try { localStorage.removeItem("sf_token"); } catch {}

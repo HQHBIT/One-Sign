@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -31,10 +30,7 @@ async function main() {
   }
 
   const app = express();
-  // credentials: true is required so the browser sends the httpOnly session
-  // cookie on cross-origin requests during local dev (Vite on :5173, API on :5001).
-  app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
-  app.use(cookieParser());
+  app.use(cors({ origin: CLIENT_ORIGIN, credentials: false }));
   app.use(express.json({ limit: "5mb" }));
   app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
