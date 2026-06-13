@@ -28,6 +28,24 @@ const templates = {
   reminder: c => ({
     subject: `Reminder: "${c.fileName}" awaiting approval`,
     body: `Hello ${c.approverName},\n\nThis is a reminder from ${c.requestorName} about "${c.fileName}" pending your approval.\n\n— HQHB SignFlow`
+  }),
+  welcome: c => ({
+    subject: `Welcome to HQHB SignFlow — your account is ready`,
+    body: [
+      `Hello ${c.name},`,
+      ``,
+      `An account has been created for you on HQHB SignFlow.`,
+      c.teamName ? `You have been added to the ${c.teamName} team${c.isApprover ? " as a signing authority" : ""}.` : null,
+      ``,
+      `Sign-in URL:  ${c.signInUrl || "https://signflow.hqhb.in"}`,
+      `Email:        ${c.email}`,
+      `Password:     ${c.password}`,
+      ``,
+      `Please sign in and change your password once you're set up.`,
+      c.isApprover ? `As an approver, you will also need to register your signature on first sign-in.` : null,
+      ``,
+      `— HQHB SignFlow`
+    ].filter(Boolean).join("\n")
   })
 };
 

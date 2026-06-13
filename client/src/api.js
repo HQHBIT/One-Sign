@@ -62,6 +62,12 @@ export const api = {
   setUserTeam(userId, teamId) {
     return this.fetch(`/api/users/${userId}/team`, { method: "PUT", body: JSON.stringify({ teamId: teamId || null }) });
   },
+  inviteUser(userId) {
+    return this.fetch(`/api/users/${userId}/invite`, { method: "POST" });
+  },
+  bulkInvite(ids) {
+    return this.fetch("/api/users/bulk-invite", { method: "POST", body: JSON.stringify({ ids }) });
+  },
 
   setMySignature(dataUrl) {
     return this.fetch("/api/users/me/signature", {

@@ -6,6 +6,19 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
+import { sendEmail } from "../email.js";
+
+// Generate a friendly random password — 10 chars, mixed case + digits, no easily
+// confused glyphs (no 0/O/1/l/I). Used by the invite endpoint so admins never
+// need to know or transcribe passwords; the user gets it via email.
+function genTempPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let pwd = "";
+  for (let i = 0; i < 10; i++) {
+    pwd += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return pwd;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
@@ -120,6 +133,90 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
       conn.release();
     }
     res.json({ imported });
+  } catch (e) { next(e); }
+});
+
+// ---------- send a single welcome / invite email ----------
+// POST /api/users/:id/invite
+// Generates a fresh random temp password, hashes it, and emails the plaintext
+// to the user. Admin-only. Used by the team-onboarding flow to bulk-send.
+router.post("/:id/invite", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+
+    // Look up team and signing-authority context for the email body
+    let teamName = null;
+    if (target.team_id) {
+      const t = await queryOne("SELECT name FROM teams WHERE id = ?", [target.team_id]);
+      teamName = t?.name || null;
+    }
+    const [authRows] = await getPool().execute(
+      "SELECT t.name FROM signing_authority sa JOIN teams t ON t.id = sa.team_id WHERE sa.user_id = ?",
+      [target.id]
+    );
+    const authNames = authRows.map(r => r.name);
+    const isApprover = target.role === "approver";
+    if (isApprover && authNames.length > 0) teamName = authNames.join(", ");
+
+    const password = genTempPassword();
+    const hash = bcrypt.hashSync(password, 10);
+    await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+
+    const signInUrl = req.protocol + "://" + req.get("host");
+    const result = await sendEmail({
+      to: target.email,
+      template: "welcome",
+      ctx: { name: target.name, email: target.email, password, teamName, isApprover, signInUrl }
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// ---------- bulk invite ----------
+// POST /api/users/bulk-invite  body: { ids: ["u_...", ...] }
+// Fires the welcome email for every id in the list. Stops at no individual
+// failure — returns a per-id status report so the UI can show which succeeded.
+router.post("/bulk-invite", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (ids.length === 0) return res.status(400).json({ error: "ids array required" });
+
+    const results = [];
+    for (const id of ids) {
+      try {
+        const target = await queryOne("SELECT * FROM users WHERE id = ?", [id]);
+        if (!target) { results.push({ id, ok: false, error: "User not found" }); continue; }
+
+        let teamName = null;
+        if (target.team_id) {
+          const t = await queryOne("SELECT name FROM teams WHERE id = ?", [target.team_id]);
+          teamName = t?.name || null;
+        }
+        const [authRows] = await getPool().execute(
+          "SELECT t.name FROM signing_authority sa JOIN teams t ON t.id = sa.team_id WHERE sa.user_id = ?",
+          [target.id]
+        );
+        const authNames = authRows.map(r => r.name);
+        const isApprover = target.role === "approver";
+        if (isApprover && authNames.length > 0) teamName = authNames.join(", ");
+
+        const password = genTempPassword();
+        const hash = bcrypt.hashSync(password, 10);
+        await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, target.id]);
+
+        const signInUrl = req.protocol + "://" + req.get("host");
+        const r = await sendEmail({
+          to: target.email,
+          template: "welcome",
+          ctx: { name: target.name, email: target.email, password, teamName, isApprover, signInUrl }
+        });
+        results.push({ id, ok: true, email: target.email, delivered: r.delivered, error: r.error || null });
+      } catch (e) {
+        results.push({ id, ok: false, error: e.message || "Unknown error" });
+      }
+    }
+    res.json({ results, total: ids.length, succeeded: results.filter(r => r.ok).length });
   } catch (e) { next(e); }
 });
 
