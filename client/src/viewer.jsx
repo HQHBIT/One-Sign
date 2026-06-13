@@ -64,6 +64,8 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   // How many pages have actually finished rendering, for the progress chip in
   // the header. Doesn't need to be precise — it's UX feedback only.
   const [renderedCount, setRenderedCount] = useState(0);
+  // Bumped to force a retry from the error UI
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,16 +88,26 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
           setPageAspect(v.width / v.height);
         } catch { /* swallow — placeholder uses default aspect */ }
       } catch (e) {
-        if (!cancelled) setErr(e.message || String(e));
+        if (cancelled) return;
+        // Log full error to the console so we can see it in mobile devtools
+        // remote-inspect. The on-screen message is intentionally short.
+        console.error("[viewer] PDF load failed:", e);
+        setErr(e?.message || String(e) || "Unknown error");
       }
     })();
     return () => { cancelled = true; };
-  }, [file.base64]);
+  }, [file.base64, retryTick]);
 
   // Only show the error state if the PDF itself never loaded. Any post-load
   // hiccup (e.g. dimension probe) shouldn't take down the viewer.
   if (!pdf) {
-    if (err) return <div className="card p-6 text-sm" style={{ color: "var(--c-rust)" }}>Could not render PDF: {err}</div>;
+    if (err) return (
+      <div className="card p-6 text-sm" style={{ color: "var(--c-rust)" }}>
+        <div className="font-medium mb-2">Could not render PDF</div>
+        <div className="text-xs opacity-80 mb-3 font-mono break-all">{err}</div>
+        <button className="btn-ghost text-xs" onClick={() => setRetryTick(t => t + 1)}>Try again</button>
+      </div>
+    );
     return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
   }
 
