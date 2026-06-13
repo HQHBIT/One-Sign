@@ -39,6 +39,8 @@ import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
 import { SignatureModal } from "./components/SignatureModal.jsx";
+import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
+import { PasswordResetModal } from "./components/PasswordResetModal.jsx";
 
 // Forms — multi-step wizards and the big create flow
 import { NewRequest } from "./forms/NewRequest.jsx";
@@ -240,6 +242,7 @@ function Shell(props) {
   const { user, logout, setSignature, notify } = props;
   const [needsSig, setNeedsSig] = useState(false);
   const [editSig, setEditSig] = useState(false);
+  const [changingPwd, setChangingPwd] = useState(false);
 
   // require signature for requestor & approver on first login
   useEffect(() => {
@@ -249,7 +252,9 @@ function Shell(props) {
 
   return (
     <>
-      <TopBar user={user} logout={logout} onEditSignature={() => setEditSig(true)} />
+      <TopBar user={user} logout={logout}
+        onEditSignature={() => setEditSig(true)}
+        onChangePassword={() => setChangingPwd(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         {user.role === "requestor" && <RequestorView {...props} />}
         {user.role === "approver" && <ApproverView {...props} />}
@@ -274,6 +279,11 @@ function Shell(props) {
           currentUserId={user.hasSignature ? user.id : null}
           onSave={async dataUrl => { await setSignature(dataUrl); setEditSig(false); notify("Signature updated", "success"); }}
         />
+      )}
+      {changingPwd && (
+        <ChangePasswordModal
+          onClose={() => setChangingPwd(false)}
+          notify={notify} />
       )}
     </>
   );
@@ -1497,7 +1507,8 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [adding, setAdding] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [invitingId, setInvitingId] = useState(null);
-  const [resettingId, setResettingId] = useState(null);
+  // User object currently selected for reset (drives the PasswordResetModal).
+  const [resetTarget, setResetTarget] = useState(null);
   // Set of userIds whose plaintext password is currently revealed in the UI.
   // Default is hidden — admins click the eye icon to reveal.
   const [revealedIds, setRevealedIds] = useState(() => new Set());
@@ -1558,29 +1569,18 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       setInvitingId(null);
     }
   };
-  // Admin-initiated password reset. Same flow as invite but uses the
-  // "reset_password" email template so the recipient knows it was deliberate.
-  const resetPassword = async (id, name, email) => {
-    const ok = await confirm({
-      title: `Reset ${name}'s password?`,
-      message: `A new random password will be generated and emailed to ${email}. Their current password will stop working immediately.`,
-      confirmLabel: "Reset password",
-      destructive: true
-    });
-    if (!ok) return;
-    setResettingId(id);
-    try {
-      const r = await api.resetUserPassword(id);
-      if (r.delivered) notify(`Password reset email sent to ${email}`, "success");
-      else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
-      else notify(`Reset logged (SendGrid not configured). New password is visible in this row.`, "info");
-      await saveUsers();
-      setRevealedIds(prev => new Set(prev).add(id));
-    } catch (e) {
-      notify(e.message || "Failed to reset password", "error");
-    } finally {
-      setResettingId(null);
-    }
+  // Admin-initiated password reset. Opens a small modal where the admin can
+  // either type a specific password OR leave it blank for a server-generated
+  // random one. Server uses the reset_password email template either way.
+  const submitReset = async (customPassword) => {
+    if (!resetTarget) return;
+    const r = await api.resetUserPassword(resetTarget.id, customPassword);
+    if (r.delivered) notify(`Password reset email sent to ${resetTarget.email}`, "success");
+    else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
+    else notify(`Reset logged (SendGrid not configured). New password is visible in this row.`, "info");
+    await saveUsers();
+    setRevealedIds(prev => new Set(prev).add(resetTarget.id));
+    setResetTarget(null);
   };
 
   return (
@@ -1645,12 +1645,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                 </button>
               )}
               <button className="opacity-50 hover:opacity-100"
-                onClick={() => resetPassword(u.id, u.name, u.email)}
-                disabled={resettingId === u.id}
-                title="Reset password — generates a fresh password and emails it">
-                {resettingId === u.id
-                  ? <span className="text-xs">…</span>
-                  : <KeyRound size={13} />}
+                onClick={() => setResetTarget(u)}
+                title="Reset password — choose a new password or auto-generate">
+                <KeyRound size={13} />
               </button>
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
@@ -1679,10 +1676,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                   </button>
                 )}
                 <button className="opacity-50 hover:opacity-100"
-                  onClick={() => resetPassword(u.id, u.name, u.email)}
-                  disabled={resettingId === u.id}
+                  onClick={() => setResetTarget(u)}
                   title="Reset password">
-                  {resettingId === u.id ? <span className="text-xs">…</span> : <KeyRound size={13} />}
+                  <KeyRound size={13} />
                 </button>
                 <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
               </div>
@@ -1714,6 +1710,12 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         );})}
       </div>
 
+      {resetTarget && (
+        <PasswordResetModal
+          user={resetTarget}
+          onCancel={() => setResetTarget(null)}
+          onSubmit={submitReset} />
+      )}
       {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
       {bulkOpen && <BulkUserModal teams={teams} onClose={() => setBulkOpen(false)} onImport={async rows => {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }

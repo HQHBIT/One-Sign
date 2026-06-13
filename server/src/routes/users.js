@@ -242,7 +242,18 @@ router.post("/:id/reset-password", authRequired, requireRole("admin"), async (re
     const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
     if (!target) return res.status(404).json({ error: "User not found" });
 
-    const password = genTempPassword();
+    // Admin may optionally pick a specific password via body.password.
+    // Empty / missing → auto-generate as before.
+    const customPwd = typeof req.body?.password === "string" ? req.body.password.trim() : "";
+    let password;
+    if (customPwd) {
+      if (customPwd.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      }
+      password = customPwd;
+    } else {
+      password = genTempPassword();
+    }
     const hash = bcrypt.hashSync(password, 10);
     await execute(
       "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",

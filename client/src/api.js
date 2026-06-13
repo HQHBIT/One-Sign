@@ -55,6 +55,12 @@ export const api = {
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },
+  changePassword(currentPassword, newPassword) {
+    return this.fetch("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+  },
 
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
@@ -77,8 +83,13 @@ export const api = {
   bulkInvite(ids) {
     return this.fetch("/api/users/bulk-invite", { method: "POST", body: JSON.stringify({ ids }) });
   },
-  resetUserPassword(userId) {
-    return this.fetch(`/api/users/${userId}/reset-password`, { method: "POST" });
+  resetUserPassword(userId, password) {
+    // Pass a password string to set explicitly; omit/empty to auto-generate.
+    const body = password ? { password } : {};
+    return this.fetch(`/api/users/${userId}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
   },
 
   setMySignature(dataUrl) {

@@ -26,6 +26,35 @@ router.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
 });
 
+// ---------- authenticated: change my password ----------
+// POST /api/auth/change-password  body: { currentPassword, newPassword }
+// Self-service. Verifies the user's current password before rotating to the
+// new one. Plain "wrong password" returns 401 with a clear message. New
+// password is also persisted in last_temp_password so admins can see it
+// (consistent with the rest of the password-storing behaviour).
+router.post("/change-password", authRequired, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new password are both required" });
+    }
+    if (typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    }
+    const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.user.id]);
+    if (!row) return res.status(404).json({ error: "User not found" });
+    if (!bcrypt.compareSync(currentPassword, row.password_hash)) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    const hash = bcrypt.hashSync(newPassword, 10);
+    await execute(
+      "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
+      [hash, newPassword, Date.now(), row.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // ---------- public: forgot password ----------
 // POST /api/auth/forgot-password  body: { email }
 // User-initiated reset. Generates a fresh temp password, hashes it, and emails
