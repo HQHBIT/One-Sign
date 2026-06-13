@@ -1498,7 +1498,24 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [invitingId, setInvitingId] = useState(null);
   const [resettingId, setResettingId] = useState(null);
+  // Set of userIds whose plaintext password is currently revealed in the UI.
+  // Default is hidden — admins click the eye icon to reveal.
+  const [revealedIds, setRevealedIds] = useState(() => new Set());
   const confirm = useConfirmation();
+
+  const toggleReveal = (id) => setRevealedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const copyPwd = async (pwd, name) => {
+    try {
+      await navigator.clipboard.writeText(pwd);
+      notify(`Copied ${name}'s password to clipboard`, "success");
+    } catch {
+      notify("Couldn't copy — long-press to copy manually", "error");
+    }
+  };
 
   const add = async data => {
     try { await api.createUser(data); notify("User added", "success"); await saveUsers(); return true; }
@@ -1530,7 +1547,11 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       const r = await api.inviteUser(id);
       if (r.delivered) notify(`Invite email sent to ${email}`, "success");
       else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
-      else notify(`Invite logged (SendGrid not configured). Find the password in Admin → Email log.`, "info");
+      else notify(`Invite logged (SendGrid not configured). New password is visible in this row.`, "info");
+      // Refresh the user list so the new last_temp_password shows up
+      await saveUsers();
+      // Auto-reveal it so the admin sees the new password immediately
+      setRevealedIds(prev => new Set(prev).add(id));
     } catch (e) {
       notify(e.message || "Failed to send invite", "error");
     } finally {
@@ -1552,7 +1573,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       const r = await api.resetUserPassword(id);
       if (r.delivered) notify(`Password reset email sent to ${email}`, "success");
       else if (r.error) notify(`Email logged but delivery failed: ${r.error}`, "error");
-      else notify(`Reset logged (SendGrid not configured). Find the password in Admin → Email log.`, "info");
+      else notify(`Reset logged (SendGrid not configured). New password is visible in this row.`, "info");
+      await saveUsers();
+      setRevealedIds(prev => new Set(prev).add(id));
     } catch (e) {
       notify(e.message || "Failed to reset password", "error");
     } finally {
@@ -1573,22 +1596,42 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
           <div className="col-span-3">Name</div>
           <div className="col-span-3">Email</div>
-          <div className="col-span-2">Role</div>
-          <div className="col-span-3">Authority / Team</div>
+          <div className="col-span-1">Role</div>
+          <div className="col-span-2">Team / Authority</div>
+          <div className="col-span-2">Password</div>
           <div className="col-span-1"></div>
         </div>
-        {users.map(u => (
+        {users.map(u => {
+          const revealed = revealedIds.has(u.id);
+          return (
           <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <div className="col-span-3 font-medium flex items-center gap-2">
               {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} />}
               {u.name}
             </div>
             <div className="col-span-3 font-mono text-xs opacity-70 truncate">{u.email}</div>
-            <div className="col-span-2"><span className="pill pill-pending">{u.role}</span></div>
-            <div className="col-span-3 text-xs opacity-70">
+            <div className="col-span-1"><span className="pill pill-pending">{u.role}</span></div>
+            <div className="col-span-2 text-xs opacity-70 truncate">
               {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
               {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
               {u.role === "admin" && "—"}
+            </div>
+            <div className="col-span-2 flex items-center gap-2">
+              {u.lastTempPassword ? (
+                <>
+                  <span className="font-mono text-xs px-2 py-1 rounded" style={{ backgroundColor: "rgba(15,26,46,.06)", letterSpacing: revealed ? 0 : ".15em" }}>
+                    {revealed ? u.lastTempPassword : "•".repeat(Math.min(u.lastTempPassword.length, 10))}
+                  </span>
+                  <button className="opacity-50 hover:opacity-100" onClick={() => toggleReveal(u.id)}
+                    title={revealed ? "Hide" : "Reveal"}>
+                    {revealed ? <EyeOff size={12} /> : <EyeIcon size={12} />}
+                  </button>
+                  <button className="opacity-50 hover:opacity-100" onClick={() => copyPwd(u.lastTempPassword, u.name)}
+                    title="Copy password">
+                    <Check size={12} />
+                  </button>
+                </>
+              ) : <span className="text-xs opacity-40 italic">— not set —</span>}
             </div>
             <div className="col-span-1 text-right flex items-center justify-end gap-2">
               {u.role !== "admin" && (
@@ -1612,12 +1655,14 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
           </div>
-        ))}
+        );})}
       </div>
 
       {/* Mobile stacked cards */}
       <div className="card overflow-hidden md:hidden">
-        {users.map(u => (
+        {users.map(u => {
+          const revealed = revealedIds.has(u.id);
+          return (
           <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1643,7 +1688,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               </div>
             </div>
             <div className="text-xs font-mono opacity-70 truncate mb-2">{u.email}</div>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap mb-2">
               <span className="pill pill-pending">{u.role}</span>
               <span className="text-xs opacity-70">
                 {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
@@ -1651,8 +1696,22 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                 {u.role === "admin" && "—"}
               </span>
             </div>
+            {u.lastTempPassword && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="opacity-50 uppercase tracking-wider text-[10px]">Pwd:</span>
+                <span className="font-mono px-2 py-1 rounded" style={{ backgroundColor: "rgba(15,26,46,.06)", letterSpacing: revealed ? 0 : ".15em" }}>
+                  {revealed ? u.lastTempPassword : "•".repeat(Math.min(u.lastTempPassword.length, 10))}
+                </span>
+                <button className="opacity-50" onClick={() => toggleReveal(u.id)} title={revealed ? "Hide" : "Reveal"}>
+                  {revealed ? <EyeOff size={12} /> : <EyeIcon size={12} />}
+                </button>
+                <button className="opacity-50" onClick={() => copyPwd(u.lastTempPassword, u.name)} title="Copy">
+                  <Check size={12} />
+                </button>
+              </div>
+            )}
           </div>
-        ))}
+        );})}
       </div>
 
       {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}

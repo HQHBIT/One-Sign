@@ -45,7 +45,10 @@ router.post("/forgot-password", async (req, res, next) => {
     if (row) {
       const password = genTempPassword();
       const hash = bcrypt.hashSync(password, 10);
-      await execute("UPDATE users SET password_hash = ? WHERE id = ?", [hash, row.id]);
+      await execute(
+        "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
+        [hash, password, Date.now(), row.id]
+      );
       const signInUrl = req.protocol + "://" + req.get("host");
       await sendEmail({
         to: row.email,
