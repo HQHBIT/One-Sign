@@ -76,10 +76,15 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
         setPdf(doc);
         onPages?.(doc.numPages);
         // Grab page-1 dimensions so placeholder divs can reserve correct height.
-        const p1 = await doc.getPage(1);
-        if (cancelled) return;
-        const v = p1.getViewport({ scale: 1 });
-        setPageAspect(v.width / v.height);
+        // NON-FATAL: if this fails, placeholders fall back to a default A-paper
+        // aspect ratio. We must not propagate an error here because the PDF
+        // itself has loaded successfully.
+        try {
+          const p1 = await doc.getPage(1);
+          if (cancelled) return;
+          const v = p1.getViewport({ scale: 1 });
+          setPageAspect(v.width / v.height);
+        } catch { /* swallow — placeholder uses default aspect */ }
       } catch (e) {
         if (!cancelled) setErr(e.message || String(e));
       }
@@ -87,8 +92,12 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
     return () => { cancelled = true; };
   }, [file.base64]);
 
-  if (err) return <div className="card p-6 text-sm" style={{ color: "var(--c-rust)" }}>Could not render PDF: {err}</div>;
-  if (!pdf) return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
+  // Only show the error state if the PDF itself never loaded. Any post-load
+  // hiccup (e.g. dimension probe) shouldn't take down the viewer.
+  if (!pdf) {
+    if (err) return <div className="card p-6 text-sm" style={{ color: "var(--c-rust)" }}>Could not render PDF: {err}</div>;
+    return <div className="card p-10 text-sm opacity-50 text-center">Rendering PDF…</div>;
+  }
 
   const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
 
