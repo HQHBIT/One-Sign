@@ -22,6 +22,7 @@
 // ============================================================
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { AlertCircle, Check, X } from "lucide-react";
+import { useFocusTrap } from "./useFocusTrap.js";
 
 const ConfirmContext = createContext(null);
 export { ConfirmContext };
@@ -81,18 +82,21 @@ export function useConfirm() {
     return () => window.removeEventListener("keydown", onKey);
   }, [state, handle]);
 
-  const ConfirmHost = () => state ? (
+  const ConfirmHost = () => {
+    const trapRef = useFocusTrap(!!state);
+    if (!state) return null;
+    return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       style={{ backgroundColor: "rgba(15,26,46,.65)" }}
       onClick={() => handle(false)}>
-      <div className="card p-6 max-w-md w-full anim-in"
-        style={{ backgroundColor: "#F5F1E8" }}
+      <div ref={trapRef} className="card p-6 max-w-md w-full anim-in"
+        style={{ backgroundColor: "var(--c-cream)" }}
         onClick={e => e.stopPropagation()}>
         <div className="flex items-start gap-3 mb-3">
           <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             style={{
               backgroundColor: state.destructive ? "rgba(155,44,44,.12)" : "rgba(184,137,74,.18)",
-              color: state.destructive ? "#9B2C2C" : "#8B6914"
+              color: state.destructive ? "var(--c-rust)" : "var(--c-sand)"
             }}>
             <AlertCircle size={18} />
           </div>
@@ -111,7 +115,8 @@ export function useConfirm() {
         </div>
       </div>
     </div>
-  ) : null;
+  );
+  };
 
   return { confirm, ConfirmHost };
 }

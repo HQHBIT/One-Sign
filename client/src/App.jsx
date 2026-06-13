@@ -15,6 +15,7 @@ import {
 import { uid, fmt, fmtShort } from "./lib/format.js";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
+import { useFocusTrap } from "./lib/useFocusTrap.js";
 
 // Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
 // only when a document is actually previewed. Keeps the login + dashboard
@@ -73,24 +74,23 @@ export default function App() {
     }
   }, [user]);
 
-  // ---- boot: restore session if token exists ----
+  // ---- boot: restore session if the httpOnly cookie is still valid ----
   useEffect(() => {
     (async () => {
       api.onAuthExpired(() => { setUser(null); notify("Session expired — please sign in again", "error"); });
-      const token = api.init();
-      if (token) {
-        try {
-          const me = await api.me();
-          setUser(me.user);
-          const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
-          setTeams(t || []); setRequests(r || []);
-          if (me.user.role === "admin") {
-            const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
-            setUsers(u || []); setEmails(e || []);
-          }
-        } catch {
-          api.setToken(null);
+      // Always try /me — the browser sends the cookie automatically. If we get a
+      // 401, the user isn't signed in and the login screen renders.
+      try {
+        const me = await api.me();
+        setUser(me.user);
+        const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
+        setTeams(t || []); setRequests(r || []);
+        if (me.user.role === "admin") {
+          const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
+          setUsers(u || []); setEmails(e || []);
         }
+      } catch {
+        // No active session — login screen will render
       }
       setBooted(true);
     })();
@@ -121,8 +121,10 @@ export default function App() {
   // ---- auth actions ----
   const login = async (email, password) => {
     try {
-      const { token, user: u } = await api.login(email, password);
-      api.setToken(token);
+      // Server sets an httpOnly session cookie on success. The token in the
+      // response body is ignored on the client now — preserved only for
+      // backwards compatibility with older deployments.
+      const { user: u } = await api.login(email, password);
       setUser(u);
       await refresh(u);
       notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
@@ -133,7 +135,7 @@ export default function App() {
     }
   };
   const logout = async () => {
-    api.setToken(null);
+    await api.logout();
     setUser(null); setTeams([]); setUsers([]); setRequests([]); setEmails([]);
   };
 
@@ -178,7 +180,7 @@ export default function App() {
 
   return (
     <ConfirmContext.Provider value={confirm}>
-    <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "#F5F1E8", color: "#0F1A2E" }}>
+    <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}>
       <StyleTag />
       {!user ? (
         <LoginScreen login={login} />
@@ -212,42 +214,74 @@ function StyleTag() {
   return (
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+      /* ─── Design tokens ─────────────────────────────────────────
+         Use var(--c-*) anywhere in CSS or inline styles. Constants
+         in src/lib/constants.js mirror these for JS-side use. */
+      :root {
+        --c-ink:        #0F1A2E;
+        --c-ink-soft:   #1B2A4A;
+        --c-cream:      #F5F1E8;
+        --c-paper:      #FAF7F0;
+        --c-paper-2:    #E8E3D5;
+        --c-gold:       #B8894A;
+        --c-gold-deep:  #A3763D;
+        --c-forest:     #2D5F2F;
+        --c-rust:       #9B2C2C;
+        --c-rust-deep:  #7F2323;
+        --c-sand:       #8B6914;
+        --c-earth:      #8B4A14;
+
+        --c-ink-08:     rgba(15,26,46,.08);
+        --c-ink-10:     rgba(15,26,46,.10);
+        --c-ink-18:     rgba(15,26,46,.18);
+        --c-ink-25:     rgba(15,26,46,.25);
+        --c-gold-15:    rgba(184,137,74,.15);
+        --c-gold-18:    rgba(184,137,74,.18);
+        --c-gold-35:    rgba(184,137,74,.35);
+
+        --pill-pending-bg:           #F4E4C1;
+        --pill-approved-bg:          #C8D9C5;
+        --pill-approved-pending-bg:  #E8D4B8;
+        --pill-rejected-bg:          #E8C5C5;
+      }
+
       .font-display { font-family: 'Fraunces', Georgia, serif; font-optical-sizing: auto; letter-spacing: -0.01em; }
       .font-mono { font-family: 'IBM Plex Mono', monospace; }
       .grain::before {
         content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.035;
         background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
       }
-      .sig-canvas { touch-action: none; cursor: crosshair; background: #FAF7F0; }
+      .sig-canvas { touch-action: none; cursor: crosshair; background: var(--c-paper); }
       .tile-hover { transition: transform .2s ease, box-shadow .2s ease; }
-      .tile-hover:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -14px rgba(15,26,46,.25); }
-      .ink-grad { background: linear-gradient(135deg, #0F1A2E 0%, #1B2A4A 100%); }
+      .tile-hover:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -14px var(--c-ink-25); }
+      .ink-grad { background: linear-gradient(135deg, var(--c-ink) 0%, var(--c-ink-soft) 100%); }
       input[type="text"], input[type="email"], input[type="password"], textarea, select {
-        background: #FAF7F0; border: 1px solid rgba(15,26,46,.18); border-radius: 6px;
-        padding: 10px 12px; font-size: 14px; color: #0F1A2E; outline: none;
+        background: var(--c-paper); border: 1px solid var(--c-ink-18); border-radius: 6px;
+        padding: 10px 12px; font-size: 14px; color: var(--c-ink); outline: none;
       }
-      input:focus, textarea:focus, select:focus { border-color: #B8894A; box-shadow: 0 0 0 3px rgba(184,137,74,.15); }
-      .btn-primary { background: #0F1A2E; color: #F5F1E8; padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all .15s; border: 1px solid #0F1A2E; }
-      .btn-primary:hover:not(:disabled) { background: #1B2A4A; }
+      input:focus, textarea:focus, select:focus { border-color: var(--c-gold); box-shadow: 0 0 0 3px var(--c-gold-15); }
+      .btn-primary { background: var(--c-ink); color: var(--c-cream); padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all .15s; border: 1px solid var(--c-ink); }
+      .btn-primary:hover:not(:disabled) { background: var(--c-ink-soft); }
       .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-      .btn-ghost { background: transparent; color: #0F1A2E; padding: 8px 14px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; transition: all .15s; border: 1px solid rgba(15,26,46,.18); }
+      .btn-ghost { background: transparent; color: var(--c-ink); padding: 8px 14px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; transition: all .15s; border: 1px solid var(--c-ink-18); }
       .btn-ghost:hover { background: rgba(15,26,46,.05); }
-      .btn-gold { background: #B8894A; color: #F5F1E8; padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all .15s; border: 1px solid #B8894A; }
-      .btn-gold:hover:not(:disabled) { background: #A3763D; }
-      .btn-danger { background: #9B2C2C; color: #F5F1E8; padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #9B2C2C; }
-      .btn-danger:hover { background: #7F2323; }
+      .btn-gold { background: var(--c-gold); color: var(--c-cream); padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all .15s; border: 1px solid var(--c-gold); }
+      .btn-gold:hover:not(:disabled) { background: var(--c-gold-deep); }
+      .btn-danger { background: var(--c-rust); color: var(--c-cream); padding: 10px 18px; border-radius: 6px; font-weight: 500; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--c-rust); }
+      .btn-danger:hover { background: var(--c-rust-deep); }
       .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; letter-spacing: .02em; text-transform: uppercase; }
-      .pill-pending { background: #F4E4C1; color: #8B6914; }
-      .pill-approved { background: #C8D9C5; color: #2D5F2F; }
-      .pill-approved-pending { background: #E8D4B8; color: #8B4A14; }
-      .pill-rejected { background: #E8C5C5; color: #7A2222; }
-      .card { background: #FAF7F0; border: 1px solid rgba(15,26,46,.1); border-radius: 10px; }
-      .divider-rule { height: 1px; background: linear-gradient(to right, transparent, rgba(15,26,46,.18), transparent); }
+      .pill-pending { background: var(--pill-pending-bg); color: var(--c-sand); }
+      .pill-approved { background: var(--pill-approved-bg); color: var(--c-forest); }
+      .pill-approved-pending { background: var(--pill-approved-pending-bg); color: var(--c-earth); }
+      .pill-rejected { background: var(--pill-rejected-bg); color: #7A2222; }
+      .card { background: var(--c-paper); border: 1px solid var(--c-ink-10); border-radius: 10px; }
+      .divider-rule { height: 1px; background: linear-gradient(to right, transparent, var(--c-ink-18), transparent); }
       @keyframes slideIn { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       .anim-in { animation: slideIn .3s ease; }
       @keyframes logoGlow {
         0%, 100% { filter: drop-shadow(0 0 20px rgba(184,137,74,.2)); }
-        50% { filter: drop-shadow(0 0 40px rgba(184,137,74,.5)); }
+        50% { filter: drop-shadow(0 0 40px var(--c-gold-35)); }
       }
       .logo-glow { animation: logoGlow 4s ease-in-out infinite; }
       @keyframes fadeUp {
@@ -266,7 +300,7 @@ function StyleTag() {
 //   SCREENS
 // ============================================================
 function BootScreen() {
-  return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#F5F1E8", fontFamily: "'Fraunces', serif" }}>
+  return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "var(--c-cream)", fontFamily: "'Fraunces', serif" }}>
     <div className="text-sm tracking-widest uppercase opacity-50">Loading SignFlow…</div>
   </div>;
 }
@@ -317,7 +351,7 @@ function LoginScreen({ login }) {
         <div className="relative z-10 fade-up fade-up-d2">
           <h1 className="font-display text-3xl sm:text-4xl md:text-5xl leading-[1.1]">
             Request. Review.<br />
-            <span style={{ color: "#B8894A" }}>Approve. Track.</span><br />
+            <span style={{ color: "var(--c-gold)" }}>Approve. Track.</span><br />
             All in one place.
           </h1>
           <p className="mt-4 text-sm opacity-55 max-w-xs md:max-w-sm mx-auto leading-relaxed">
@@ -394,7 +428,7 @@ function Shell(props) {
 function TopBar({ user, logout, onEditSignature }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   return (
-    <header className="border-b" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#FAF7F0" }}>
+    <header className="border-b" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-paper)" }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-3 sm:py-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden shrink-0">
@@ -457,7 +491,7 @@ function RequestorView(props) {
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
   const tiles = [
-    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "#B8894A" },
+    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Signed and finalised documents, ready to download.", badge: approved.length }
   ];
@@ -510,7 +544,7 @@ function RecentActivity({ my, teams }) {
       </div>
       <div className="card overflow-hidden">
         {recent.map((r, i) => (
-          <div key={r.id} className={`px-5 py-4 flex items-center gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.08)" }}>
+          <div key={r.id} className={`px-5 py-4 flex items-center gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
             <div className="w-8 h-8 rounded-md flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
               {r.fileType === "pdf" ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
             </div>
@@ -872,7 +906,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
               <label className="flex items-start gap-3 mt-5 cursor-pointer">
                 <input type="checkbox" checked={instantApproval} onChange={e => setInstantApproval(e.target.checked)} className="mt-1" />
                 <div>
-                  <div className="font-medium text-sm flex items-center gap-2"><Zap size={13} style={{ color: "#B8894A" }} /> Instant approval</div>
+                  <div className="font-medium text-sm flex items-center gap-2"><Zap size={13} style={{ color: "var(--c-gold)" }} /> Instant approval</div>
                   <div className="text-xs opacity-60">Skip the 1-hour cooling window. Once all signatures are collected, the document is finalised immediately.</div>
                 </div>
               </label>
@@ -925,7 +959,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
                   onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
               </Suspense>
               {placingSlot && (
-                <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>
+                <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                   Click and drag on the document to place this signer's box.{" "}
                   {lockedAspect
                     ? <span>Aspect is locked to the signer's signature so what you draw is what gets stamped.</span>
@@ -1027,7 +1061,7 @@ function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultTyp
                   );
                 })}
               </ol>
-              {instantApproval && <div className="mt-4 text-xs flex items-center gap-1.5" style={{ color: "#B8894A" }}><Zap size={12} /> Instant approval enabled</div>}
+              {instantApproval && <div className="mt-4 text-xs flex items-center gap-1.5" style={{ color: "var(--c-gold)" }}><Zap size={12} /> Instant approval enabled</div>}
             </div>
           )}
         </aside>
@@ -1046,7 +1080,7 @@ function AddSignerControl({ team, existing, onAdd }) {
         <Plus size={11} /> Add signer
       </button>
       {pickerOpen && (
-        <div className="absolute left-0 right-0 mt-1 z-10 card p-2 shadow-lg" style={{ backgroundColor: "#FAF7F0" }}>
+        <div className="absolute left-0 right-0 mt-1 z-10 card p-2 shadow-lg" style={{ backgroundColor: "var(--c-paper)" }}>
           {available.map(a => (
             <button key={a.id} className="w-full text-left px-3 py-2 hover:opacity-70 text-sm flex items-center justify-between"
               onClick={() => { onAdd(a.id); setPickerOpen(false); }}>
@@ -1200,14 +1234,14 @@ function RequestRow({ r, teams, users, i, actions, subtitle }) {
   const typeColor = requestTypeColor(typeKey);
 
   return (
-    <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.08)" }}>
+    <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
       <div className="w-9 h-9 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
         {r.fileType === "pdf" ? <FileText size={15} /> : <FileSpreadsheet size={15} />}
       </div>
       <div className="flex-1 min-w-0">
         <div className="font-medium text-sm sm:text-base truncate flex items-center gap-2">
           {r.fileName}
-          {r.instantApproval && <span title="Instant approval" style={{ color: "#B8894A" }}><Zap size={11} /></span>}
+          {r.instantApproval && <span title="Instant approval" style={{ color: "var(--c-gold)" }}><Zap size={11} /></span>}
           {r.workflow?.length > 0 && <span title="Multi-step workflow" className="opacity-60"><GitBranch size={11} /></span>}
         </div>
         <div className="text-xs opacity-60 mt-0.5 flex items-center gap-1.5 flex-wrap">
@@ -1220,7 +1254,7 @@ function RequestRow({ r, teams, users, i, actions, subtitle }) {
           {r.status === "approved_pending" && r.approvedAt && !r.instantApproval && <span>· <Countdown until={r.approvedAt + APPROVAL_WINDOW_MS} /></span>}
         </div>
         {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}
-        {subtitle && <div className="text-xs mt-1" style={{ color: "#9B2C2C" }}>{subtitle}</div>}
+        {subtitle && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>{subtitle}</div>}
         {/* On mobile, actions move below content. On desktop they're inline. */}
         <div className="flex sm:hidden items-center gap-2 mt-2">
           <StatusPill status={r.status} />
@@ -1373,8 +1407,8 @@ function PreviewDrawer({ req, onClose, users, teams }) {
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
-      <div className="bg-white w-full max-w-4xl overflow-auto anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
-        <div className="p-4 sm:p-6 flex items-center justify-between gap-2 border-b" style={{ borderColor: "rgba(15,26,46,.1)" }}>
+      <div className="bg-white w-full max-w-4xl overflow-auto anim-in" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+        <div className="p-4 sm:p-6 flex items-center justify-between gap-2 border-b" style={{ borderColor: "var(--c-ink-10)" }}>
           <div className="min-w-0 flex-1">
             <div className="font-display text-lg sm:text-2xl truncate">{req.fileName}</div>
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 sm:mt-1 truncate">
@@ -1405,7 +1439,7 @@ function WorkflowSummary({ req, teams }) {
     <div className="card p-4 mb-4">
       <div className="text-[10px] tracking-widest uppercase opacity-50 mb-3 flex items-center gap-2">
         <GitBranch size={11} /> Approval workflow
-        {req.instantApproval && <span style={{ color: "#B8894A" }} className="flex items-center gap-1"><Zap size={10} /> Instant</span>}
+        {req.instantApproval && <span style={{ color: "var(--c-gold)" }} className="flex items-center gap-1"><Zap size={10} /> Instant</span>}
       </div>
       <div className="space-y-2">
         {req.workflow.map((step, si) => {
@@ -1422,7 +1456,7 @@ function WorkflowSummary({ req, teams }) {
                 <div className="text-xs opacity-70 mt-1">
                   {step.signers.map(s => (
                     <span key={s.id} className="inline-flex items-center gap-1 mr-3">
-                      {s.status === "signed" ? <Check size={10} style={{ color: "#2D5F2F" }} /> : <Clock size={10} className="opacity-50" />}
+                      {s.status === "signed" ? <Check size={10} style={{ color: "var(--c-forest)" }} /> : <Clock size={10} className="opacity-50" />}
                       {s.userName}
                     </span>
                   ))}
@@ -1472,7 +1506,7 @@ function ApproverView(props) {
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
 
   const tiles = [
-    { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "#B8894A" },
+    { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length }
@@ -1586,7 +1620,7 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
           {visible.map((r, i) => {
             const myTurn = isMyTurn(r);
             return (
-              <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.08)" }}>
+              <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
                 {myTurn && (
                   <label className="pl-5 pr-2 cursor-pointer flex items-center" title="Select for batch approval">
                     <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
@@ -1675,10 +1709,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
   return (
     <div className="fixed inset-0 z-40 flex items-stretch justify-end" style={{ backgroundColor: "rgba(15,26,46,.5)" }} onClick={onClose}>
-      <div className="w-full max-w-4xl flex flex-col anim-in" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-4xl flex flex-col anim-in" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
 
         {/* ── Fixed header with Jump-to-Signature ── */}
-        <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-2 sm:gap-3 border-b shrink-0" style={{ borderColor: "rgba(15,26,46,.1)" }}>
+        <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-2 sm:gap-3 border-b shrink-0" style={{ borderColor: "var(--c-ink-10)" }}>
           <div className="min-w-0 flex-1">
             <div className="font-display text-base sm:text-xl truncate">{req.fileName}</div>
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 truncate">
@@ -1710,10 +1744,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
         {/* ── Pinned action bar(s) ── */}
         {canApprove && (
-          <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+          <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
             {previewing ? (
               <>
-                <div className="flex items-center gap-2 text-xs" style={{ color: "#2D5F2F" }}>
+                <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
                   <Eye size={13} />
                   <span className="hidden sm:inline">Review how your signature will appear on the document.</span>
                   <span className="sm:hidden">Preview your signature</span>
@@ -1740,12 +1774,12 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         )}
         {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
           <div className="shrink-0 px-6 py-4 border-t text-xs opacity-70 flex items-center gap-2"
-            style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+            style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
             <Clock size={12} /> Awaiting signature from <span className="font-medium">{nextPendingUser.userName}</span> before it reaches you.
           </div>
         )}
         {pendingApproved && req.approverId === user.id && !req.instantApproval && (
-          <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "rgba(15,26,46,.1)", backgroundColor: "#F5F1E8" }}>
+          <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
             <div className="text-xs opacity-70 flex items-center gap-2">
               <Clock size={12} /> You have until <span className="font-mono"><Countdown until={req.approvedAt + APPROVAL_WINDOW_MS} /></span> to change your mind.
             </div>
@@ -1763,7 +1797,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
       {rejectOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}>
-          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "#F5F1E8" }}>
+          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }}>
             <div className="font-display text-2xl mb-2">Reject request</div>
             <div className="text-sm opacity-60 mb-4">Let the requestor know why.</div>
             <textarea rows={4} value={reason} onChange={e => setReason(e.target.value)} className="w-full mb-4" placeholder="Reason (optional)" />
@@ -1870,7 +1904,7 @@ function AdminView(props) {
 
   const { users, teams, requests, emails } = props;
   const tiles = [
-    { key: "onboard", icon: UserPlus, title: "Onboard team", desc: "Add a team, bulk-upload members from Excel, then email credentials in one flow.", color: "#B8894A" },
+    { key: "onboard", icon: UserPlus, title: "Onboard team", desc: "Add a team, bulk-upload members from Excel, then email credentials in one flow.", color: "var(--c-gold)" },
     { key: "users", icon: Users, title: "Users", desc: "Manage individual users and signing authority.", badge: users.length },
     { key: "teams", icon: Building2, title: "Teams & authority", desc: "Define teams and edit memberships.", badge: teams.length },
     { key: "signatures", icon: PenTool, title: "Signatures", desc: "Upload signatures in bulk on behalf of users." },
@@ -2120,7 +2154,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
 
           {rows.length > 0 && (
             <div className="card overflow-hidden">
-              <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+              <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-4 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
                 <div className="col-span-4">Name</div>
                 <div className="col-span-5">Email</div>
                 <div className="col-span-2">Role</div>
@@ -2181,7 +2215,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
               <input type="checkbox" checked={sendInvites} onChange={e => setSendInvites(e.target.checked)} className="mt-1" />
               <div>
                 <div className="font-medium text-sm flex items-center gap-2">
-                  <Mail size={13} style={{ color: "#B8894A" }} /> Send welcome emails with credentials
+                  <Mail size={13} style={{ color: "var(--c-gold)" }} /> Send welcome emails with credentials
                 </div>
                 <div className="text-xs opacity-60 mt-0.5">
                   Each user receives an email with a freshly generated password. You won't see the passwords — they go straight to the user.
@@ -2192,7 +2226,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
           </div>
 
           <div className="card overflow-hidden">
-            <div className="px-4 py-3 text-xs tracking-wider uppercase opacity-60 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>Members to create</div>
+            <div className="px-4 py-3 text-xs tracking-wider uppercase opacity-60 border-b" style={{ borderColor: "var(--c-ink-08)" }}>Members to create</div>
             {rows.map((r, i) => (
               <div key={i} className="px-4 py-2.5 border-b text-sm flex items-center gap-3" style={{ borderColor: "rgba(15,26,46,.06)" }}>
                 <div className="flex-1">
@@ -2221,7 +2255,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
         <div className="anim-in max-w-3xl">
           <div className="card p-6 mb-5" style={{ borderLeft: "4px solid #2D5F2F" }}>
             <div className="flex items-center gap-3 mb-2">
-              <CheckCircle size={20} style={{ color: "#2D5F2F" }} />
+              <CheckCircle size={20} style={{ color: "var(--c-forest)" }} />
               <div className="font-display text-2xl">Team onboarded</div>
             </div>
             <div className="text-sm opacity-75">
@@ -2232,7 +2266,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
 
           {resultLog.failed.length > 0 && (
             <div className="card p-4 mb-5" style={{ borderLeft: "4px solid #9B2C2C", backgroundColor: "rgba(155,44,44,.04)" }}>
-              <div className="text-sm font-medium mb-2" style={{ color: "#7F2323" }}>{resultLog.failed.length} failed</div>
+              <div className="text-sm font-medium mb-2" style={{ color: "var(--c-rust-deep)" }}>{resultLog.failed.length} failed</div>
               {resultLog.failed.map((f, i) => (
                 <div key={i} className="text-xs opacity-75 mb-1">{f.row.email} — {f.error}</div>
               ))}
@@ -2241,7 +2275,7 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
 
           {sendInvites && resultLog.inviteErrors.length > 0 && (
             <div className="card p-4 mb-5" style={{ borderLeft: "4px solid #B8894A" }}>
-              <div className="text-sm font-medium mb-2" style={{ color: "#8B6914" }}>{resultLog.inviteErrors.length} invite{resultLog.inviteErrors.length === 1 ? "" : "s"} failed</div>
+              <div className="text-sm font-medium mb-2" style={{ color: "var(--c-sand)" }}>{resultLog.inviteErrors.length} invite{resultLog.inviteErrors.length === 1 ? "" : "s"} failed</div>
               {resultLog.inviteErrors.map((e, i) => (
                 <div key={i} className="text-xs opacity-75 mb-1">{e.id || "(batch)"} — {e.error || "unknown"}</div>
               ))}
@@ -2354,7 +2388,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
 
       {/* Desktop table */}
       <div className="card overflow-hidden hidden md:block">
-        <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+        <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
           <div className="col-span-3">Name</div>
           <div className="col-span-3">Email</div>
           <div className="col-span-2">Role</div>
@@ -2364,7 +2398,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         {users.map(u => (
           <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <div className="col-span-3 font-medium flex items-center gap-2">
-              {u.hasSignature && <PenTool size={11} style={{ color: "#B8894A" }} />}
+              {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} />}
               {u.name}
             </div>
             <div className="col-span-3 font-mono text-xs opacity-70 truncate">{u.email}</div>
@@ -2387,7 +2421,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
           <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
-                {u.hasSignature && <PenTool size={11} style={{ color: "#B8894A" }} className="shrink-0" />}
+                {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} className="shrink-0" />}
                 <div className="font-medium text-sm truncate">{u.name}</div>
               </div>
               <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
@@ -2424,6 +2458,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
 function OnboardUserWizard({ teams, users, onCancel, onSave }) {
   const [step, setStep] = useState(0);
   useEscapeKey(true, onCancel);
+  const trapRef = useFocusTrap(true);
   const [f, setF] = useState({
     name: "", email: "", password: "",
     role: "requestor",
@@ -2438,7 +2473,7 @@ function OnboardUserWizard({ teams, users, onCancel, onSave }) {
   const missing = ["name", "email", "password"].filter(k => !f[k].trim());
   const canAdvanceIdentity = missing.length === 0;
 
-  const Req = () => <span style={{ color: "#9B2C2C" }}>*</span>;
+  const Req = () => <span style={{ color: "var(--c-rust)" }}>*</span>;
   const errStyle = (k) => (touched[k] && !f[k].trim())
     ? { borderColor: "#9B2C2C", boxShadow: "0 0 0 3px rgba(155,44,44,.12)" } : {};
 
@@ -2475,7 +2510,7 @@ function OnboardUserWizard({ teams, users, onCancel, onSave }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.65)" }} onClick={onCancel}>
-      <div className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-auto" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
+      <div ref={trapRef} className="card p-6 w-full max-w-2xl max-h-[90vh] overflow-auto" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div>
@@ -2544,7 +2579,7 @@ function OnboardUserWizard({ teams, users, onCancel, onSave }) {
                 <div className="text-xs opacity-60 mt-1">They can change this once they sign in.</div>
               </div>
               {missing.length > 0 && Object.keys(touched).length > 0 && (
-                <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "#7F2323" }}>
+                <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
                   Required: {missing.join(", ")}
                 </div>
               )}
@@ -2666,7 +2701,7 @@ function OnboardUserWizard({ teams, users, onCancel, onSave }) {
                       : <div className="flex flex-wrap gap-1.5">
                           {f.signingAuthorityTeams.map(id => {
                             const t = teams.find(x => x.id === id);
-                            return <span key={id} className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>{t?.name || id}</span>;
+                            return <span key={id} className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>{t?.name || id}</span>;
                           })}
                         </div>
                   } />
@@ -2674,7 +2709,7 @@ function OnboardUserWizard({ teams, users, onCancel, onSave }) {
                 {f.role === "requestor" && (
                   <Row label="Department" value={
                     f.team
-                      ? <span className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "#8B6914" }}>{teams.find(t => t.id === f.team)?.name || f.team}</span>
+                      ? <span className="pill" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>{teams.find(t => t.id === f.team)?.name || f.team}</span>
                       : <span className="opacity-60">— none —</span>
                   } />
                 )}
@@ -2893,7 +2928,7 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
             {approvers.map(a => (
               <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
                 {a.hasSignature
-                  ? <PenTool size={11} style={{ color: "#B8894A" }} />
+                  ? <PenTool size={11} style={{ color: "var(--c-gold)" }} />
                   : <PenTool size={11} className="opacity-30" />}
                 <span className="flex-1">{a.name}</span>
                 {!a.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
@@ -2906,11 +2941,11 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addApproverOpen && eligibleApprovers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "#FAF7F0" }}>
+          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
             {eligibleApprovers.map(u => (
               <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
                 onClick={() => grant(u.id)} disabled={busy === u.id}>
-                <PenTool size={11} className={u.hasSignature ? "" : "opacity-30"} style={u.hasSignature ? { color: "#B8894A" } : {}} />
+                <PenTool size={11} className={u.hasSignature ? "" : "opacity-30"} style={u.hasSignature ? { color: "var(--c-gold)" } : {}} />
                 <span className="flex-1">{u.name}</span>
                 {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
                 <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
@@ -2947,7 +2982,7 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addMemberOpen && eligibleMembers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "#FAF7F0" }}>
+          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
             {eligibleMembers.map(u => {
               const currentTeam = teams.find(t => t.id === u.team);
               return (
@@ -3065,7 +3100,7 @@ function BulkSignatureModal({ users, onClose, onDone }) {
           <div key={i} className="flex items-center gap-3 py-2 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <img src={p.dataUrl} alt="" style={{ height: 30, maxWidth: 100, objectFit: "contain" }} />
             <div className="flex-1 min-w-0 font-mono text-xs truncate">{p.email}</div>
-            {p.matched ? <Check size={14} style={{ color: "#2D5F2F" }} /> : <X size={14} style={{ color: "#9B2C2C" }} />}
+            {p.matched ? <Check size={14} style={{ color: "var(--c-forest)" }} /> : <X size={14} style={{ color: "var(--c-rust)" }} />}
           </div>
         ))}
       </div>
@@ -3114,8 +3149,8 @@ function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
         <div className="flex-1" />
         <div className="text-xs opacity-60 hidden sm:block">
           <span className="font-mono">{stats.pending}</span> pending ·{" "}
-          <span className="font-mono" style={{ color: "#2D5F2F" }}>{stats.approved}</span> approved ·{" "}
-          <span className="font-mono" style={{ color: "#9B2C2C" }}>{stats.rejected}</span> rejected
+          <span className="font-mono" style={{ color: "var(--c-forest)" }}>{stats.approved}</span> approved ·{" "}
+          <span className="font-mono" style={{ color: "var(--c-rust)" }}>{stats.rejected}</span> rejected
         </div>
       </div>
 
@@ -3172,7 +3207,7 @@ function AdminReports({ requests, users, teams, back }) {
         <button className="btn-primary" onClick={exportCsv}><Download size={14} /> Download full CSV</button>
       </div>
       <div className="card overflow-hidden">
-        <div className="grid grid-cols-6 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+        <div className="grid grid-cols-6 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
           <div className="col-span-2">Team</div>
           <div>Total</div><div>Pending</div><div>Approved</div><div>Rejected</div>
         </div>
@@ -3181,8 +3216,8 @@ function AdminReports({ requests, users, teams, back }) {
             <div className="col-span-2 font-medium">{b.team}</div>
             <div className="font-display text-xl">{b.total}</div>
             <div className="text-sm"><span className="font-mono">{b.pending}</span> <span className="opacity-40 text-xs">({b.pending_finalise} in window)</span></div>
-            <div className="text-sm font-mono" style={{ color: "#2D5F2F" }}>{b.approved}</div>
-            <div className="text-sm font-mono" style={{ color: "#9B2C2C" }}>{b.rejected}</div>
+            <div className="text-sm font-mono" style={{ color: "var(--c-forest)" }}>{b.approved}</div>
+            <div className="text-sm font-mono" style={{ color: "var(--c-rust)" }}>{b.rejected}</div>
           </div>
         ))}
       </div>
@@ -3204,8 +3239,8 @@ function AdminReports({ requests, users, teams, back }) {
                   </div>
                 </div>
                 <div className="flex gap-6 text-sm">
-                  <div><span className="font-display text-lg" style={{ color: "#2D5F2F" }}>{n}</span> <span className="opacity-60 text-xs">approved</span></div>
-                  <div><span className="font-display text-lg" style={{ color: "#9B2C2C" }}>{rej}</span> <span className="opacity-60 text-xs">rejected</span></div>
+                  <div><span className="font-display text-lg" style={{ color: "var(--c-forest)" }}>{n}</span> <span className="opacity-60 text-xs">approved</span></div>
+                  <div><span className="font-display text-lg" style={{ color: "var(--c-rust)" }}>{rej}</span> <span className="opacity-60 text-xs">rejected</span></div>
                 </div>
               </div>
             );
@@ -3222,7 +3257,7 @@ function AdminEmails({ emails, back }) {
     <div>
       <BackHeader back={back} title="SendGrid log" step={`${emails.length} recorded`} />
       <div className="card p-4 mt-3 text-xs flex items-start gap-3" style={{ backgroundColor: "rgba(184,137,74,.1)" }}>
-        <AlertCircle size={14} className="mt-0.5 shrink-0" style={{ color: "#8B6914" }} />
+        <AlertCircle size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-sand)" }} />
         <div>Every email triggered by SignFlow is recorded here. When <span className="font-mono">SENDGRID_API_KEY</span> is set on the server, messages are actually delivered and marked as such. Otherwise they are recorded but not sent.</div>
       </div>
       <div className="card mt-4 overflow-hidden">
@@ -3249,7 +3284,7 @@ function AdminEmails({ emails, back }) {
       {open && (
         <ModalShell title={open.subject} onClose={() => setOpen(null)}>
           <div className="text-xs font-mono opacity-60 mb-3">to {open.to} · {fmt(open.sentAt)}</div>
-          {open.error && <div className="text-xs mb-3 p-3 rounded" style={{ backgroundColor: "rgba(155,44,44,.1)", color: "#7F2323" }}>SendGrid error: {open.error}</div>}
+          {open.error && <div className="text-xs mb-3 p-3 rounded" style={{ backgroundColor: "rgba(155,44,44,.1)", color: "var(--c-rust-deep)" }}>SendGrid error: {open.error}</div>}
           <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.body}</pre>
         </ModalShell>
       )}
@@ -3304,6 +3339,7 @@ function trimSignatureCanvas(srcCanvas) {
 
 function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUserId }) {
   useEscapeKey(!!onCancel, onCancel);
+  const trapRef = useFocusTrap(true);
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
@@ -3448,7 +3484,7 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.65)" }}>
-      <div className="card p-6 max-w-lg w-full" style={{ backgroundColor: "#F5F1E8" }}>
+      <div ref={trapRef} className="card p-6 max-w-lg w-full" style={{ backgroundColor: "var(--c-cream)" }}>
         <div className="flex items-center justify-between mb-2">
           <div className="font-display text-2xl">{title}</div>
           {onCancel && <button onClick={onCancel} className="btn-ghost text-xs"><X size={14} /></button>}
@@ -3458,7 +3494,7 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
         {currentSigUrl && (
           <div className="mb-4">
             <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Current signature on file</div>
-            <div className="card p-3 flex items-center justify-center" style={{ backgroundColor: "#FAF7F0", minHeight: 90 }}>
+            <div className="card p-3 flex items-center justify-center" style={{ backgroundColor: "var(--c-paper)", minHeight: 90 }}>
               <img src={currentSigUrl} alt="Current signature" style={{ maxHeight: 110, maxWidth: "100%", objectFit: "contain", display: "block" }} />
             </div>
             <div className="text-xs opacity-60 mt-2">Draw or upload below to replace it. The new version is auto-cropped to its content.</div>
@@ -3486,7 +3522,7 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
           <div>
             <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="text-sm" />
             {uploaded && (
-              <div className="mt-4 card p-4" style={{ backgroundColor: "#FAF7F0" }}>
+              <div className="mt-4 card p-4" style={{ backgroundColor: "var(--c-paper)" }}>
                 <img src={uploaded} alt="signature" style={{ maxHeight: 100, maxWidth: "100%", objectFit: "contain", display: "block", margin: "0 auto" }} />
               </div>
             )}
@@ -3518,9 +3554,10 @@ function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUs
 // ============================================================
 function ModalShell({ title, onClose, children }) {
   useEscapeKey(true, onClose);
+  const trapRef = useFocusTrap(true);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.65)" }} onClick={onClose}>
-      <div className="card p-6 max-w-xl w-full max-h-[90vh] overflow-auto" style={{ backgroundColor: "#F5F1E8" }} onClick={e => e.stopPropagation()}>
+      <div ref={trapRef} className="card p-6 max-w-xl w-full max-h-[90vh] overflow-auto" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div className="font-display text-2xl pr-4">{title}</div>
           <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
