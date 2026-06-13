@@ -1,0 +1,14 @@
+{
+  "name": "signflow-docs-tools",
+  "version": "1.0.0",
+  "description": "Tooling for HQHB SignFlow docs (PDF generation).",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build-pdf": "node build-docs-pdf.cjs"
+  },
+  "dependencies": {
+    "marked": "^14.1.0",
+    "puppeteer": "^23.0.0"
+  }
+}
