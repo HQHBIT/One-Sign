@@ -1,6 +1,6 @@
-import { PenTool, LogOut } from "lucide-react";
+import { PenTool, LogOut, KeyRound } from "lucide-react";
 
-export function TopBar({ user, logout, onEditSignature }) {
+export function TopBar({ user, logout, onEditSignature, onChangePassword }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   return (
     <header className="border-b sticky top-0 z-30"
@@ -41,6 +41,14 @@ export function TopBar({ user, logout, onEditSignature }) {
               title={user.hasSignature ? "Update your signature" : "Add your signature"}>
               <PenTool size={14} />
               <span className="hidden sm:inline">{user.hasSignature ? "Signature" : "Add signature"}</span>
+            </button>
+          )}
+          {onChangePassword && (
+            <button onClick={onChangePassword}
+              className="btn-ghost text-sm px-2 sm:px-3"
+              title="Change your password">
+              <KeyRound size={14} />
+              <span className="hidden lg:inline">Password</span>
             </button>
           )}
           <button onClick={logout}
