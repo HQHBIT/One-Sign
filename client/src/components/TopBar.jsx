@@ -1,6 +1,9 @@
-import { PenTool, LogOut, KeyRound } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle } from "lucide-react";
 
 export function TopBar({ user, logout, onEditSignature, onChangePassword }) {
+  // Link to the hosted docs in this repo. Always open in a new tab so the
+  // user doesn't lose any in-progress work in SignFlow.
+  const docsUrl = "https://github.com/taha-chunawala/One-Sign/blob/UAT/docs/user-guide.md";
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   return (
     <header className="border-b sticky top-0 z-30"
@@ -51,6 +54,12 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword }) {
               <span className="hidden lg:inline">Password</span>
             </button>
           )}
+          <a href={docsUrl} target="_blank" rel="noopener noreferrer"
+            className="btn-ghost text-sm px-2 sm:px-3"
+            title="Open the user guide in a new tab">
+            <HelpCircle size={14} />
+            <span className="hidden lg:inline">Help</span>
+          </a>
           <button onClick={logout}
             className="btn-ghost text-sm px-2 sm:px-3"
             title="Sign out">
