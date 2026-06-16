@@ -2321,6 +2321,33 @@ function AdminExpenses({ notify, back }) {
   };
 
   const inr = n => `₹${Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Build + download an .xlsx of all expenses. xlsx ships in the lazy chunk, so import on demand.
+  const exportXlsx = async () => {
+    if (!expenses.length) return;
+    const XLSX = await import("xlsx");
+    const data = expenses.map(e => ({
+      Date: e.date,
+      "Paid By": e.paidBy,
+      Description: e.description || "",
+      "Amount (INR)": e.amount,
+      Repayment: e.repaymentDone ? "Done" : "Outstanding",
+      Submitted: new Date(e.createdAt).toLocaleString("en-IN")
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [{ wch: 12 }, { wch: 20 }, { wch: 32 }, { wch: 14 }, { wch: 12 }, { wch: 22 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Expenses");
+    const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([new Uint8Array(out)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expenses-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
   const shown = expenses.filter(e =>
     filter === "all" ? true : filter === "repaid" ? e.repaymentDone : !e.repaymentDone
   );
@@ -2348,13 +2375,19 @@ function AdminExpenses({ notify, back }) {
         </div>
       </div>
 
-      <div className="flex gap-2 mt-8 mb-4">
-        {["all", "outstanding", "repaid"].map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`px-3 py-1.5 rounded text-sm capitalize ${filter === f ? "btn-primary" : "btn-ghost"}`}>
-            {f}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-3 mt-8 mb-4">
+        <div className="flex gap-2">
+          {["all", "outstanding", "repaid"].map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`px-3 py-1.5 rounded text-sm capitalize ${filter === f ? "btn-primary" : "btn-ghost"}`}>
+              {f}
+            </button>
+          ))}
+        </div>
+        <button className="btn-primary" onClick={exportXlsx} disabled={!expenses.length}
+          title="Download all expenses as an Excel file">
+          <Download size={14} /> Download Excel
+        </button>
       </div>
 
       <div className="card overflow-hidden">
@@ -2372,7 +2405,10 @@ function AdminExpenses({ notify, back }) {
         ) : shown.map((e, i) => (
           <div key={e.id} className={`grid grid-cols-12 items-center px-5 py-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
             <div className="col-span-2 text-sm">{e.date}</div>
-            <div className="col-span-4 font-medium text-sm truncate">{e.paidBy}</div>
+            <div className="col-span-4 min-w-0">
+              <div className="font-medium text-sm truncate">{e.paidBy}</div>
+              {e.description ? <div className="text-xs opacity-50 truncate" title={e.description}>{e.description}</div> : null}
+            </div>
             <div className="col-span-2 font-mono text-sm">{inr(e.amount)}</div>
             <div className="col-span-2">
               <button onClick={() => toggle(e)}
