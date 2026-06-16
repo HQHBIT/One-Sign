@@ -12,6 +12,7 @@ import usersRoutes from "./routes/users.js";
 import teamsRoutes from "./routes/teams.js";
 import requestsRoutes from "./routes/requests.js";
 import adminRoutes from "./routes/admin.js";
+import expensesRoutes from "./routes/expenses.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.resolve(__dirname, "../../client/dist");
@@ -40,6 +41,7 @@ async function main() {
   app.use("/api/users", usersRoutes);
   app.use("/api/teams", teamsRoutes);
   app.use("/api/requests", requestsRoutes);
+  app.use("/api/expenses", expensesRoutes);
   app.use("/api", adminRoutes);
 
   // Serve built client assets in production
