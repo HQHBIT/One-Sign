@@ -19,11 +19,11 @@ export function LoginScreen({ login }) {
 
   // Expense panel: anyone can record an expense without signing in.
   const [expenseOpen, setExpenseOpen] = useState(false);
-  const [exp, setExp] = useState({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false });
+  const [exp, setExp] = useState({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false, description: "" });
   const [expState, setExpState] = useState("form"); // form | saving | done | error
   const [expErr, setExpErr] = useState(null);
 
-  const resetExp = () => { setExp({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false }); setExpState("form"); setExpErr(null); };
+  const resetExp = () => { setExp({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false, description: "" }); setExpState("form"); setExpErr(null); };
   const openExpense = () => { resetExp(); setExpenseOpen(true); };
   const closeExpense = () => { setExpenseOpen(false); resetExp(); };
 
@@ -33,7 +33,7 @@ export function LoginScreen({ login }) {
     if (!Number.isFinite(amt) || amt <= 0 || !exp.paidBy.trim()) return;
     setExpState("saving"); setExpErr(null);
     try {
-      await api.submitExpense({ amount: amt, paidBy: exp.paidBy.trim(), date: exp.date, repaymentDone: exp.repaymentDone });
+      await api.submitExpense({ amount: amt, paidBy: exp.paidBy.trim(), date: exp.date, repaymentDone: exp.repaymentDone, description: exp.description.trim() });
       setExpState("done");
     } catch (err) {
       setExpErr(err.message || "Could not save expense");
@@ -146,6 +146,11 @@ export function LoginScreen({ login }) {
               <input type="date" value={exp.date}
                 onChange={e => setExp({ ...exp, date: e.target.value })}
                 className="w-full mb-5" required />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Description (optional)</label>
+              <input type="text" value={exp.description}
+                onChange={e => setExp({ ...exp, description: e.target.value })}
+                className="w-full mb-5" maxLength={500} placeholder="What was this expense for?" />
 
               <label className="flex items-center gap-2 mb-6 text-sm cursor-pointer">
                 <input type="checkbox" checked={exp.repaymentDone}
