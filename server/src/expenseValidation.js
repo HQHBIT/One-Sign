@@ -36,5 +36,8 @@ export function validateExpenseInput(body = {}) {
     body.repaymentDone === true || body.repaymentDone === "true" ||
     body.repaymentDone === 1 || body.repaymentDone === "1" ? 1 : 0;
 
-  return { ok: true, value: { amount: roundedAmount, paidBy, expenseDate: date, repaymentDone } };
+  // Optional free-text note about what the expense was for. Capped to the column width.
+  const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
+
+  return { ok: true, value: { amount: roundedAmount, paidBy, expenseDate: date, repaymentDone, description } };
 }

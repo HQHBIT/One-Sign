@@ -197,6 +197,7 @@ async function runSchema() {
       paid_by         VARCHAR(191)  NOT NULL,
       expense_date    DATE          NOT NULL,
       repayment_done  TINYINT(1)    NOT NULL DEFAULT 0,
+      description     VARCHAR(500)  DEFAULT NULL,
       created_at      BIGINT        NOT NULL,
       INDEX idx_expenses_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
@@ -247,6 +248,9 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_req_requestor FOREIGN KEY (requestor_id) REFERENCES users(id) ON DELETE SET NULL`);
   await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_req_approver FOREIGN KEY (approver_id) REFERENCES users(id) ON DELETE SET NULL`);
   await tryExec(`ALTER TABLE request_step_signers ADD CONSTRAINT fk_signers_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL`);
+
+  // Expenses: optional free-text description (added after the initial expenses release).
+  await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 }
 
 async function seedIfEmpty() {

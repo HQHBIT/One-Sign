@@ -3,9 +3,9 @@ import { validateExpenseInput } from "../src/expenseValidation.js";
 
 // valid input is normalised (trimmed name, rounded amount, coerced flag)
 {
-  const r = validateExpenseInput({ amount: "120.5", paidBy: "  Moiz  ", date: "2026-06-16", repaymentDone: "true" });
+  const r = validateExpenseInput({ amount: "120.5", paidBy: "  Moiz  ", date: "2026-06-16", repaymentDone: "true", description: "  Team lunch  " });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.value, { amount: 120.5, paidBy: "Moiz", expenseDate: "2026-06-16", repaymentDone: 1 });
+  assert.deepEqual(r.value, { amount: 120.5, paidBy: "Moiz", expenseDate: "2026-06-16", repaymentDone: 1, description: "Team lunch" });
 }
 // amount must be > 0
 assert.equal(validateExpenseInput({ amount: 0, paidBy: "X", date: "2026-06-16" }).ok, false);
@@ -22,6 +22,12 @@ assert.equal(validateExpenseInput({ amount: 10, paidBy: "X", date: "2026-02-30" 
   const r = validateExpenseInput({ amount: 10, paidBy: "X", date: "2026-06-16" });
   assert.equal(r.ok, true);
   assert.equal(r.value.repaymentDone, 0);
+}
+
+// description is optional → defaults to "" when omitted
+{
+  const r = validateExpenseInput({ amount: 10, paidBy: "X", date: "2026-06-16" });
+  assert.equal(r.value.description, "");
 }
 
 console.log("expenseValidation: all tests passed");

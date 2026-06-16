@@ -17,6 +17,7 @@ function hydrate(r) {
     paidBy: r.paid_by,
     date,
     repaymentDone: !!r.repayment_done,
+    description: r.description || "",
     createdAt: Number(r.created_at)
   };
 }
@@ -28,10 +29,10 @@ router.post("/", async (req, res, next) => {
   try {
     const v = validateExpenseInput(req.body);
     if (!v.ok) return res.status(400).json({ error: v.error });
-    const { amount, paidBy, expenseDate, repaymentDone } = v.value;
+    const { amount, paidBy, expenseDate, repaymentDone, description } = v.value;
     await execute(
-      "INSERT INTO expenses (amount, paid_by, expense_date, repayment_done, created_at) VALUES (?, ?, ?, ?, ?)",
-      [amount, paidBy, expenseDate, repaymentDone, Date.now()]
+      "INSERT INTO expenses (amount, paid_by, expense_date, repayment_done, description, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [amount, paidBy, expenseDate, repaymentDone, description || null, Date.now()]
     );
     res.status(201).json({ ok: true });
   } catch (e) { next(e); }
@@ -41,7 +42,7 @@ router.post("/", async (req, res, next) => {
 router.get("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const rows = await query(
-      "SELECT id, amount, paid_by, DATE_FORMAT(expense_date, '%Y-%m-%d') AS expense_date, repayment_done, created_at " +
+      "SELECT id, amount, paid_by, DATE_FORMAT(expense_date, '%Y-%m-%d') AS expense_date, repayment_done, description, created_at " +
       "FROM expenses ORDER BY expense_date DESC, id DESC"
     );
     const expenses = rows.map(hydrate);

@@ -141,10 +141,10 @@ export const api = {
 
   // -------- expenses --------
   // POST is public (login page) — fetch wrapper omits the auth header when no token is set.
-  submitExpense({ amount, paidBy, date, repaymentDone }) {
+  submitExpense({ amount, paidBy, date, repaymentDone, description }) {
     return this.fetch("/api/expenses", {
       method: "POST",
-      body: JSON.stringify({ amount, paidBy, date, repaymentDone })
+      body: JSON.stringify({ amount, paidBy, date, repaymentDone, description })
     });
   },
   listExpenses() { return this.fetch("/api/expenses"); }, // returns { expenses, summary }

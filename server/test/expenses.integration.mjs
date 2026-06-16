@@ -28,7 +28,7 @@ const auth = { Authorization: `Bearer ${token}` };
 // 1) public POST — valid
 const ok = await j(await fetch(`${BASE}/api/expenses`, {
   method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ amount: 250.75, paidBy: TAG, date: "2026-06-16", repaymentDone: false })
+  body: JSON.stringify({ amount: 250.75, paidBy: TAG, date: "2026-06-16", repaymentDone: false, description: "Round-trip check" })
 }));
 check("public POST valid -> 201", ok.status === 201 && ok.body.ok === true);
 
@@ -46,6 +46,7 @@ check("GET without token -> 401", (await j(await fetch(`${BASE}/api/expenses`)))
 const list = await j(await fetch(`${BASE}/api/expenses`, { headers: auth }));
 const mine = (list.body.expenses || []).find(e => e.paidBy === TAG && e.amount === 250.75);
 check("admin GET -> list + summary", list.status === 200 && !!mine && typeof list.body.summary.outstanding === "number");
+check("description round-trips", mine?.description === "Round-trip check");
 
 // 5) PATCH repayment -> flips
 const patch = mine ? await j(await fetch(`${BASE}/api/expenses/${mine.id}/repayment`, {
