@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound
+  KeyRound, Wallet
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -992,6 +992,7 @@ function AdminView(props) {
     back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
+  if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />;
 
   const { users, teams, requests, emails } = props;
   const tiles = [
@@ -1001,7 +1002,8 @@ function AdminView(props) {
     { key: "signatures", icon: PenTool, title: "Signatures", desc: "Upload signatures in bulk on behalf of users." },
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
-    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length }
+    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
+    { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
   return (
     <div>
@@ -2284,6 +2286,105 @@ function AdminEmails({ emails, back }) {
           <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.body}</pre>
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+function AdminExpenses({ notify, back }) {
+  const [loading, setLoading] = useState(true);
+  const [expenses, setExpenses] = useState([]);
+  const [summary, setSummary] = useState({ count: 0, total: 0, repaid: 0, outstanding: 0 });
+  const [filter, setFilter] = useState("all"); // all | outstanding | repaid
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.listExpenses();
+      setExpenses(data.expenses || []);
+      setSummary(data.summary || { count: 0, total: 0, repaid: 0, outstanding: 0 });
+    } catch (e) {
+      notify?.(e.message || "Could not load expenses", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = async (exp) => {
+    try {
+      await api.setExpenseRepayment(exp.id, !exp.repaymentDone);
+      await load();
+    } catch (e) {
+      notify?.(e.message || "Could not update repayment", "error");
+    }
+  };
+
+  const inr = n => `₹${Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const shown = expenses.filter(e =>
+    filter === "all" ? true : filter === "repaid" ? e.repaymentDone : !e.repaymentDone
+  );
+
+  return (
+    <div>
+      <BackHeader back={back} title="Expenses" step={`${summary.count} recorded`} />
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+        <div className="card p-5">
+          <div className="text-[10px] tracking-wider uppercase opacity-50">Entries</div>
+          <div className="font-display text-2xl mt-1">{summary.count}</div>
+        </div>
+        <div className="card p-5">
+          <div className="text-[10px] tracking-wider uppercase opacity-50">Total</div>
+          <div className="font-display text-2xl mt-1">{inr(summary.total)}</div>
+        </div>
+        <div className="card p-5">
+          <div className="text-[10px] tracking-wider uppercase opacity-50">Repaid</div>
+          <div className="font-display text-2xl mt-1" style={{ color: "var(--c-forest)" }}>{inr(summary.repaid)}</div>
+        </div>
+        <div className="card p-5">
+          <div className="text-[10px] tracking-wider uppercase opacity-50">Outstanding</div>
+          <div className="font-display text-2xl mt-1" style={{ color: "var(--c-rust)" }}>{inr(summary.outstanding)}</div>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mt-8 mb-4">
+        {["all", "outstanding", "repaid"].map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-3 py-1.5 rounded text-sm capitalize ${filter === f ? "btn-primary" : "btn-ghost"}`}>
+            {f}
+          </button>
+        ))}
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="grid grid-cols-12 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
+          <div className="col-span-2">Date</div>
+          <div className="col-span-4">Paid by</div>
+          <div className="col-span-2">Amount</div>
+          <div className="col-span-2">Repayment</div>
+          <div className="col-span-2">Submitted</div>
+        </div>
+        {loading ? (
+          <div className="p-10 text-center opacity-50 text-sm">Loading…</div>
+        ) : shown.length === 0 ? (
+          <div className="p-10 text-center opacity-50 text-sm">No expenses{filter !== "all" ? ` (${filter})` : ""} yet.</div>
+        ) : shown.map((e, i) => (
+          <div key={e.id} className={`grid grid-cols-12 items-center px-5 py-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
+            <div className="col-span-2 text-sm">{e.date}</div>
+            <div className="col-span-4 font-medium text-sm truncate">{e.paidBy}</div>
+            <div className="col-span-2 font-mono text-sm">{inr(e.amount)}</div>
+            <div className="col-span-2">
+              <button onClick={() => toggle(e)}
+                className={`pill ${e.repaymentDone ? "pill-approved" : "pill-rejected"}`}
+                title="Click to toggle repayment">
+                {e.repaymentDone ? "Repaid" : "Outstanding"}
+              </button>
+            </div>
+            <div className="col-span-2 text-xs opacity-50">{fmtShort(e.createdAt)}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
