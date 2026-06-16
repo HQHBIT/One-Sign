@@ -2,6 +2,12 @@ import { useState } from "react";
 import { ArrowRight, ArrowLeft, Check } from "lucide-react";
 import { api } from "../api.js";
 
+// Local-time YYYY-MM-DD for the date input's default value.
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function LoginScreen({ login }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -10,6 +16,30 @@ export function LoginScreen({ login }) {
   const [forgotState, setForgotState] = useState("idle");
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotErr, setForgotErr] = useState(null);
+
+  // Expense panel: anyone can record an expense without signing in.
+  const [expenseOpen, setExpenseOpen] = useState(false);
+  const [exp, setExp] = useState({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false });
+  const [expState, setExpState] = useState("form"); // form | saving | done | error
+  const [expErr, setExpErr] = useState(null);
+
+  const resetExp = () => { setExp({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false }); setExpState("form"); setExpErr(null); };
+  const openExpense = () => { resetExp(); setExpenseOpen(true); };
+  const closeExpense = () => { setExpenseOpen(false); resetExp(); };
+
+  const submitExpense = async e => {
+    e.preventDefault();
+    const amt = Number(exp.amount);
+    if (!Number.isFinite(amt) || amt <= 0 || !exp.paidBy.trim()) return;
+    setExpState("saving"); setExpErr(null);
+    try {
+      await api.submitExpense({ amount: amt, paidBy: exp.paidBy.trim(), date: exp.date, repaymentDone: exp.repaymentDone });
+      setExpState("done");
+    } catch (err) {
+      setExpErr(err.message || "Could not save expense");
+      setExpState("error");
+    }
+  };
 
   const submit = async e => {
     e.preventDefault(); setBusy(true);
@@ -71,7 +101,7 @@ export function LoginScreen({ login }) {
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
-          {forgotState === "idle" && (
+          {forgotState === "idle" && !expenseOpen && (
             <form onSubmit={submit}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
               <div className="text-sm opacity-60 mb-8">Use the credentials provided by your administrator.</div>
@@ -88,7 +118,73 @@ export function LoginScreen({ login }) {
               <button className="btn-primary w-full justify-center" disabled={busy}>
                 {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
               </button>
+              <div className="text-center mt-6">
+                <button type="button" onClick={openExpense}
+                  className="text-xs opacity-60 hover:opacity-100 underline">
+                  Submit an expense →
+                </button>
+              </div>
             </form>
+          )}
+
+          {expenseOpen && expState !== "done" && (
+            <form onSubmit={submitExpense}>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Submit an expense</div>
+              <div className="text-sm opacity-60 mb-8">No sign-in needed — just record the details.</div>
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Amount (₹)</label>
+              <input type="number" min="0" step="0.01" value={exp.amount}
+                onChange={e => setExp({ ...exp, amount: e.target.value })}
+                className="w-full mb-5" required autoFocus />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Paid By</label>
+              <input type="text" value={exp.paidBy}
+                onChange={e => setExp({ ...exp, paidBy: e.target.value })}
+                className="w-full mb-5" maxLength={191} required />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Date</label>
+              <input type="date" value={exp.date}
+                onChange={e => setExp({ ...exp, date: e.target.value })}
+                className="w-full mb-5" required />
+
+              <label className="flex items-center gap-2 mb-6 text-sm cursor-pointer">
+                <input type="checkbox" checked={exp.repaymentDone}
+                  onChange={e => setExp({ ...exp, repaymentDone: e.target.checked })} />
+                Repayment done
+              </label>
+
+              {expErr && (
+                <div className="text-xs px-3 py-2 rounded mb-4"
+                  style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+                  {expErr}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button type="button" className="btn-ghost" onClick={closeExpense}>
+                  <ArrowLeft size={14} /> Back
+                </button>
+                <button className="btn-primary flex-1 justify-center"
+                  disabled={expState === "saving" || !exp.paidBy.trim() || !(Number(exp.amount) > 0)}>
+                  {expState === "saving" ? "Saving…" : <>Record expense <ArrowRight size={14} /></>}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {expenseOpen && expState === "done" && (
+            <div className="anim-in">
+              <div className="font-display text-2xl sm:text-3xl mb-2">Recorded ✓</div>
+              <div className="text-sm opacity-70 mb-6 leading-relaxed">Your expense has been saved. Thank you.</div>
+              <div className="flex gap-2">
+                <button className="btn-ghost" onClick={closeExpense}>
+                  <ArrowLeft size={14} /> Back to sign-in
+                </button>
+                <button className="btn-primary flex-1 justify-center" onClick={resetExp}>
+                  Submit another <ArrowRight size={14} />
+                </button>
+              </div>
+            </div>
           )}
 
           {(forgotState === "open" || forgotState === "sending" || forgotState === "error") && (
