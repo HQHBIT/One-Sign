@@ -346,6 +346,69 @@ docs.push(["SignFlow-FAQ", "FAQ", [
   ...faq.flatMap(([q, a]) => [{ h3: q }, { p: a }])
 ]]);
 
+// ---- 8. Bulk onboarding guide (~250 users) ----
+docs.push(["SignFlow-Bulk-Onboarding-Guide", "Bulk Onboarding", [
+  { title: "SignFlow — Bulk Onboarding Guide", subtitle: "Onboard your whole organisation (≈250 users) efficiently" },
+  { p: "For a large rollout, do **not** add people one at a time. SignFlow onboards a whole department from a spreadsheet and emails everyone their login in one step. This guide takes you from an empty system to ~250 signed-in users." },
+  { h2: "Two prerequisites — sort these first" },
+  { steps: [
+    "**Email delivery (SendGrid).** SignFlow emails each new user their temporary password and sign-in link. For a bulk rollout this must be switched on at the server. If it is off, invitations are only recorded (not sent) and you would have to hand out 250 passwords manually. Confirm with IT that email delivery is live before you begin.",
+    "**Your teams.** Create every department first — Admin → Teams & authority → Add team. Users are onboarded one team at a time."
+  ] },
+  { h2: "Step 1 — Build your master roster" },
+  { p: "Capture every person once, in a single sheet. Use the roster template (SignFlow-User-Roster-Template.csv)." },
+  { table: { head: ["Column", "Notes"], widths: [3000, 6360], rows: [
+    ["Name", "As it should appear on signatures and records"],
+    ["Work email", "Their login — must be unique"],
+    ["Role", "requestor (most staff) or approver (authorised signatories)"],
+    ["Department", "Which team they belong to / are onboarded under"],
+    ["Signs for (extra teams)", "Approvers only — any teams beyond their own they may sign for"]
+  ] } },
+  { h2: "Step 2 — Split the roster by department" },
+  { p: "SignFlow imports one team at a time, and everyone in an upload is assigned to that team. From your master roster, make one upload file per department with just three columns — **name, email, role** (role is optional and defaults to requestor; use “approver” where needed). See SignFlow-team-upload-example.csv, or click **Download template** on the Onboard-team screen for the exact format." },
+  { h2: "Step 3 — Onboard each department" },
+  { img: "31-admin-onboard", w: 560, caption: "Onboard team — pick or create the team, then upload that department’s file." },
+  { steps: [
+    "Admin → **Onboard team**.",
+    "Pick the department (or create it).",
+    "Upload that department’s file (.xlsx or .csv).",
+    "Review the parsed rows — flag who is an **Approver** and fix any names/emails.",
+    "Keep **Send invitations** ticked, then **Create**. Everyone is created and emailed their login in one go."
+  ] },
+  { note: "Repeat per department. A batch of 30–50 people imports in under a minute; split very large single teams into batches of ~100." },
+  { h2: "Step 4 — Approvers who sign for multiple teams" },
+  { p: "Onboarding grants an approver authority over the one team you uploaded them under. For any additional teams they must sign for, add them in **Admin → Teams & authority → grant authority**." },
+  { h2: "Step 5 — (Optional) Pre-load signatures" },
+  { p: "Save each person’s signature image named by their email (e.g., `jane.doe@hqhb.in.png`). Then **Admin → Signatures → bulk-upload** — up to 200 files per batch, 2 MB each (so two batches for 250). SignFlow matches each image by email, skipping everyone’s first-login signature step." },
+  { h2: "Step 6 — Verify" },
+  { bullets: [
+    "**Admin → Users** — confirm the count (~250) and the roles look right.",
+    "**Admin → Email log** — confirm the invitations were delivered.",
+    "Spot-check one or two accounts by signing in."
+  ] },
+  { h2: "What each user receives" },
+  { p: "A welcome email with their email address, a temporary password, and the link (" + URL + "). On first sign-in they change the password and register their signature." },
+  { h2: "Troubleshooting" },
+  { table: { head: ["Symptom", "Fix"], widths: [3400, 5960], rows: [
+    ["A row didn’t import", "Duplicate email (already a user — skipped) or missing name/valid email. Fix that row and re-upload just that person; re-running is safe."],
+    ["Invitations not arriving", "Email delivery (SendGrid) is likely off or the sender isn’t verified. Once live, resend via Users → invite (or bulk-invite)."],
+    ["Wrong department", "Admin → Teams & authority — reassign a requestor’s team, or grant/adjust an approver’s authority."],
+    ["Approver not appearing in workflows", "They have no signing authority yet — grant it in Teams & authority."]
+  ] } },
+  { h2: "Rollout checklist" },
+  { steps: [
+    "Email delivery (SendGrid) confirmed live.",
+    "All departments created.",
+    "Master roster complete (~250).",
+    "Per-department upload files prepared.",
+    "Each department onboarded, with invitations sent.",
+    "Extra signing authority granted to multi-team approvers.",
+    "(Optional) Signatures pre-loaded.",
+    "User count and Email log verified.",
+    "Announcement email sent."
+  ] }
+]]);
+
 // ============================ WRITE ============================
 (async () => {
   for (const [file, shortTitle, blocks] of docs) {

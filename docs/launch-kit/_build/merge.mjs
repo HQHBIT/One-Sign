@@ -13,6 +13,7 @@ const order = [
   ["Approver Guide", "SignFlow-Approver-Guide"],
   ["Administrator Guide", "SignFlow-Administrator-Guide"],
   ["IT Onboarding Playbook", "SignFlow-IT-Onboarding-Playbook"],
+  ["Bulk Onboarding Guide (250 users)", "SignFlow-Bulk-Onboarding-Guide"],
   ["FAQ", "SignFlow-FAQ"]
 ];
 

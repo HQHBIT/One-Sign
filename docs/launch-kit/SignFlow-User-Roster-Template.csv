@@ -1,0 +1,5 @@
+Name,Work Email,Role,Department,Signs for (extra teams; approvers only),Signature provided (Y/N)
+Jane Finance,jane.finance@hqhb.in,approver,Finance,Operations|Procurement,N
+Karim Ops,karim.ops@hqhb.in,requestor,Operations,,N
+Priya Iyer,priya.iyer@hqhb.in,requestor,Finance,,N
+Moiz Barwani,moiz.barwani@hqhb.in,approver,Management,Finance|Operations,N
