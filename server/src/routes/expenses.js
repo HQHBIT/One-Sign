@@ -1,3 +1,4 @@
+// DISABLED: expense feature commented out — this router is no longer mounted in index.js.
 import { Router } from "express";
 import { query, queryOne, execute } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";

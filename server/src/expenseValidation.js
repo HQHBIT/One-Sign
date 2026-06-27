@@ -1,3 +1,4 @@
+// DISABLED: expense feature commented out — used only by the (now unmounted) expenses router.
 // Pure input validation for an incoming expense submission.
 // No DB, no framework — easy to unit-test and reuse from the route handler.
 

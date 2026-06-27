@@ -2,11 +2,13 @@ import { useState } from "react";
 import { ArrowRight, ArrowLeft, Check } from "lucide-react";
 import { api } from "../api.js";
 
-// Local-time YYYY-MM-DD for the date input's default value.
+// DISABLED: expense feature commented out
+/* Local-time YYYY-MM-DD for the date input's default value.
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+*/
 
 export function LoginScreen({ login }) {
   const [email, setEmail] = useState("");
@@ -17,6 +19,7 @@ export function LoginScreen({ login }) {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotErr, setForgotErr] = useState(null);
 
+  /* DISABLED: expense feature commented out
   // Expense panel: anyone can record an expense without signing in.
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [exp, setExp] = useState({ amount: "", paidBy: "", date: todayStr(), repaymentDone: false, description: "" });
@@ -40,6 +43,7 @@ export function LoginScreen({ login }) {
       setExpState("error");
     }
   };
+  */
 
   const submit = async e => {
     e.preventDefault(); setBusy(true);
@@ -101,7 +105,7 @@ export function LoginScreen({ login }) {
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
-          {forgotState === "idle" && !expenseOpen && (
+          {forgotState === "idle" && (
             <form onSubmit={submit}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
               <div className="text-sm opacity-60 mb-8">Use the credentials provided by your administrator.</div>
@@ -118,15 +122,18 @@ export function LoginScreen({ login }) {
               <button className="btn-primary w-full justify-center" disabled={busy}>
                 {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
               </button>
+              {/* DISABLED: expense feature commented out — submit-an-expense link
               <div className="text-center mt-6">
                 <button type="button" onClick={openExpense}
                   className="text-xs opacity-60 hover:opacity-100 underline">
                   Submit an expense →
                 </button>
               </div>
+              */}
             </form>
           )}
 
+          {/* DISABLED: expense feature commented out — submission + success panels
           {expenseOpen && expState !== "done" && (
             <form onSubmit={submitExpense}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Submit an expense</div>
@@ -191,6 +198,7 @@ export function LoginScreen({ login }) {
               </div>
             </div>
           )}
+          */}
 
           {(forgotState === "open" || forgotState === "sending" || forgotState === "error") && (
             <form onSubmit={submitForgot}>

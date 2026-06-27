@@ -992,7 +992,7 @@ function AdminView(props) {
     back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
-  if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />;
+  // if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />; // DISABLED: expense feature commented out
 
   const { users, teams, requests, emails } = props;
   const tiles = [
@@ -1002,8 +1002,9 @@ function AdminView(props) {
     { key: "signatures", icon: PenTool, title: "Signatures", desc: "Upload signatures in bulk on behalf of users." },
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
-    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
-    { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
+    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length }
+    // DISABLED: expense feature commented out — Expenses dashboard tile
+    // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
   return (
     <div>
@@ -2290,6 +2291,7 @@ function AdminEmails({ emails, back }) {
   );
 }
 
+// DISABLED: expense feature commented out — AdminExpenses is no longer referenced (route + tile commented out). Kept for easy re-enable.
 function AdminExpenses({ notify, back }) {
   const [loading, setLoading] = useState(true);
   const [expenses, setExpenses] = useState([]);

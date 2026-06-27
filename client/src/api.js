@@ -139,6 +139,7 @@ export const api = {
     });
   },
 
+  /* DISABLED: expense feature commented out
   // -------- expenses --------
   // POST is public (login page) — fetch wrapper omits the auth header when no token is set.
   submitExpense({ amount, paidBy, date, repaymentDone, description }) {
@@ -154,6 +155,7 @@ export const api = {
       body: JSON.stringify({ done })
     });
   },
+  */
 
   // -------- authenticated file blobs --------
   async getRequestFileBlob(id, kind = "file") {
