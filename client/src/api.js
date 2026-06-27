@@ -139,6 +139,24 @@ export const api = {
     });
   },
 
+  /* DISABLED: expense feature commented out
+  // -------- expenses --------
+  // POST is public (login page) — fetch wrapper omits the auth header when no token is set.
+  submitExpense({ amount, paidBy, date, repaymentDone, description }) {
+    return this.fetch("/api/expenses", {
+      method: "POST",
+      body: JSON.stringify({ amount, paidBy, date, repaymentDone, description })
+    });
+  },
+  listExpenses() { return this.fetch("/api/expenses"); }, // returns { expenses, summary }
+  setExpenseRepayment(id, done) {
+    return this.fetch(`/api/expenses/${id}/repayment`, {
+      method: "PATCH",
+      body: JSON.stringify({ done })
+    });
+  },
+  */
+
   // -------- authenticated file blobs --------
   async getRequestFileBlob(id, kind = "file") {
     const res = await this.fetch(`/api/requests/${id}/${kind}`, { raw: true });
