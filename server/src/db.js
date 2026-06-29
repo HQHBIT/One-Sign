@@ -268,6 +268,9 @@ async function runSchema() {
   await tryExec(`ALTER TABLE users ADD COLUMN reporting_manager VARCHAR(191) DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD COLUMN requested_team VARCHAR(191) DEFAULT NULL`);
 
+  // Direct (person-to-person) requests: a step has no team.
+  await tryExec(`ALTER TABLE request_steps MODIFY COLUMN team_id VARCHAR(64) NULL`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 }

@@ -299,17 +299,26 @@ function RequestorView(props) {
   const my = requests.filter(r => r.requestorId === user.id);
   const pending = my.filter(r => r.status === "pending");
   const approved = my.filter(r => r.status === "approved");
+  // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
+  const awaitingMySig = requests.filter(r => {
+    if (r.status !== "pending" || !r.workflow?.length) return false;
+    const active = r.workflow.find(s => s.status === "active");
+    const next = active?.signers?.find(s => s.status === "pending");
+    return next?.userId === user.id;
+  });
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
   if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={approved} />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
   const tiles = [
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
+    { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Signed and finalised documents, ready to download.", badge: approved.length }
   ];
@@ -575,6 +584,35 @@ function ApproverView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
+    </div>
+  );
+}
+
+// Requestor-facing list of direct requests waiting for THIS user's signature.
+// Reuses the role-agnostic ApproveDrawer for the actual review + sign.
+function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, undoApproval, back, notify }) {
+  const [openId, setOpenId] = useState(null);
+  const open = items.find(r => r.id === openId);
+  return (
+    <div>
+      <BackHeader back={back} title="Awaiting your signature" step={`${items.length} to sign`} />
+      {items.length === 0 ? (
+        <Empty icon={Inbox} text="No requests are waiting for your signature." />
+      ) : (
+        <div className="card mt-4 overflow-hidden">
+          {items.map((r, i) => (
+            <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
+              <div className="flex-1">
+                <RequestRow r={r} teams={teams} users={users} i={0}
+                  actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review &amp; sign <ArrowRight size={12} /></button>} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setOpenId(null)} notify={notify} />}
     </div>
   );
 }
