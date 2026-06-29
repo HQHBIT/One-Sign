@@ -62,6 +62,19 @@ export const api = {
     });
   },
 
+  // -------- self-registration --------
+  register({ name, email, password, teamName, reportingManager }) {
+    return this.fetch("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ name, email, password, teamName, reportingManager })
+    });
+  },
+  listRegistrations() { return this.fetch("/api/registrations"); }, // { registrations, pending }
+  approveRegistration(id) { return this.fetch(`/api/registrations/${id}/approve`, { method: "POST" }); },
+  rejectRegistration(id, reason) {
+    return this.fetch(`/api/registrations/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
   createTeam(name) { return this.fetch("/api/teams", { method: "POST", body: JSON.stringify({ name }) }); },
