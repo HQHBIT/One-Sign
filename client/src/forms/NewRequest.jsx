@@ -9,6 +9,7 @@ import {
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
+import { api } from "../api.js";
 
 // Lazy viewer module — same shared chunk as the rest of the app.
 const ViewerModule = () => import("../viewer.jsx");
@@ -32,6 +33,26 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   // workflow mode: [{teamId, signers: [{userId, page, x, y, w, h}]}]
   const [workflow, setWorkflow] = useState([]);
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
+
+  // direct mode: search the directory + pick ONE person, place ONE marker
+  const [directSigner, setDirectSigner] = useState(null); // {id, name, email, hasSignature}
+  const [directQuery, setDirectQuery] = useState("");
+  const [directResults, setDirectResults] = useState([]);
+  const [directSearching, setDirectSearching] = useState(false);
+
+  // Debounced directory search for "send to a specific person".
+  useEffect(() => {
+    if (mode !== "direct") return;
+    const q = directQuery.trim();
+    if (q.length < 2) { setDirectResults([]); setDirectSearching(false); return; }
+    setDirectSearching(true);
+    const t = setTimeout(async () => {
+      try { setDirectResults(await api.searchUsers(q)); }
+      catch { setDirectResults([]); }
+      finally { setDirectSearching(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [directQuery, mode]);
 
   // Holds the live XLSX workbook so cell edits can be written back on submit
   const xlsxWbRef = useRef(null);
@@ -116,6 +137,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       setMarker(null);
       setWorkflow([]);
       setPlacingSlot(null);
+      setDirectSigner(null);
     };
     reader.readAsDataURL(f);
   };
@@ -142,6 +164,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       if (!marker) return [];
       return [{ ...marker, label: "SIGN HERE" }];
     }
+    if (mode === "direct") {
+      if (!marker) return [];
+      return [{ ...marker, label: directSigner ? directSigner.name : "SIGN HERE" }];
+    }
     const out = [];
     workflow.forEach((step, si) => {
       const team = teams.find(t => t.id === step.teamId);
@@ -156,11 +182,11 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       });
     });
     return out;
-  }, [mode, marker, workflow, teams]);
+  }, [mode, marker, workflow, teams, directSigner]);
 
   // ---------- click handler from PDF viewer ----------
   const onAddMarker = (page, x, y, w, h) => {
-    if (mode === "single") {
+    if (mode === "single" || mode === "direct") {
       setMarker({ page, x, y, w, h });
       return;
     }
@@ -181,7 +207,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
   // ---------- update / delete existing markers (drag handles + X button) ----------
   const onUpdateMarker = (markerId, patch) => {
-    if (mode === "single") {
+    if (mode === "single" || mode === "direct") {
       setMarker(prev => prev ? { ...prev, ...patch } : prev);
       return;
     }
@@ -195,7 +221,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     }));
   };
   const onDeleteMarker = (markerId) => {
-    if (mode === "single") { setMarker(null); return; }
+    if (mode === "single" || mode === "direct") { setMarker(null); return; }
     const match = /^s(\d+)-(\d+)$/.exec(markerId || "");
     if (!match) return;
     const stepIdx = Number(match[1]), signerIdx = Number(match[2]);
@@ -223,6 +249,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const canSubmitWorkflow = effectiveFile && workflow.length > 0
     && workflow.every(st => st.teamId && st.signers.length > 0
         && st.signers.every(s => s.userId && s.x != null));
+  const canSubmitDirect = effectiveFile && file?.ext === "pdf" && !!directSigner && !!marker;
 
   const submit = async () => {
     setBusy(true);
@@ -232,6 +259,9 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
         const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
         await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, instantApproval, note, requestType });
+      } else if (mode === "direct") {
+        if (!canSubmitDirect) { notify("Pick a person and place their signature box", "error"); return; }
+        await addRequest({ file: submitFile, direct: true, signers: [{ userId: directSigner.id, page: marker.page, x: marker.x, y: marker.y, w: marker.w, h: marker.h }], instantApproval, note, requestType });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
         await addRequest({ file: submitFile, workflow, instantApproval, note, requestType });
@@ -304,7 +334,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {/* 2. mode + instant */}
           {effectiveFile && (
             <Section n="02" title="Approval flow" desc="Pick how this document should be approved.">
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="grid sm:grid-cols-3 gap-3">
                 <button onClick={() => setMode("single")}
                   className={`card p-4 text-left tile-hover ${mode === "single" ? "ring-2" : ""}`}
                   style={{ borderColor: mode === "single" ? "#B8894A" : undefined, backgroundColor: mode === "single" ? "rgba(184,137,74,.08)" : undefined }}>
@@ -318,6 +348,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   <GitBranch size={18} className="mb-3 opacity-70" />
                   <div className="font-medium">Multi-step workflow</div>
                   <div className="text-xs opacity-60 mt-1">Specific signers across one or more teams, in order.</div>
+                </button>
+                <button onClick={() => setMode("direct")}
+                  className={`card p-4 text-left tile-hover ${mode === "direct" ? "ring-2" : ""}`}
+                  style={{ borderColor: mode === "direct" ? "#B8894A" : undefined, backgroundColor: mode === "direct" ? "rgba(184,137,74,.08)" : undefined }}>
+                  <Send size={18} className="mb-3 opacity-70" />
+                  <div className="font-medium">Send to a specific person</div>
+                  <div className="text-xs opacity-60 mt-1">Search any user and request their signature directly.</div>
                 </button>
               </div>
               <label className="flex items-start gap-3 mt-5 cursor-pointer">
@@ -365,6 +402,63 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   );
                 })}
               </div>
+            </Section>
+          )}
+
+          {/* 3c. direct mode: pick a person + place marker */}
+          {!isLeave && effectiveFile && mode === "direct" && (
+            <Section n="03" title="Choose who should sign" desc="Search any user by name or email, then place their signature box.">
+              {file.ext !== "pdf" ? (
+                <div className="card p-4 text-sm" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+                  Direct requests support PDF documents only. Upload a PDF to use this mode.
+                </div>
+              ) : (
+                <>
+                  {!directSigner ? (
+                    <div>
+                      <input type="text" value={directQuery} onChange={e => setDirectQuery(e.target.value)}
+                        className="w-full mb-3" placeholder="Search by name or email (min 2 characters)…" autoFocus />
+                      {directSearching && <div className="text-xs opacity-50 px-1 mb-2">Searching…</div>}
+                      {!directSearching && directQuery.trim().length >= 2 && directResults.length === 0 && (
+                        <div className="text-xs opacity-50 px-1 mb-2">No user found for "{directQuery}".</div>
+                      )}
+                      <div className="space-y-1">
+                        {directResults.map(u => (
+                          <button key={u.id} onClick={() => { setDirectSigner(u); setDirectResults([]); setDirectQuery(""); }}
+                            className="w-full text-left px-3 py-2 rounded card tile-hover flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium truncate">{u.name}</div>
+                              <div className="text-xs opacity-60 font-mono truncate">{u.email}</div>
+                            </div>
+                            {!u.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature yet</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="card p-4 flex items-center gap-3 mb-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{directSigner.name}</div>
+                        <div className="text-xs opacity-60 font-mono truncate">{directSigner.email}</div>
+                      </div>
+                      {!directSigner.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature yet</span>}
+                      <button className="btn-ghost text-xs shrink-0" onClick={() => { setDirectSigner(null); setMarker(null); }}>Change</button>
+                    </div>
+                  )}
+
+                  {directSigner && (
+                    <>
+                      <Suspense fallback={<ViewerFallback />}>
+                        <DocPreview file={file} markers={allMarkers} editable
+                          onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+                      </Suspense>
+                      {marker
+                        ? <div className="mt-3 text-xs font-mono opacity-60">Signature box placed on page {marker.page}.<button className="ml-2 underline" onClick={() => setMarker(null)}>Reset</button></div>
+                        : <div className="mt-3 text-xs opacity-60">Click and drag on the document to place {directSigner.name}'s signature box.</div>}
+                    </>
+                  )}
+                </>
+              )}
             </Section>
           )}
 
@@ -436,12 +530,12 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 5. submit */}
-          {effectiveFile && (mode === "single" ? ((isLeave || marker) && targetTeam) : workflow.length > 0) && (
+          {effectiveFile && (mode === "single" ? ((isLeave || marker) && targetTeam) : mode === "direct" ? (directSigner && marker) : workflow.length > 0) && (
             <Section n={isLeave ? "04" : (mode === "single" ? "05" : "04")} title="Add a note (optional)" desc="">
-              <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the approver(s)…" />
+              <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the signer(s)…" />
               <div className="flex justify-end mt-4 gap-3">
                 <button className="btn-ghost" onClick={onDone}>Cancel</button>
-                <button className="btn-primary" onClick={submit} disabled={busy || !(mode === "single" ? canSubmitSingle : canSubmitWorkflow)}>
+                <button className="btn-primary" onClick={submit} disabled={busy || !(mode === "single" ? canSubmitSingle : mode === "direct" ? canSubmitDirect : canSubmitWorkflow)}>
                   <Send size={14} /> {busy ? "Submitting…" : "Submit request"}
                 </button>
               </div>
