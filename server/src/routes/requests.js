@@ -59,7 +59,14 @@ router.get("/", authRequired, async (req, res, next) => {
     if (u.role === "admin") {
       rows = await query("SELECT * FROM requests ORDER BY created_at DESC");
     } else if (u.role === "requestor") {
-      rows = await query("SELECT * FROM requests WHERE requestor_id = ? ORDER BY created_at DESC", [u.id]);
+      // Own requests PLUS any request where they are an assigned signer (direct requests).
+      rows = await query(`
+        SELECT DISTINCT r.* FROM requests r
+        LEFT JOIN request_steps st ON st.request_id = r.id
+        LEFT JOIN request_step_signers sg ON sg.step_id = st.id
+        WHERE r.requestor_id = ? OR sg.user_id = ?
+        ORDER BY r.created_at DESC
+      `, [u.id, u.id]);
     } else {
       // Approver: any request where they are an assigned signer (workflow), OR legacy claim path
       rows = await query(`
@@ -84,7 +91,10 @@ router.get("/", authRequired, async (req, res, next) => {
 // ============================================================
 router.post("/", authRequired, requireRole("requestor"), upload.single("file"), async (req, res, next) => {
   try {
-    if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+    const isDirect = req.body?.direct === "true" || req.body?.direct === true;
+    // A direct request only routes a document to someone else to sign — the
+    // sender isn't signing, so they don't need a signature of their own.
+    if (!isDirect && !req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
 
     const file = req.file;
     if (!file) return res.status(400).json({ error: "file is required" });
@@ -108,6 +118,14 @@ router.post("/", authRequired, requireRole("requestor"), upload.single("file"), 
 
     if (Array.isArray(workflow) && workflow.length > 0) {
       return await createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType });
+    }
+
+    // ---------- direct (person-to-person) path ----------
+    if (isDirect) {
+      let signers = null;
+      try { signers = JSON.parse(req.body.signers || "[]"); }
+      catch { return res.status(400).json({ error: "signers must be valid JSON" }); }
+      return await createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType });
     }
 
     // ---------- legacy single-marker single-team path ----------
@@ -262,6 +280,78 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   res.json({ request: await hydrateRequest(row) });
 }
 
+// Direct request: one step, no team, one (or more) arbitrary signers. Unlike the
+// team-workflow path it does NOT require the signer to be an approver, to have
+// team signing authority, or to already have a signature on file — the recipient
+// adds a signature when they go to sign. PDF only (the signing path stamps PDFs).
+async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general" }) {
+  if (fileType !== "pdf") return res.status(400).json({ error: "Direct requests support PDF documents only" });
+  if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
+  for (const [i, s] of signers.entries()) {
+    if (!s.userId) return res.status(400).json({ error: `Recipient ${i + 1}: userId required` });
+    if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.w !== "number" || typeof s.h !== "number") {
+      return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+    }
+  }
+
+  const userIds = [...new Set(signers.map(s => s.userId))];
+  if (userIds.includes(req.user.id)) return res.status(400).json({ error: "You can't request a signature from yourself" });
+  const userRows = await query(`SELECT id FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`, userIds);
+  if (userRows.length !== userIds.length) return res.status(400).json({ error: "One or more recipients no longer exist" });
+
+  const orientation = parseOrientation(req.body?.orientation);
+  let bakedBuffer, pageRotations;
+  try {
+    ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation }));
+  } catch (e) {
+    console.error("[create direct] bake failed", e);
+    return res.status(400).json({ error: "Could not process PDF orientation" });
+  }
+  for (const s of signers) {
+    const baked = transformMarkerForBake({ x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 }, pageRotations);
+    s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+  }
+
+  const id = uid();
+  const storedName = `${id}.${ext}`;
+  await fs.mkdir(DOC_DIR, { recursive: true });
+  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+
+  const pool = getPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute(`
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType]);
+
+    const stepId = uid("st");
+    await conn.execute(
+      "INSERT INTO request_steps (id, request_id, step_order, team_id, status, created_at) VALUES (?, ?, 1, NULL, 'active', ?)",
+      [stepId, id, Date.now()]
+    );
+    for (let j = 0; j < signers.length; j++) {
+      const s = signers[j];
+      await conn.execute(
+        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0]
+      );
+    }
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+
+  await notifyNextSigner(id, file.originalname, req.user.name);
+  const row = await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
+  res.json({ request: await hydrateRequest(row) });
+}
+
 async function notifyNextSigner(requestId, fileName, requestorName) {
   const next = await getNextPendingSigner(requestId);
   if (!next) return;
@@ -332,7 +422,7 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
 // ============================================================
 //   approve  — handles both legacy and workflow paths
 // ============================================================
-router.post("/:id/approve", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/:id/approve", authRequired, async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -343,7 +433,8 @@ router.post("/:id/approve", authRequired, requireRole("approver"), async (req, r
     const next = await getNextPendingSigner(row.id);
     if (next) return await approveWorkflowStep({ req, res, row, signer: next });
 
-    // Legacy single-marker
+    // Legacy single-marker (team path) — still approver-only + team authority.
+    if (req.user.role !== "approver") return res.status(403).json({ error: "Not authorised to sign this request" });
     if (!row.target_team_id || !row.marker_json) return res.status(400).json({ error: "Request misconfigured" });
     const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
@@ -635,7 +726,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 // ============================================================
 //   reject  — any signer or admin/team-authority can reject
 // ============================================================
-router.post("/:id/reject", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/:id/reject", authRequired, async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
