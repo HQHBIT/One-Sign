@@ -67,6 +67,26 @@ router.get("/", authRequired, requireRole("admin"), async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- directory search (any authenticated user) ----------
+// GET /api/users/search?q=  — up to 10 users whose name or email contains q
+// (case-insensitive, q length >= 2). Minimal fields; excludes the caller.
+// Powers the "send to a specific person" request flow. Declared before any
+// "/:id" routes so the literal path is never shadowed.
+router.get("/search", authRequired, async (req, res, next) => {
+  try {
+    const q = (req.query.q || "").toString().trim();
+    if (q.length < 2) return res.json({ users: [] });
+    const like = `%${q}%`;
+    const rows = await query(
+      `SELECT id, name, email, signature_path FROM users
+       WHERE id <> ? AND (name LIKE ? OR email LIKE ?)
+       ORDER BY name ASC LIMIT 10`,
+      [req.user.id, like, like]
+    );
+    res.json({ users: rows.map(r => ({ id: r.id, name: r.name, email: r.email, hasSignature: !!r.signature_path })) });
+  } catch (e) { next(e); }
+});
+
 // ---------- create ----------
 router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
