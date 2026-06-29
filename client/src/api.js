@@ -122,10 +122,12 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, instantApproval, note, requestType }) {
+  createRequest({ file, targetTeamId, marker, workflow, direct, signers, instantApproval, note, requestType }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (workflow) fd.append("workflow", JSON.stringify(workflow));
+    if (direct) fd.append("direct", "true");
+    if (signers) fd.append("signers", JSON.stringify(signers));
     if (targetTeamId) fd.append("targetTeamId", targetTeamId);
     if (marker) fd.append("marker", JSON.stringify(marker));
     if (instantApproval) fd.append("instantApproval", "true");
@@ -133,6 +135,7 @@ export const api = {
     if (requestType) fd.append("requestType", requestType);
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
+  searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
   approveRequest(id) { return this.fetch(`/api/requests/${id}/approve`, { method: "POST" }); },
   batchApproveRequests(ids) {
     return this.fetch("/api/requests/batch-approve", { method: "POST", body: JSON.stringify({ ids }) });
