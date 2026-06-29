@@ -149,10 +149,11 @@ docs.push(["SignFlow-Quick-Start", "Quick-Start", [
   { img: "01-login", w: 460, caption: "The SignFlow sign-in screen — " + URL },
   { h2: "What you can do" },
   { table: { head: ["Your role", "What you do"], widths: [2600, 6760], rows: [
-    ["Requestor", "New request → upload a PDF/Excel → choose the approver(s) → place the signature box → submit. Track progress and download the signed file."],
+    ["Requestor", "New request → upload a PDF/Excel → choose the approver(s) **or send it to a specific person by email** → place the signature box → submit. Track progress and download the signed file."],
     ["Approver", "Open a pending request → review the document → Approve & sign (your signature is stamped on), or Reject with a reason."],
     ["Administrator", "Manage users, teams, signatures, documents, and reports from the admin console."]
   ] } },
+  { note: "No account yet? If self-registration is enabled, click **Create an account** on the sign-in screen, enter your details, and IT approves your request — then you sign in with the password you chose." },
   { note: "Need help? Email **it@hqhb.in** or **taha.chunawala@hqhb.in**." }
 ]]);
 
@@ -168,7 +169,7 @@ docs.push(["SignFlow-Requestor-Guide", "Requestor Guide", [
   { h2: "Make a new request" },
   { steps: [
     "Click **New request** and upload your document — a **PDF or Excel** file, up to **14 MB**.",
-    "Choose how it should be approved: **Single approver** (any approver from one team) or **Multi-step workflow** (specific signers, in a set order).",
+    "Choose how it should be approved: **Single approver** (any approver from one team), **Multi-step workflow** (specific signers, in a set order), or **Send to a specific person** (request a signature from any individual by name or email).",
     "Optionally tick **Instant approval** to skip the one-hour cooling window.",
     "Place the signature box on the document and pick the team / signers (see below).",
     "Add an optional note and **submit**. Each signer is notified in turn."
@@ -185,12 +186,22 @@ docs.push(["SignFlow-Requestor-Guide", "Requestor Guide", [
     "Click **Place signature** and drag a box on the relevant page for that signer.",
     "Repeat per signer / per step. Cross-team workflows are supported — signers are asked in order."
   ] },
+  { h3: "Send to a specific person" },
+  { bullets: [
+    "Upload a **PDF**, then choose **Send to a specific person** (this mode is PDF-only).",
+    "Search the directory by **name or email** and pick the person — this works for **any** user, regardless of team or role.",
+    "If no one matches, they don’t have an account yet; ask them to register first (or have IT add them).",
+    "Place their signature box on the page and **submit**. They’re notified and the document appears in their **Awaiting your signature** area."
+  ] },
+  { note: "Use this when you know exactly who should sign and they aren’t one of a team’s approvers — for example a colleague in another department." },
   { h2: "Track your requests" },
   { bullets: [
     "**Pending** — see exactly who the request is waiting on. You can send a reminder once every 24 hours.",
     "**Approved** — preview or download the signed file.",
     "**Rejected** — see the reason given, then correct and resubmit."
   ] },
+  { h2: "Signing a request someone sent you" },
+  { p: "If a colleague sends a document straight to you, it appears under **Awaiting your signature** on your home screen, with a count. Open it, review the document, and **Review & sign** — exactly like an approver. You’ll need a registered signature; if you don’t have one yet, you’ll be prompted to add it first." },
   { note: "Tip: name your files clearly before uploading — the file name is what approvers and the audit log show." }
 ]]);
 
@@ -230,6 +241,14 @@ docs.push(["SignFlow-Administrator-Guide", "Administrator Guide", [
     "Add users individually (3-step wizard) or in **bulk** by department.",
     "Set each person’s role — **Administrator / Requestor / Approver** — and assign a team or signing authority.",
     "Delete users when needed: their name shows as “—” in past requests, but document history is preserved."
+  ] },
+  { h2: "Registrations" },
+  { p: "If self-registration is enabled, people can request an account themselves from the login screen (**Create an account**). Each request lands in **Admin → Registrations** with a pending count." },
+  { bullets: [
+    "Review each request — the name, email, and the team and reporting manager they entered.",
+    "**Approve** to create the account (as a **Requestor**) so they can sign in with the password they chose — then set their real role / team under **Users**.",
+    "**Reject**, with an optional reason, if it isn’t a legitimate request.",
+    "Until you approve them, a registrant cannot sign in — the approval is the gate."
   ] },
   { h2: "Teams & authority" },
   { bullets: [
@@ -307,6 +326,7 @@ docs.push(["SignFlow-IT-Onboarding-Playbook", "Onboarding Playbook", [
     "**Confirm → Create user.**",
     "**Share the credentials** — this path does not auto-email; send the user their email and temporary password."
   ] },
+  { note: "Self-service alternative: let people request their own account from the login screen (**Create an account**). Each request appears in **Admin → Registrations** to approve or reject — handy for ad-hoc additions after the initial rollout. Approved registrants start as Requestors; adjust their role/team under Users." },
   { h2: "What each user does on first login" },
   { steps: [
     "Go to " + URL,
@@ -332,7 +352,7 @@ docs.push(["SignFlow-IT-Onboarding-Playbook", "Onboarding Playbook", [
 const faq = [
   ["What is SignFlow?", "HQHB’s digital signature and approval system. You submit documents for signature, route them to the right approver(s), and get a signed, fully audited copy back — all online."],
   ["Do I need to install anything?", "No. SignFlow runs in your web browser. Just go to " + URL + "."],
-  ["How do I get an account?", "IT creates it for you. You’ll receive a login email and a temporary password; change the password and register your signature on first sign-in."],
+  ["How do I get an account?", "IT creates it for you — or, if self-registration is enabled, click **Create an account** on the login screen, enter your details, and IT approves the request. Either way, you set a password and register your signature on first sign-in."],
   ["What file types and sizes are supported?", "PDF or Excel documents, up to 14 MB each."],
   ["How do I sign a document?", "Register your signature once (draw or upload). After that, open a pending request and click Approve & sign — your signature is stamped onto the document."],
   ["What is the one-hour window?", "For standard approvals you can withdraw your approval within one hour. Set Instant approval on a request to finalise immediately and skip the wait."],
