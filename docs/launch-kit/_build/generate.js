@@ -105,6 +105,33 @@ function buildDoc(shortTitle, blocks) {
   });
 }
 
+// ---- blocks -> Markdown (for a paste-ready Google Docs version) ----
+function blocksToMarkdown(blocks) {
+  const out = [];
+  for (const b of blocks) {
+    if (b.title) { out.push("# " + b.title); if (b.subtitle) out.push("_" + b.subtitle + "_"); out.push(""); }
+    else if (b.h1) out.push("\n# " + b.h1 + "\n");
+    else if (b.h2) out.push("\n## " + b.h2 + "\n");
+    else if (b.h3) out.push("\n### " + b.h3 + "\n");
+    else if (b.p !== undefined) { out.push(b.p, ""); }
+    else if (b.bullets) { for (const it of b.bullets) out.push("- " + it); out.push(""); }
+    else if (b.steps) { b.steps.forEach((it, i) => out.push((i + 1) + ". " + it)); out.push(""); }
+    else if (b.note) { out.push("> " + b.note, ""); }
+    else if (b.code) { out.push("```"); for (const l of b.code) out.push(l); out.push("```", ""); }
+    else if (b.table) {
+      const { head, rows } = b.table;
+      out.push("| " + head.join(" | ") + " |");
+      out.push("| " + head.map(() => "---").join(" | ") + " |");
+      for (const r of rows) out.push("| " + r.map(c => String(c).replace(/\n/g, " ")).join(" | ") + " |");
+      out.push("");
+    }
+    else if (b.img) out.push("_[Screenshot: " + (b.caption || b.img) + "]_\n");
+    else if (b.pageBreak) out.push("\n---\n");
+    else if (b.space) out.push("");
+  }
+  return out.join("\n");
+}
+
 // ============================ CONTENT ============================
 const URL = "https://onesign.devhqhb.online/";
 const docs = [];
@@ -429,6 +456,28 @@ docs.push(["SignFlow-Bulk-Onboarding-Guide", "Bulk Onboarding", [
   ] }
 ]]);
 
+// ---- combined handbook (single Google-Docs-ready file) ----
+const whatsNewBlocks = [
+  { h1: "What’s New in SignFlow" },
+  { p: "Two new ways to get people in — and to get documents signed." },
+  { h2: "Self-registration (with IT approval)" },
+  { bullets: [
+    "New users can request an account themselves from the login screen — click **Create an account** and enter their name, email, password, team, and reporting manager.",
+    "The request goes to IT under **Admin → Registrations**, which shows a pending count.",
+    "IT **approves** (the person becomes a Requestor and signs in with the password they chose) or **rejects** with a reason.",
+    "No one can sign in until approved — the approval is the gate. After approving, set their real role and team under **Users**."
+  ] },
+  { h2: "Send a signature request to a specific person" },
+  { bullets: [
+    "When making a request, choose the new **Send to a specific person** mode (PDF documents).",
+    "Search the directory by **name or email** and pick anyone — regardless of team or role.",
+    "Place their signature box and submit; the recipient is notified by email.",
+    "The recipient sees it under **Awaiting your signature** on their home screen and signs with the same Review-and-sign screen approvers use — even a plain Requestor can sign what is sent directly to them."
+  ] },
+  { note: "Together: someone self-registers → IT approves them → they become instantly searchable by email for a direct signature request." }
+];
+const handbookOrder = ["SignFlow-Quick-Start", "SignFlow-Requestor-Guide", "SignFlow-Approver-Guide", "SignFlow-Administrator-Guide", "SignFlow-IT-Onboarding-Playbook", "SignFlow-Bulk-Onboarding-Guide", "SignFlow-FAQ"];
+
 // ============================ WRITE ============================
 (async () => {
   for (const [file, shortTitle, blocks] of docs) {
@@ -436,5 +485,17 @@ docs.push(["SignFlow-Bulk-Onboarding-Guide", "Bulk Onboarding", [
     fs.writeFileSync(path.join(OUT, file + ".docx"), buf);
     console.log("wrote", file + ".docx", "(" + buf.length + " bytes)");
   }
-  console.log("DONE:", docs.length, "documents");
+
+  // Single combined handbook: cover/title + What's New + every guide, with screenshots.
+  const byFile = Object.fromEntries(docs.map(([file, , blocks]) => [file, blocks]));
+  const combined = [
+    { title: "SignFlow Handbook", subtitle: "Everything your team needs to start signing." },
+    ...whatsNewBlocks,
+    ...handbookOrder.flatMap(file => [{ pageBreak: true }, ...byFile[file]])
+  ];
+  fs.writeFileSync(path.join(OUT, "SignFlow-Handbook.docx"), await Packer.toBuffer(buildDoc("Handbook", combined)));
+  fs.writeFileSync(path.join(OUT, "SignFlow-Handbook.md"), blocksToMarkdown(combined));
+  console.log("wrote SignFlow-Handbook.docx + SignFlow-Handbook.md");
+
+  console.log("DONE:", docs.length, "documents + combined handbook");
 })();
