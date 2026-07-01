@@ -117,4 +117,33 @@ router.post("/register", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- public: request a password reset (IT-approved) ----------
+// POST /api/auth/request-reset  body: { email, newPassword }
+// The user chooses their OWN new password, but it does NOT take effect until an
+// admin approves it in the console. There's no email channel to verify identity,
+// so the admin approval IS the verification gate (prevents account takeover).
+// Anti-enumeration: always returns { ok: true }. One pending reset per user.
+router.post("/request-reset", async (req, res, next) => {
+  try {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
+    if (newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters" });
+
+    const user = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+    if (user) {
+      const hash = bcrypt.hashSync(newPassword, 10);
+      // One pending reset per user — clear any prior pending, then insert the new one.
+      await execute("DELETE FROM password_resets WHERE user_id = ? AND status = 'pending'", [user.id]);
+      const id = "pr_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+      await execute(
+        "INSERT INTO password_resets (id, user_id, email, new_password_hash, new_password_plain, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        [id, user.id, email, hash, newPassword, Date.now()]
+      );
+    }
+    // Always ok — never reveal whether the email exists.
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 export default router;

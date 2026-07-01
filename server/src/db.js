@@ -204,6 +204,20 @@ async function runSchema() {
       decided_at        BIGINT       DEFAULT NULL,
       decided_by        VARCHAR(64)  DEFAULT NULL,
       INDEX idx_registrations_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+    `CREATE TABLE IF NOT EXISTS password_resets (
+      id                 VARCHAR(64)  NOT NULL PRIMARY KEY,
+      user_id            VARCHAR(64)  DEFAULT NULL,
+      email              VARCHAR(191) NOT NULL,
+      new_password_hash  VARCHAR(255) NOT NULL,
+      new_password_plain VARCHAR(255) DEFAULT NULL,
+      status             ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      reject_reason      TEXT,
+      created_at         BIGINT       NOT NULL,
+      decided_at         BIGINT       DEFAULT NULL,
+      decided_by         VARCHAR(64)  DEFAULT NULL,
+      INDEX idx_pwreset_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     // --- DISABLED: expense feature commented out — expenses table creation ---
     // `CREATE TABLE IF NOT EXISTS expenses (
