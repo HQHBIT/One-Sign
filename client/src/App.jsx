@@ -1031,6 +1031,7 @@ function AdminView(props) {
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
   if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
+  if (tab === "password-resets") return <AdminPasswordResets {...props} back={() => setTab("home")} />;
   // if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />; // DISABLED: expense feature commented out
 
   const { users, teams, requests, emails } = props;
@@ -1042,7 +1043,8 @@ function AdminView(props) {
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
-    { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." }
+    { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
+    { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." }
     // DISABLED: expense feature commented out — Expenses dashboard tile
     // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
@@ -2327,6 +2329,71 @@ function AdminEmails({ emails, back }) {
           <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.body}</pre>
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+function AdminPasswordResets({ notify, back }) {
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [pending, setPending] = useState(0);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.listPasswordResets();
+      setItems(data.resets || []);
+      setPending(data.pending || 0);
+    } catch (e) {
+      notify?.(e.message || "Could not load reset requests", "error");
+    } finally { setLoading(false); }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const approve = async (r) => {
+    try { await api.approvePasswordReset(r.id); notify?.(`Password reset approved for ${r.userName || r.email}.`, "success"); await load(); }
+    catch (e) { notify?.(e.message || "Could not approve", "error"); }
+  };
+  const reject = async (r) => {
+    const reason = window.prompt(`Reject the reset request for ${r.userName || r.email}? Optional reason:`, "");
+    if (reason === null) return;
+    try { await api.rejectPasswordReset(r.id, reason); notify?.("Reset request rejected.", "info"); await load(); }
+    catch (e) { notify?.(e.message || "Could not reject", "error"); }
+  };
+
+  const pillFor = s => s === "pending" ? "pill-pending" : s === "approved" ? "pill-approved" : "pill-rejected";
+
+  return (
+    <div>
+      <BackHeader back={back} title="Password resets" step={`${pending} pending`} />
+      <div className="card mt-4 overflow-hidden">
+        {loading ? (
+          <div className="p-10 text-center opacity-50 text-sm">Loading…</div>
+        ) : items.length === 0 ? (
+          <div className="p-10 text-center opacity-50 text-sm">No password-reset requests.</div>
+        ) : items.map((r, i) => (
+          <div key={r.id} className={`px-5 py-4 flex items-start gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm">{r.userName || "(unknown user)"}</span>
+                <span className={`pill ${pillFor(r.status)}`}>{r.status}</span>
+              </div>
+              <div className="text-xs opacity-60 font-mono mt-1">{r.email}</div>
+              <div className="text-xs opacity-60 mt-1">
+                Requested password: <span className="font-mono">{r.newPassword || "—"}</span> · {fmtShort(r.createdAt)}
+                {r.status === "rejected" && r.rejectReason ? ` · Reason: ${r.rejectReason}` : ""}
+              </div>
+            </div>
+            {r.status === "pending" && (
+              <div className="flex gap-2 shrink-0">
+                <button className="btn-ghost text-xs" onClick={() => reject(r)}>Reject</button>
+                <button className="btn-primary text-xs" onClick={() => approve(r)}><Check size={13} /> Approve</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

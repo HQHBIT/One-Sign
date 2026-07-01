@@ -75,6 +75,16 @@ export const api = {
     return this.fetch(`/api/registrations/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
   },
 
+  // -------- password reset requests --------
+  requestReset({ email, newPassword }) {
+    return this.fetch("/api/auth/request-reset", { method: "POST", body: JSON.stringify({ email, newPassword }) });
+  },
+  listPasswordResets() { return this.fetch("/api/password-resets"); }, // { resets, pending }
+  approvePasswordReset(id) { return this.fetch(`/api/password-resets/${id}/approve`, { method: "POST" }); },
+  rejectPasswordReset(id, reason) {
+    return this.fetch(`/api/password-resets/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
   createTeam(name) { return this.fetch("/api/teams", { method: "POST", body: JSON.stringify({ name }) }); },
