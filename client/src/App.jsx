@@ -299,17 +299,26 @@ function RequestorView(props) {
   const my = requests.filter(r => r.requestorId === user.id);
   const pending = my.filter(r => r.status === "pending");
   const approved = my.filter(r => r.status === "approved");
+  // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
+  const awaitingMySig = requests.filter(r => {
+    if (r.status !== "pending" || !r.workflow?.length) return false;
+    const active = r.workflow.find(s => s.status === "active");
+    const next = active?.signers?.find(s => s.status === "pending");
+    return next?.userId === user.id;
+  });
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
   if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={approved} />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
   const tiles = [
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
+    { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Signed and finalised documents, ready to download.", badge: approved.length }
   ];
@@ -575,6 +584,35 @@ function ApproverView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
+    </div>
+  );
+}
+
+// Requestor-facing list of direct requests waiting for THIS user's signature.
+// Reuses the role-agnostic ApproveDrawer for the actual review + sign.
+function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, undoApproval, back, notify }) {
+  const [openId, setOpenId] = useState(null);
+  const open = items.find(r => r.id === openId);
+  return (
+    <div>
+      <BackHeader back={back} title="Awaiting your signature" step={`${items.length} to sign`} />
+      {items.length === 0 ? (
+        <Empty icon={Inbox} text="No requests are waiting for your signature." />
+      ) : (
+        <div className="card mt-4 overflow-hidden">
+          {items.map((r, i) => (
+            <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
+              <div className="flex-1">
+                <RequestRow r={r} teams={teams} users={users} i={0}
+                  actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review &amp; sign <ArrowRight size={12} /></button>} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setOpenId(null)} notify={notify} />}
     </div>
   );
 }
@@ -992,6 +1030,7 @@ function AdminView(props) {
     back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
+  if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
   // if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />; // DISABLED: expense feature commented out
 
   const { users, teams, requests, emails } = props;
@@ -1002,7 +1041,8 @@ function AdminView(props) {
     { key: "signatures", icon: PenTool, title: "Signatures", desc: "Upload signatures in bulk on behalf of users." },
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
-    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length }
+    { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
+    { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." }
     // DISABLED: expense feature commented out — Expenses dashboard tile
     // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
@@ -2287,6 +2327,71 @@ function AdminEmails({ emails, back }) {
           <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.body}</pre>
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+function AdminRegistrations({ notify, back }) {
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [pending, setPending] = useState(0);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.listRegistrations();
+      setItems(data.registrations || []);
+      setPending(data.pending || 0);
+    } catch (e) {
+      notify?.(e.message || "Could not load registrations", "error");
+    } finally { setLoading(false); }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const approve = async (r) => {
+    try { await api.approveRegistration(r.id); notify?.(`${r.name} approved — they can now sign in.`, "success"); await load(); }
+    catch (e) { notify?.(e.message || "Could not approve", "error"); }
+  };
+  const reject = async (r) => {
+    const reason = window.prompt(`Reject ${r.name}'s registration? Optional reason:`, "");
+    if (reason === null) return;
+    try { await api.rejectRegistration(r.id, reason); notify?.(`${r.name}'s registration rejected.`, "info"); await load(); }
+    catch (e) { notify?.(e.message || "Could not reject", "error"); }
+  };
+
+  const pillFor = s => s === "pending" ? "pill-pending" : s === "approved" ? "pill-approved" : "pill-rejected";
+
+  return (
+    <div>
+      <BackHeader back={back} title="Registrations" step={`${pending} pending`} />
+      <div className="card mt-4 overflow-hidden">
+        {loading ? (
+          <div className="p-10 text-center opacity-50 text-sm">Loading…</div>
+        ) : items.length === 0 ? (
+          <div className="p-10 text-center opacity-50 text-sm">No registration requests yet.</div>
+        ) : items.map((r, i) => (
+          <div key={r.id} className={`px-5 py-4 flex items-start gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm">{r.name}</span>
+                <span className={`pill ${pillFor(r.status)}`}>{r.status}</span>
+              </div>
+              <div className="text-xs opacity-60 font-mono mt-1">{r.email}</div>
+              <div className="text-xs opacity-60 mt-1">
+                Team: {r.teamName || "—"} · Manager: {r.reportingManager || "—"} · {fmtShort(r.createdAt)}
+                {r.status === "rejected" && r.rejectReason ? ` · Reason: ${r.rejectReason}` : ""}
+              </div>
+            </div>
+            {r.status === "pending" && (
+              <div className="flex gap-2 shrink-0">
+                <button className="btn-ghost text-xs" onClick={() => reject(r)}>Reject</button>
+                <button className="btn-primary text-xs" onClick={() => approve(r)}><Check size={13} /> Approve</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

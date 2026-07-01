@@ -1,0 +1,13 @@
+{
+  "name": "signflow-launch-kit-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Generator for the SignFlow launch kit (.docx via docx-js)",
+  "dependencies": {
+    "docx": "^9.7.1",
+    "gifenc": "^1.0.3",
+    "pdf-lib": "^1.17.1",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^25.2.1"
+  }
+}

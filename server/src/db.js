@@ -189,6 +189,21 @@ async function runSchema() {
       INDEX idx_signers_user (user_id),
       CONSTRAINT fk_signers_step FOREIGN KEY (step_id) REFERENCES request_steps(id) ON DELETE CASCADE,
       CONSTRAINT fk_signers_user FOREIGN KEY (user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+    `CREATE TABLE IF NOT EXISTS registrations (
+      id                VARCHAR(64)  NOT NULL PRIMARY KEY,
+      name              VARCHAR(191) NOT NULL,
+      email             VARCHAR(191) NOT NULL,
+      password_hash     VARCHAR(255) NOT NULL,
+      team_name         VARCHAR(191) DEFAULT NULL,
+      reporting_manager VARCHAR(191) DEFAULT NULL,
+      status            ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      reject_reason     TEXT,
+      created_at        BIGINT       NOT NULL,
+      decided_at        BIGINT       DEFAULT NULL,
+      decided_by        VARCHAR(64)  DEFAULT NULL,
+      INDEX idx_registrations_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     // --- DISABLED: expense feature commented out — expenses table creation ---
     // `CREATE TABLE IF NOT EXISTS expenses (
@@ -248,6 +263,17 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_req_requestor FOREIGN KEY (requestor_id) REFERENCES users(id) ON DELETE SET NULL`);
   await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_req_approver FOREIGN KEY (approver_id) REFERENCES users(id) ON DELETE SET NULL`);
   await tryExec(`ALTER TABLE request_step_signers ADD CONSTRAINT fk_signers_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL`);
+
+  // Self-registration: carry the applicant's typed context onto the approved user.
+  await tryExec(`ALTER TABLE users ADD COLUMN reporting_manager VARCHAR(191) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN requested_team VARCHAR(191) DEFAULT NULL`);
+
+  // Direct (person-to-person) requests: a step has no team.
+  await tryExec(`ALTER TABLE request_steps MODIFY COLUMN team_id VARCHAR(64) NULL`);
+
+  // Admin-visible credential for self-registered users: keep the chosen password
+  // in plaintext (like the temp passwords), so it can be carried onto the user at approval.
+  await tryExec(`ALTER TABLE registrations ADD COLUMN password_plain VARCHAR(255) DEFAULT NULL`);
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);

@@ -4,6 +4,7 @@ import { queryOne, hydrateUser, execute } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
+import { validateRegistration } from "../registrationValidation.js";
 
 const router = Router();
 
@@ -87,6 +88,32 @@ router.post("/forgot-password", async (req, res, next) => {
     }
     // Always return ok: true — don't leak whether the email exists.
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- public: self-registration ----------
+// POST /api/auth/register  body: { name, email, password, teamName, reportingManager }
+// Creates a PENDING registration. The user is not created and cannot sign in
+// until an admin approves it. Rejects duplicate emails (existing user OR a
+// pending registration) so people don't queue twice.
+router.post("/register", async (req, res, next) => {
+  try {
+    const v = validateRegistration(req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const { name, email, password, teamName, reportingManager } = v.value;
+
+    const existingUser = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+    if (existingUser) return res.status(409).json({ error: "An account with this email already exists" });
+    const existingReg = await queryOne("SELECT id FROM registrations WHERE LOWER(email) = LOWER(?) AND status = 'pending'", [email]);
+    if (existingReg) return res.status(409).json({ error: "A registration with this email is already awaiting approval" });
+
+    const id = "r_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+    const hash = bcrypt.hashSync(password, 10);
+    await execute(
+      "INSERT INTO registrations (id, name, email, password_hash, password_plain, team_name, reporting_manager, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+      [id, name, email, hash, password, teamName || null, reportingManager || null, Date.now()]
+    );
+    res.status(201).json({ ok: true });
   } catch (e) { next(e); }
 });
 

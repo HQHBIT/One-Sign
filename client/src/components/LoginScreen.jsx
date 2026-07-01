@@ -19,6 +19,29 @@ export function LoginScreen({ login }) {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotErr, setForgotErr] = useState(null);
 
+  // Self-registration panel.
+  const [regOpen, setRegOpen] = useState(false);
+  const [reg, setReg] = useState({ name: "", email: "", password: "", teamName: "", reportingManager: "" });
+  const [regState, setRegState] = useState("form"); // form | saving | done | error
+  const [regErr, setRegErr] = useState(null);
+
+  const resetReg = () => { setReg({ name: "", email: "", password: "", teamName: "", reportingManager: "" }); setRegState("form"); setRegErr(null); };
+  const openReg = () => { resetReg(); setRegOpen(true); };
+  const closeReg = () => { setRegOpen(false); resetReg(); };
+
+  const submitReg = async e => {
+    e.preventDefault();
+    if (!reg.name.trim() || !reg.email.trim() || reg.password.length < 6) return;
+    setRegState("saving"); setRegErr(null);
+    try {
+      await api.register({ name: reg.name.trim(), email: reg.email.trim(), password: reg.password, teamName: reg.teamName.trim(), reportingManager: reg.reportingManager.trim() });
+      setRegState("done");
+    } catch (err) {
+      setRegErr(err.message || "Could not submit registration");
+      setRegState("error");
+    }
+  };
+
   /* DISABLED: expense feature commented out
   // Expense panel: anyone can record an expense without signing in.
   const [expenseOpen, setExpenseOpen] = useState(false);
@@ -105,7 +128,7 @@ export function LoginScreen({ login }) {
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
-          {forgotState === "idle" && (
+          {forgotState === "idle" && !regOpen && (
             <form onSubmit={submit}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
               <div className="text-sm opacity-60 mb-8">Use the credentials provided by your administrator.</div>
@@ -122,6 +145,12 @@ export function LoginScreen({ login }) {
               <button className="btn-primary w-full justify-center" disabled={busy}>
                 {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
               </button>
+              <div className="text-center mt-6">
+                <button type="button" onClick={openReg}
+                  className="text-xs opacity-60 hover:opacity-100 underline">
+                  New here? Create an account →
+                </button>
+              </div>
               {/* DISABLED: expense feature commented out — submit-an-expense link
               <div className="text-center mt-6">
                 <button type="button" onClick={openExpense}
@@ -131,6 +160,47 @@ export function LoginScreen({ login }) {
               </div>
               */}
             </form>
+          )}
+
+          {regOpen && regState !== "done" && (
+            <form onSubmit={submitReg}>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Create an account</div>
+              <div className="text-sm opacity-60 mb-8">Your request goes to IT for approval. You'll be able to sign in once it's approved.</div>
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Full name</label>
+              <input type="text" value={reg.name} onChange={e => setReg({ ...reg, name: e.target.value })} className="w-full mb-4" maxLength={191} required autoFocus />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Work email</label>
+              <input type="email" value={reg.email} onChange={e => setReg({ ...reg, email: e.target.value })} className="w-full mb-4" maxLength={191} required />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
+              <input type="password" value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} className="w-full mb-4" placeholder="At least 6 characters" required />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Team / Department</label>
+              <input type="text" value={reg.teamName} onChange={e => setReg({ ...reg, teamName: e.target.value })} className="w-full mb-4" maxLength={191} placeholder="e.g., Finance" />
+
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Reporting manager</label>
+              <input type="text" value={reg.reportingManager} onChange={e => setReg({ ...reg, reportingManager: e.target.value })} className="w-full mb-5" maxLength={191} placeholder="Manager's name" />
+
+              {regErr && (
+                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{regErr}</div>
+              )}
+
+              <div className="flex gap-2">
+                <button type="button" className="btn-ghost" onClick={closeReg}><ArrowLeft size={14} /> Back</button>
+                <button className="btn-primary flex-1 justify-center" disabled={regState === "saving" || !reg.name.trim() || !reg.email.trim() || reg.password.length < 6}>
+                  {regState === "saving" ? "Submitting…" : <>Request access <ArrowRight size={14} /></>}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {regOpen && regState === "done" && (
+            <div className="anim-in">
+              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
+              <div className="text-sm opacity-70 mb-6 leading-relaxed">Thanks! IT will review your request. Once approved, sign in with the email and password you just chose.</div>
+              <button className="btn-primary w-full justify-center" onClick={closeReg}><ArrowLeft size={14} /> Back to sign-in</button>
+            </div>
           )}
 
           {/* DISABLED: expense feature commented out — submission + success panels
