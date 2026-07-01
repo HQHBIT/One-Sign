@@ -271,6 +271,10 @@ async function runSchema() {
   // Direct (person-to-person) requests: a step has no team.
   await tryExec(`ALTER TABLE request_steps MODIFY COLUMN team_id VARCHAR(64) NULL`);
 
+  // Admin-visible credential for self-registered users: keep the chosen password
+  // in plaintext (like the temp passwords), so it can be carried onto the user at approval.
+  await tryExec(`ALTER TABLE registrations ADD COLUMN password_plain VARCHAR(255) DEFAULT NULL`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 }
