@@ -110,8 +110,8 @@ router.post("/register", async (req, res, next) => {
     const id = "r_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
     const hash = bcrypt.hashSync(password, 10);
     await execute(
-      "INSERT INTO registrations (id, name, email, password_hash, team_name, reporting_manager, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-      [id, name, email, hash, teamName || null, reportingManager || null, Date.now()]
+      "INSERT INTO registrations (id, name, email, password_hash, password_plain, team_name, reporting_manager, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+      [id, name, email, hash, password, teamName || null, reportingManager || null, Date.now()]
     );
     res.status(201).json({ ok: true });
   } catch (e) { next(e); }

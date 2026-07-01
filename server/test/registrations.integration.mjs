@@ -45,6 +45,10 @@ check("admin list shows pending", list.status === 200 && mine && mine.status ===
 const appr = await j(await fetch(`${BASE}/api/registrations/${mine.id}/approve`, { method: "POST", headers: auth }));
 check("approve -> ok", appr.status === 200 && appr.body.ok === true);
 
+// 5b) the approved user's chosen password is visible to the admin (last_temp_password)
+const [urows] = await conn.execute("SELECT last_temp_password FROM users WHERE LOWER(email) = LOWER(?)", [EMAIL]);
+check("approved user's password is admin-visible", !!urows[0] && urows[0].last_temp_password === PW);
+
 // 6) now login works with the chosen password
 const postLogin = await j(await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ email: EMAIL, password: PW }) }));
