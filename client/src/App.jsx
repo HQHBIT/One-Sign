@@ -2083,28 +2083,28 @@ function AdminSignatures({ users, saveUsers, back, notify }) {
         <button className="btn-ghost" onClick={() => setBulkOpen(true)}><Upload size={14} /> Bulk upload</button>
       </div>
       <div className="grid md:grid-cols-2 gap-5">
-        <div className="card p-5">
+        <div className="card p-5 min-w-0">
           <div className="font-display text-xl mb-3">Without signature</div>
           {withoutSig.length === 0 ? <div className="text-sm opacity-50">Everyone has a signature.</div> : withoutSig.map(u => (
-            <div key={u.id} className="flex items-center justify-between py-2 border-b last:border-0 text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
-              <div>
-                <div className="font-medium">{u.name}</div>
-                <div className="text-xs opacity-60 font-mono">{u.email} · {u.role}</div>
+            <div key={u.id} className="flex items-center justify-between gap-3 py-2 border-b last:border-0 text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+              <div className="min-w-0">
+                <div className="font-medium truncate">{u.name}</div>
+                <div className="text-xs opacity-60 font-mono truncate">{u.email} · {u.role}</div>
               </div>
-              <button className="btn-gold text-xs" onClick={() => setTarget(u)}><PenTool size={12} /> Add</button>
+              <button className="btn-gold text-xs shrink-0" onClick={() => setTarget(u)}><PenTool size={12} /> Add</button>
             </div>
           ))}
         </div>
-        <div className="card p-5">
+        <div className="card p-5 min-w-0">
           <div className="font-display text-xl mb-3">On file</div>
           {withSig.map(u => (
-            <div key={u.id} className="flex items-center justify-between py-3 border-b last:border-0" style={{ borderColor: "rgba(15,26,46,.06)" }}>
-              <div>
-                <div className="font-medium text-sm">{u.name}</div>
+            <div key={u.id} className="flex items-center justify-between gap-3 py-3 border-b last:border-0" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+              <div className="min-w-0">
+                <div className="font-medium text-sm truncate">{u.name}</div>
                 <div className="text-xs opacity-60 font-mono">{u.role}</div>
               </div>
               <SignatureImage userId={u.id} />
-              <button className="btn-ghost text-xs" onClick={() => setTarget(u)}>Replace</button>
+              <button className="btn-ghost text-xs shrink-0" onClick={() => setTarget(u)}>Replace</button>
             </div>
           ))}
         </div>
