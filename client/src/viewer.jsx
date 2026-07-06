@@ -297,9 +297,10 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     const dragW = Math.abs(drawing.x - drawing.sx);
     const dragH = Math.abs(drawing.y - drawing.sy);
     let vx, vy, vw, vh;
-    // If user just clicked without a meaningful drag, centre a default-sized box on the click.
+    // If the user just clicked without a meaningful drag, drop a compact standard-sized
+    // box on the click — sized so it rarely needs resizing (drag for a custom size).
     if (dragW < 4 && dragH < 2) {
-      vw = 22; vh = 6;
+      vw = 15; vh = 5;
       vx = drawing.sx - vw / 2;
       vy = drawing.sy - vh / 2;
     } else {

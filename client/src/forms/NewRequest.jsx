@@ -522,7 +522,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
           {/* 3a. single mode: pick team + place marker */}
           {!isLeave && effectiveFile && mode === "single" && (
-            <Section n="03" title="Mark the signature field" desc="Click and drag on the document to set the signature box.">
+            <Section n="03" title="Mark the signature field" desc="Click the document to drop a standard-sized signature box, or drag to size your own.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable
                   onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
@@ -609,7 +609,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                       </Suspense>
                       {marker
                         ? <div className="mt-3 text-xs font-mono opacity-60">Signature box placed on page {marker.page}.<button className="ml-2 underline" onClick={() => setMarker(null)}>Reset</button></div>
-                        : <div className="mt-3 text-xs opacity-60">Click and drag on the document to place {directSigner.name}'s signature box.</div>}
+                        : <div className="mt-3 text-xs opacity-60">Click to drop a standard-sized box for {directSigner.name}'s signature, or drag to size your own.</div>}
                       {signerDateBar}
                       {selfBar}
                     </>
@@ -630,7 +630,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                   {placingSlot.kind === "date"
                     ? <span>Click and drag to drop a date box for this signer — it stays blank until they sign, then shows their signing date. Place as many as you like.</span>
-                    : <>Click and drag on the document to place this signer's box.{" "}
+                    : <>Click to drop a standard-sized box, or drag to size your own.{" "}
                       {lockedAspect
                         ? <span>Aspect is locked to the signer's signature so what you draw is what gets stamped.</span>
                         : <span>(Once this signer uploads a signature, the box will lock to its aspect.)</span>}</>}
