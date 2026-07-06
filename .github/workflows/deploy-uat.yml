@@ -115,3 +115,6 @@ jobs:
               sudo sed -i 's|application/javascript\s\+js;|application/javascript  js mjs;|' /etc/nginx/mime.types
             fi
             sudo nginx -t && sudo systemctl reload nginx
+            # Retired asset: Leave Approval no longer uses a template. scp does not
+            # prune deleted files, so remove the stale copy explicitly (exact name only).
+            find /home/ubuntu/OneSign -name 'leave-template.xlsx' -delete 2>/dev/null || true
