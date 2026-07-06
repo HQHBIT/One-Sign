@@ -14,7 +14,6 @@ import { api } from "../api.js";
 // Lazy viewer module — same shared chunk as the rest of the app.
 const ViewerModule = () => import("../viewer.jsx");
 const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview })));
-const XlsxViewer = lazy(() => ViewerModule().then(m => ({ default: m.XlsxViewer })));
 const ViewerFallback = () =>
   <div className="card p-10 text-sm opacity-50 text-center">Loading viewer…</div>;
 
@@ -73,78 +72,6 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     }, 300);
     return () => clearTimeout(t);
   }, [directQuery, mode]);
-
-  // Holds the live XLSX workbook so cell edits can be written back on submit
-  const xlsxWbRef = useRef(null);
-  const leaveTemplateCache = useRef(null);
-  const [leaveStyleMap, setLeaveStyleMap] = useState(null);
-
-  // Auto-load leave template + styles when type is "leave"
-  useEffect(() => {
-    if (requestType !== "leave") return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [templateU8, stylesJson] = await Promise.all([
-          leaveTemplateCache.current
-            ? Promise.resolve(leaveTemplateCache.current)
-            : fetch("/leave-template.xlsx").then(r => r.arrayBuffer()).then(b => { const u8 = new Uint8Array(b); leaveTemplateCache.current = u8; return u8; }),
-          !leaveStyleMap
-            ? fetch("/leave-template-styles.json").then(r => r.json()).catch(() => null)
-            : Promise.resolve(null)
-        ]);
-        if (cancelled) return;
-        if (stylesJson) setLeaveStyleMap(stylesJson);
-
-        // --- Clear all pre-filled data; stamp today's date on non-leave date cells ---
-        // Dynamic import: xlsx ships in the lazy viewer chunk so it only loads when needed.
-        const XLSX = await import("xlsx");
-        const workbook = XLSX.read(templateU8, { type: "array", cellDates: true });
-        const ws = workbook.Sheets["New Format"];
-        if (ws) {
-          // Clear all data cells
-          [
-            "C4","C5","C6","C7",
-            "G4","G5","G6","G7",
-            "A24",
-            "A10","B10","C10","D10","E10","F10","G10","H10",
-            "A11","B11","C11","D11","E11","F11","G11","H11",
-            "A12","B12","C12","D12","E12","F12","G12","H12",
-            "A13","B13","C13","D13","E13","F13","G13","H13",
-            "C14","C17","F17","A19","F19",
-            "F20","H24","H26",
-          ].forEach(addr => { delete ws[addr]; });
-
-          // Stamp today's date on all date cells EXCEPT From (D10-D13) and To (E10-E13)
-          const today = new Date();
-          const todayDisplay = today.toLocaleDateString("en-GB");
-          ["F10","F11","F12","F13","F20","H24","H26"].forEach(addr => {
-            ws[addr] = { t: "d", v: today, w: todayDisplay };
-          });
-        }
-        const modifiedU8 = new Uint8Array(XLSX.write(workbook, { bookType: "xlsx", type: "array" }));
-        // --- end clear ---
-
-        const blob = new File([modifiedU8], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (cancelled) return;
-          setFile({ name: "Leave Approval.xlsx", base64: reader.result, type: blob.type, ext: "xlsx", blob });
-          setMarker(null); setWorkflow([]); setPlacingSlot(null);
-        };
-        reader.readAsDataURL(blob);
-      } catch (e) { console.error(e); notify("Failed to load leave template", "error"); }
-    })();
-    return () => { cancelled = true; };
-  }, [requestType]);
-
-  const buildXlsxBlob = async () => {
-    const wb = xlsxWbRef.current;
-    if (!wb) return null;
-    const XLSX = await import("xlsx");
-    const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    return new File([new Uint8Array(out)], "Leave Approval.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  };
 
   const handleFile = e => {
     const f = e.target.files?.[0]; if (!f) return;
@@ -394,9 +321,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   }));
 
   // ---------- submit ----------
-  const isLeave = requestType === "leave";
   const effectiveFile = !!file;
-  const canSubmitSingle = isLeave ? (effectiveFile && targetTeam) : (effectiveFile && marker && targetTeam);
+  const canSubmitSingle = effectiveFile && marker && targetTeam;
   const canSubmitWorkflow = effectiveFile && workflow.length > 0
     && workflow.every(st => st.teamId && st.signers.length > 0
         && st.signers.every(s => s.userId && s.x != null));
@@ -405,13 +331,12 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const submit = async () => {
     setBusy(true);
     try {
-      const submitFile = isLeave ? ((await buildXlsxBlob()) || file.blob) : file.blob;
+      const submitFile = file.blob;
       const selfArg = selfMarks.length > 0 ? selfMarks : undefined;
       const sdArg = signerDateFields.length > 0 ? signerDateFields : undefined;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
-        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType });
       } else if (mode === "direct") {
         if (!canSubmitDirect) { notify("Pick a person and place their signature box", "error"); return; }
         await addRequest({ file: submitFile, direct: true, signers: [{ userId: directSigner.id, page: marker.page, x: marker.x, y: marker.y, w: marker.w, h: marker.h, dateFields: signerDateFields }], selfMarks: selfArg, instantApproval, note, requestType });
@@ -449,40 +374,28 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             </div>
           </Section>
 
-          {/* 1. upload / leave template */}
-          {isLeave ? (
-            <Section n="01" title="Leave Request Form" desc="Edit the cells directly in the spreadsheet below.">
-              {file ? (
-                <Suspense fallback={<ViewerFallback />}>
-                  <XlsxViewer file={file} markers={[]} cellEditable lockedCells={new Set(["F10","F11","F12","F13","F20","H24","H26"])} onWorkbookReady={wb => { xlsxWbRef.current = wb; }} styleMap={leaveStyleMap} />
-                </Suspense>
-              ) : (
-                <div className="card p-10 text-sm opacity-50 text-center">Loading template…</div>
-              )}
-            </Section>
-          ) : (
-            <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
-              {!file ? (
-                <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
-                  <Upload size={24} className="opacity-50 mb-3" />
-                  <div className="font-medium">Click to select a file</div>
-                  <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
-                  <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
-                </label>
-              ) : (
-                <div className="card p-5 flex items-center gap-4">
-                  {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{file.name}</div>
-                    <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
-                  </div>
-                  <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
-                    <X size={12} /> Remove
-                  </button>
+          {/* 1. upload (every request type, including leave, uploads its own document) */}
+          <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
+            {!file ? (
+              <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
+                <Upload size={24} className="opacity-50 mb-3" />
+                <div className="font-medium">Click to select a file</div>
+                <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
+                <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
+              </label>
+            ) : (
+              <div className="card p-5 flex items-center gap-4">
+                {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{file.name}</div>
+                  <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
                 </div>
-              )}
-            </Section>
-          )}
+                <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
+                  <X size={12} /> Remove
+                </button>
+              </div>
+            )}
+          </Section>
 
           {/* 2. mode + instant */}
           {effectiveFile && (
@@ -521,7 +434,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 3a. single mode: pick team + place marker */}
-          {!isLeave && effectiveFile && mode === "single" && (
+          {effectiveFile && mode ==="single" && (
             <Section n="03" title="Mark the signature field" desc="Click the document to drop a standard-sized signature box, or drag to size your own.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable
@@ -541,8 +454,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             </Section>
           )}
 
-          {effectiveFile && mode === "single" && (isLeave || marker) && (
-            <Section n={isLeave ? "03" : "04"} title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
+          {effectiveFile && mode === "single" && marker && (
+            <Section n="04" title="Route to signing authority" desc="Everyone with authority on this team will be notified.">
               <div className="grid sm:grid-cols-3 gap-3">
                 {teams.map(t => {
                   const active = targetTeam === t.id;
@@ -561,7 +474,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 3c. direct mode: pick a person + place marker */}
-          {!isLeave && effectiveFile && mode === "direct" && (
+          {effectiveFile && mode ==="direct" && (
             <Section n="03" title="Choose who should sign" desc="Search any user by name or email, then place their signature box.">
               {file.ext !== "pdf" ? (
                 <div className="card p-4 text-sm" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
@@ -620,7 +533,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 3b. workflow mode */}
-          {!isLeave && effectiveFile && mode === "workflow" && (
+          {effectiveFile && mode ==="workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
@@ -702,8 +615,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 5. submit */}
-          {effectiveFile && (mode === "single" ? ((isLeave || marker) && targetTeam) : mode === "direct" ? (directSigner && marker) : workflow.length > 0) && (
-            <Section n={isLeave ? "04" : (mode === "single" ? "05" : "04")} title="Add a note (optional)" desc="">
+          {effectiveFile && (mode === "single" ? (marker && targetTeam) : mode === "direct" ? (directSigner && marker) : workflow.length > 0) && (
+            <Section n={mode === "single" ? "05" : "04"} title="Add a note (optional)" desc="">
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the signer(s)…" />
               <div className="flex justify-end mt-4 gap-3">
                 <button className="btn-ghost" onClick={onDone}>Cancel</button>
