@@ -401,7 +401,7 @@ function PendingList({ items, teams, users, sendReminder, back, notify }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   {r.status === "pending" && (
                     <button className="btn-gold text-xs" onClick={() => sendReminder(r.id)}>
@@ -430,7 +430,7 @@ function ApprovedList({ items, teams, users, back }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
                   <PrintBtn req={r} />
@@ -454,7 +454,7 @@ function RejectedList({ items, teams, users, back }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 </div>
               )}
@@ -961,7 +961,7 @@ function ApproverApproved({ items, back, users, teams }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} />
                   <PrintBtn req={r} />
@@ -2220,7 +2220,7 @@ function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<div className="flex gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
+              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
           ))}
       </div>
     </div>

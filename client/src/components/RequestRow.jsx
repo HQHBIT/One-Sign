@@ -49,10 +49,12 @@ export function RequestRow({ r, teams, users, i, actions, subtitle }) {
         </div>
         {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}
         {subtitle && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>{subtitle}</div>}
-        {/* On mobile, actions move below content. On desktop they're inline. */}
-        <div className="flex sm:hidden items-center gap-2 mt-2">
+        {/* On mobile, actions move below content. On desktop they're inline.
+            flex-wrap so the status pill + action buttons wrap onto a new line
+            instead of being clipped off the right edge. (The action groups are
+            themselves flex-wrap so individual buttons wrap too.) */}
+        <div className="flex sm:hidden flex-wrap items-center gap-2 mt-2">
           <StatusPill status={r.status} />
-          <div className="flex-1" />
           {actions}
         </div>
       </div>
