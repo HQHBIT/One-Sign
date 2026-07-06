@@ -18,6 +18,8 @@ export function LoginScreen({ login }) {
   const [forgotState, setForgotState] = useState("idle");
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotErr, setForgotErr] = useState(null);
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
+  const [forgotConfirm, setForgotConfirm] = useState("");
 
   // Self-registration panel.
   const [regOpen, setRegOpen] = useState(false);
@@ -76,21 +78,24 @@ export function LoginScreen({ login }) {
   const submitForgot = async e => {
     e.preventDefault();
     if (!forgotEmail.trim()) return;
+    if (forgotNewPassword.length < 6) { setForgotErr("New password must be at least 6 characters"); setForgotState("error"); return; }
+    if (forgotNewPassword !== forgotConfirm) { setForgotErr("Passwords don't match"); setForgotState("error"); return; }
     setForgotState("sending");
     setForgotErr(null);
     try {
-      await api.forgotPassword(forgotEmail.trim());
-      // Server always returns 200 to prevent enumeration. Display generic
-      // "if that email exists, we sent a reset" copy.
+      await api.requestReset({ email: forgotEmail.trim(), newPassword: forgotNewPassword });
+      // Server always returns 200 (anti-enumeration). The new password takes
+      // effect only after IT approves the request.
       setForgotState("sent");
     } catch (e) {
-      setForgotErr(e.message || "Could not send reset email");
+      setForgotErr(e.message || "Could not submit reset request");
       setForgotState("error");
     }
   };
 
   const openForgot = () => {
     setForgotEmail(email); // prefill from login form if they typed one
+    setForgotNewPassword(""); setForgotConfirm("");
     setForgotErr(null);
     setForgotState("open");
   };
@@ -274,15 +279,30 @@ export function LoginScreen({ login }) {
             <form onSubmit={submitForgot}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Reset password</div>
               <div className="text-sm opacity-60 mb-8">
-                Enter your work email. If it's registered, we'll email you a new password right away.
+                Enter your email and choose a new password. IT will review and approve the request — then you can sign in with it.
               </div>
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
               <input type="email"
                 value={forgotEmail}
                 onChange={e => setForgotEmail(e.target.value)}
-                className="w-full mb-5"
+                className="w-full mb-4"
                 required
                 autoFocus
+                disabled={forgotState === "sending"} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
+              <input type="password"
+                value={forgotNewPassword}
+                onChange={e => setForgotNewPassword(e.target.value)}
+                className="w-full mb-4"
+                placeholder="At least 6 characters"
+                required
+                disabled={forgotState === "sending"} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
+              <input type="password"
+                value={forgotConfirm}
+                onChange={e => setForgotConfirm(e.target.value)}
+                className="w-full mb-5"
+                required
                 disabled={forgotState === "sending"} />
               {forgotErr && (
                 <div className="text-xs px-3 py-2 rounded mb-4"
@@ -294,8 +314,8 @@ export function LoginScreen({ login }) {
                 <button type="button" className="btn-ghost" onClick={closeForgot}>
                   <ArrowLeft size={14} /> Back
                 </button>
-                <button className="btn-primary flex-1 justify-center" disabled={forgotState === "sending" || !forgotEmail.trim()}>
-                  {forgotState === "sending" ? "Sending…" : <>Send reset email <ArrowRight size={14} /></>}
+                <button className="btn-primary flex-1 justify-center" disabled={forgotState === "sending" || !forgotEmail.trim() || forgotNewPassword.length < 6}>
+                  {forgotState === "sending" ? "Submitting…" : <>Request reset <ArrowRight size={14} /></>}
                 </button>
               </div>
             </form>
@@ -303,14 +323,14 @@ export function LoginScreen({ login }) {
 
           {forgotState === "sent" && (
             <div className="anim-in">
-              <div className="font-display text-2xl sm:text-3xl mb-2">Check your inbox</div>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
               <div className="text-sm opacity-70 mb-6 leading-relaxed">
-                If <span className="font-mono">{forgotEmail}</span> is registered, a new password has been emailed.
-                Sign in with the new password and change it once you're in.
+                If <span className="font-mono">{forgotEmail}</span> is a registered account, your reset request has been sent to IT.
+                Once they approve it, sign in with your new password.
               </div>
               <div className="card p-3 mb-6 flex items-start gap-3 text-xs" style={{ backgroundColor: "rgba(45,95,47,.06)", borderColor: "rgba(45,95,47,.2)" }}>
                 <Check size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-forest)" }} />
-                <div className="opacity-80">It may take a minute to arrive. Check your spam folder if you don't see it.</div>
+                <div className="opacity-80">Your current password keeps working until IT approves the change.</div>
               </div>
               <button className="btn-primary w-full justify-center" onClick={closeForgot}>
                 <ArrowLeft size={14} /> Back to sign-in

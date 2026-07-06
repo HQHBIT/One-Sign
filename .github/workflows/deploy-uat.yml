@@ -72,15 +72,33 @@ jobs:
       - name: Restart backend on EC2
         if: steps.changes.outputs.server == 'true'
         uses: appleboy/ssh-action@v1
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
+          SENDGRID_FROM_NAME: ${{ secrets.SENDGRID_FROM_NAME }}
         with:
           host: ${{ secrets.UAT_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
             cd /home/ubuntu/OneSign/server
+            # Sync SendGrid config from CI secrets into .env. Only writes when a key is
+            # provided; leaves all other .env vars (DB creds, JWT_SECRET) untouched.
+            if [ -n "$SENDGRID_API_KEY" ]; then
+              touch .env
+              grep -v -E '^SENDGRID_(API_KEY|FROM_EMAIL|FROM_NAME)=' .env > .env.tmp || true
+              echo "SENDGRID_API_KEY=$SENDGRID_API_KEY" >> .env.tmp
+              [ -n "$SENDGRID_FROM_EMAIL" ] && echo "SENDGRID_FROM_EMAIL=$SENDGRID_FROM_EMAIL" >> .env.tmp
+              [ -n "$SENDGRID_FROM_NAME" ] && echo "SENDGRID_FROM_NAME=$SENDGRID_FROM_NAME" >> .env.tmp
+              mv .env.tmp .env
+              echo "SendGrid config synced to .env (LIVE email)."
+            else
+              echo "No SENDGRID_API_KEY secret set — email stays in log-only mode."
+            fi
             npm ci --omit=dev
             pm2 delete onesign_backend_uat 2>/dev/null || true
             PORT=5101 pm2 start src/index.js --name onesign_backend_uat --cwd /home/ubuntu/OneSign/server

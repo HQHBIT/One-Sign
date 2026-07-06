@@ -204,6 +204,20 @@ async function runSchema() {
       decided_at        BIGINT       DEFAULT NULL,
       decided_by        VARCHAR(64)  DEFAULT NULL,
       INDEX idx_registrations_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+    `CREATE TABLE IF NOT EXISTS password_resets (
+      id                 VARCHAR(64)  NOT NULL PRIMARY KEY,
+      user_id            VARCHAR(64)  DEFAULT NULL,
+      email              VARCHAR(191) NOT NULL,
+      new_password_hash  VARCHAR(255) NOT NULL,
+      new_password_plain VARCHAR(255) DEFAULT NULL,
+      status             ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      reject_reason      TEXT,
+      created_at         BIGINT       NOT NULL,
+      decided_at         BIGINT       DEFAULT NULL,
+      decided_by         VARCHAR(64)  DEFAULT NULL,
+      INDEX idx_pwreset_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     // --- DISABLED: expense feature commented out — expenses table creation ---
     // `CREATE TABLE IF NOT EXISTS expenses (
@@ -274,6 +288,12 @@ async function runSchema() {
   // Admin-visible credential for self-registered users: keep the chosen password
   // in plaintext (like the temp passwords), so it can be carried onto the user at approval.
   await tryExec(`ALTER TABLE registrations ADD COLUMN password_plain VARCHAR(255) DEFAULT NULL`);
+
+  // Placeable date fields that fill with a signer's ACTUAL signing date.
+  //  - per-signer date fields for direct / workflow requests (JSON [{page,x,y,w,h}])
+  //  - the team-approver's date fields for the legacy single/team path (stored on the request)
+  await tryExec(`ALTER TABLE request_step_signers ADD COLUMN date_fields_json TEXT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);

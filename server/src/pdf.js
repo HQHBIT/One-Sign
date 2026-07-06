@@ -28,7 +28,6 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
   const pdfBytes = await fs.readFile(srcPath);
   const pdf = await PDFDocument.load(pdfBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
   const cache = new Map();
   async function embed(p) {
@@ -46,7 +45,6 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     if (pageIdx >= pdf.getPageCount()) continue;
     const page = pdf.getPage(pageIdx);
     const { width: pw, height: ph } = page.getSize();
-    const sigImg = await embed(s.signaturePath);
 
     const boxW = (s.w / 100) * pw;
     const boxH = (s.h / 100) * ph;
@@ -54,12 +52,16 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     const boxYTop = (s.y / 100) * ph;
     const boxY = ph - boxYTop - boxH;
 
-    drawStampedBlock({
-      page, sigImg, font, fontBold,
-      boxX, boxY, boxW, boxH,
-      signerName: s.signerName,
-      signedAt: s.signedAt
-    });
+    // A date stamp draws the signer's signing date as text in the placed box.
+    if (s.type === "date") {
+      drawDateInBox(page, font, String(s.text || ""), boxX, boxY, boxW, boxH);
+      continue;
+    }
+
+    // Signature fills the exact rectangle the requestor placed — no caption line.
+    // The signing date, when wanted, is stamped separately in its own date box.
+    const sigImg = await embed(s.signaturePath);
+    page.drawImage(sigImg, { x: boxX, y: boxY, width: boxW, height: boxH });
   }
 
   const out = await pdf.save();
@@ -69,76 +71,23 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
   return outPath;
 }
 
-// Draws the signature image filling the EXACT marker rectangle the requestor placed.
-// The image is stretched to (boxW, boxH); no aspect-fit, no interior caption. A small
-// "Digitally signed by … · date" strip is rendered BELOW the marker box (or above it
-// when there isn't room below) so the visible signature footprint always equals the
-// placed rectangle. Coords are MediaBox y-up; rotation has already been baked.
-function drawStampedBlock({ page, sigImg, font, fontBold, boxX, boxY, boxW, boxH, signerName, signedAt }) {
-  // 1) Signature fills the marker exactly.
-  page.drawImage(sigImg, { x: boxX, y: boxY, width: boxW, height: boxH });
 
-  // 2) Optional caption rendered outside the marker. Compose the lines first so we
-  //    know whether there's anything to draw.
-  if (!signerName && !signedAt) return;
-
-  const { width: pageW, height: pageH } = page.getSize();
-  const nameText = signerName ? `Digitally signed by ${signerName}` : "";
-  const dateText = signedAt ? formatSignedDate(signedAt) : "";
-
-  // Caption sizing scales with the marker width but stays within a comfortable range.
-  const nameSize = clampNum(boxW * 0.045, 5.5, 8);
-  const dateSize = clampNum(boxW * 0.038, 4.5, 7);
-  const lineGap = Math.max(1, nameSize * 0.25);
-  const padTop = Math.max(1.5, nameSize * 0.45);
-  const padBottom = Math.max(1, dateSize * 0.4);
-  const linesH = (nameText ? nameSize : 0) + (nameText && dateText ? lineGap : 0) + (dateText ? dateSize : 0);
-  const captionH = padTop + linesH + padBottom;
-
-  // Prefer below the marker. In MediaBox y-up, "below" means lower y.
-  // Space below = boxY (distance from page bottom). Space above = pageH - (boxY + boxH).
-  const spaceBelow = boxY;
-  const spaceAbove = pageH - (boxY + boxH);
-  const placeBelow = spaceBelow >= captionH || spaceBelow >= spaceAbove;
-
-  // Caption block top edge (y-up). When placing below, top = boxY (marker bottom).
-  const blockTopY = placeBelow ? boxY : boxY + boxH + captionH;
-  const blockBottomY = blockTopY - captionH;
-  if (blockBottomY < 0 || blockTopY > pageH) return; // No room at all.
-
-  // Thin divider sits on the edge of the caption that touches the marker.
-  const dividerY = placeBelow ? boxY - 0.4 : boxY + boxH + 0.4;
-  page.drawLine({
-    start: { x: boxX, y: dividerY },
-    end:   { x: boxX + boxW, y: dividerY },
-    thickness: 0.4,
-    color: rgb(0.6, 0.6, 0.6)
+// Draws a date string centred in the placed box, auto-shrinking to fit the width.
+// Shared by stampPdfMulti (a signer's signing date) and applySelfMarks (the
+// requestor's own date). Coords are MediaBox y-up; box origin is bottom-left.
+function drawDateInBox(page, font, text, boxX, boxY, boxW, boxH) {
+  if (!text) return;
+  let size = Math.min(boxH * 0.72, 24);
+  const maxW = boxW * 0.96;
+  while (size > 4 && font.widthOfTextAtSize(text, size) > maxW) size -= 0.5;
+  const tw = font.widthOfTextAtSize(text, size);
+  page.drawText(text, {
+    x: boxX + Math.max(0, (boxW - tw) / 2),
+    y: boxY + (boxH - size) / 2 + size * 0.12,
+    size, font, color: rgb(0.1, 0.12, 0.2)
   });
-
-  // Text flows top-down from blockTopY. padTop gives a small breathing margin.
-  let cursorY = blockTopY - padTop - nameSize * 0.8;
-  if (nameText) {
-    const w = fontBold.widthOfTextAtSize(nameText, nameSize);
-    const x = boxX + Math.max(0, (boxW - w) / 2);
-    page.drawText(nameText, { x, y: cursorY, size: nameSize, font: fontBold, color: rgb(0.15, 0.18, 0.27) });
-    cursorY -= lineGap + dateSize;
-  }
-  if (dateText) {
-    const w = font.widthOfTextAtSize(dateText, dateSize);
-    const x = boxX + Math.max(0, (boxW - w) / 2);
-    page.drawText(dateText, { x, y: cursorY, size: dateSize, font, color: rgb(0.42, 0.42, 0.45) });
-  }
-  // Suppress unused-var warning for pageW (kept for future right-edge clamp).
-  void pageW;
 }
 
-function clampNum(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-function formatSignedDate(ts) {
-  const d = new Date(Number(ts));
-  try { return d.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }); }
-  catch { return d.toISOString().slice(0, 16).replace("T", " "); }
-}
 
 // Rebuilds the PDF so every page matches the target orientation. Pages already in
 // that orientation are embedded and drawn unchanged. Pages in the other orientation
@@ -218,4 +167,43 @@ export async function writeXlsxSignatureManifest({ srcPath, signaturePath, marke
   const outPath = path.join(SIGNED_DIR, outName.replace(/\.xlsx?$/i, "") + ".signed.json");
   await fs.writeFile(outPath, JSON.stringify(manifest, null, 2));
   return outPath;
+}
+
+// Stamps the REQUESTOR's own signature image(s) and/or date text(s) onto a PDF at
+// creation time, so the document goes out already self-signed / dated before it is
+// routed for approval. Works on raw bytes and returns new bytes (no disk write).
+// Coordinates are percentages of the page (same convention as stampPdfMulti).
+//   marks: [{ type: 'signature'|'date', signaturePath?, text?, page, x, y, w, h }]
+export async function applySelfMarks(pdfBytes, marks) {
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const cache = new Map();
+  async function embed(p) {
+    if (cache.has(p)) return cache.get(p);
+    const bytes = await fs.readFile(p);
+    let img;
+    try { img = await pdf.embedPng(bytes); } catch { img = await pdf.embedJpg(bytes); }
+    cache.set(p, img);
+    return img;
+  }
+
+  for (const m of marks) {
+    const pageIdx = Math.max(0, (m.page || 1) - 1);
+    if (pageIdx >= pdf.getPageCount()) continue;
+    const page = pdf.getPage(pageIdx);
+    const { width: pw, height: ph } = page.getSize();
+    const boxW = (m.w / 100) * pw;
+    const boxH = (m.h / 100) * ph;
+    const boxX = (m.x / 100) * pw;
+    const boxY = ph - ((m.y / 100) * ph) - boxH;
+
+    if (m.type === "date") {
+      drawDateInBox(page, font, String(m.text || ""), boxX, boxY, boxW, boxH);
+    } else if (m.signaturePath) {
+      const img = await embed(m.signaturePath);
+      page.drawImage(img, { x: boxX, y: boxY, width: boxW, height: boxH });
+    }
+  }
+
+  return await pdf.save();
 }

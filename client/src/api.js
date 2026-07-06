@@ -75,6 +75,16 @@ export const api = {
     return this.fetch(`/api/registrations/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
   },
 
+  // -------- password reset requests --------
+  requestReset({ email, newPassword }) {
+    return this.fetch("/api/auth/request-reset", { method: "POST", body: JSON.stringify({ email, newPassword }) });
+  },
+  listPasswordResets() { return this.fetch("/api/password-resets"); }, // { resets, pending }
+  approvePasswordReset(id) { return this.fetch(`/api/password-resets/${id}/approve`, { method: "POST" }); },
+  rejectPasswordReset(id, reason) {
+    return this.fetch(`/api/password-resets/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
   createTeam(name) { return this.fetch("/api/teams", { method: "POST", body: JSON.stringify({ name }) }); },
@@ -122,12 +132,14 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, direct, signers, instantApproval, note, requestType }) {
+  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (workflow) fd.append("workflow", JSON.stringify(workflow));
     if (direct) fd.append("direct", "true");
     if (signers) fd.append("signers", JSON.stringify(signers));
+    if (selfMarks) fd.append("selfMarks", JSON.stringify(selfMarks));
+    if (signerDateFields) fd.append("signerDateFields", JSON.stringify(signerDateFields));
     if (targetTeamId) fd.append("targetTeamId", targetTeamId);
     if (marker) fd.append("marker", JSON.stringify(marker));
     if (instantApproval) fd.append("instantApproval", "true");
