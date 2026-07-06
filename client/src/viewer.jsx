@@ -337,8 +337,8 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
 
   return (
     <div ref={wrapRef} data-page-num={pageNum} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
-      <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)" }}
-           onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={() => setDrawing(null)}>
+      <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)", touchAction: editable ? "none" : undefined }}
+           onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={() => setDrawing(null)}>
         <canvas ref={canvasRef} style={{ display: "block", cursor: editable ? "crosshair" : "default" }} />
         {markers.map((m, i) => {
           // Convert MediaBox coords (storage) → viewport coords for display at current rotation
@@ -416,11 +416,13 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
       onUpdate({ x: nx, y: ny, w: nw, h: nh });
     };
     const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
     };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   }
 
   const handleStyle = (corner) => ({
@@ -435,7 +437,8 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
     ...(corner === "ne" ? { right: -6, top: -6 } : {}),
     ...(corner === "sw" ? { left: -6, bottom: -6 } : {}),
     ...(corner === "se" ? { right: -6, bottom: -6 } : {}),
-    pointerEvents: "auto"
+    pointerEvents: "auto",
+    touchAction: "none"
   });
 
   return (
@@ -450,9 +453,10 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
       fontSize: 10, color: color, fontWeight: 600,
       pointerEvents: interactive ? "auto" : "none",
       cursor: interactive ? "move" : "default",
+      touchAction: interactive ? "none" : undefined,
       boxShadow: highlight ? "0 0 0 2px rgba(184,137,74,.35)" : "none"
     }}
-      onMouseDown={interactive ? (e) => startDrag(e, "move") : undefined}>
+      onPointerDown={interactive ? (e) => startDrag(e, "move") : undefined}>
       {isSigned ? (
         <img src={m.signedDataUrl} alt="signature" style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
       ) : (
@@ -462,12 +466,12 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
       )}
       {interactive && (
         <>
-          <div style={handleStyle("nw")} onMouseDown={(e) => startDrag(e, "nw")} />
-          <div style={handleStyle("ne")} onMouseDown={(e) => startDrag(e, "ne")} />
-          <div style={handleStyle("sw")} onMouseDown={(e) => startDrag(e, "sw")} />
-          <div style={handleStyle("se")} onMouseDown={(e) => startDrag(e, "se")} />
+          <div style={handleStyle("nw")} onPointerDown={(e) => startDrag(e, "nw")} />
+          <div style={handleStyle("ne")} onPointerDown={(e) => startDrag(e, "ne")} />
+          <div style={handleStyle("sw")} onPointerDown={(e) => startDrag(e, "sw")} />
+          <div style={handleStyle("se")} onPointerDown={(e) => startDrag(e, "se")} />
           {onDelete && (
-            <button onMouseDown={(e) => { e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            <button onPointerDown={(e) => { e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); onDelete(); }}
               title="Remove marker"
               style={{ position: "absolute", top: -10, right: -10, width: 18, height: 18, borderRadius: 9, backgroundColor: "#9B2C2C", color: "#F5F1E8", border: "2px solid #FAF7F0", fontSize: 11, lineHeight: "12px", padding: 0, cursor: "pointer", pointerEvents: "auto" }}>×</button>
           )}
@@ -649,9 +653,9 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
         </div>
       )}
       <div ref={pageRef}
-           onMouseDown={editable ? onDown : undefined} onMouseMove={editable ? onMove : undefined}
-           onMouseUp={editable ? onUp : undefined} onMouseLeave={editable ? () => setDrawing(null) : undefined}
-           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff" }}>
+           onPointerDown={editable ? onDown : undefined} onPointerMove={editable ? onMove : undefined}
+           onPointerUp={editable ? onUp : undefined} onPointerLeave={editable ? () => setDrawing(null) : undefined}
+           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff", touchAction: editable ? "none" : undefined }}>
         <style>{`
           .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
           .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
