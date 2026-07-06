@@ -6,7 +6,15 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
   // user doesn't lose any in-progress work in SignFlow.
   const docsUrl = "https://github.com/taha-chunawala/One-Sign/blob/UAT/docs/user-guide.md";
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
-  const initials = (user.name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+  // Initials from the first letter/digit of each word (skips punctuation like the
+  // "(" in "Taha (Admin)"), capped at two.
+  const initials = (user.name || "")
+    .split(/\s+/)
+    .map(w => (w.match(/[A-Za-z0-9]/) || [""])[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase() || "?";
 
   // Profile dropdown: open state + click-outside / Escape to close.
   const [menuOpen, setMenuOpen] = useState(false);
@@ -69,7 +77,8 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
               aria-haspopup="menu" aria-expanded={menuOpen} title="Profile menu">
               <span className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
                 style={{ backgroundColor: "#B8894A", color: "#FAF7F0" }}>{initials}</span>
-              <ChevronDown size={14} className="opacity-60 transition-transform" style={{ transform: menuOpen ? "rotate(180deg)" : "none" }} />
+              <span className="hidden sm:block text-sm font-medium truncate max-w-[160px]">{user.name}</span>
+              <ChevronDown size={14} className="opacity-60 transition-transform shrink-0" style={{ transform: menuOpen ? "rotate(180deg)" : "none" }} />
             </button>
 
             {menuOpen && (
