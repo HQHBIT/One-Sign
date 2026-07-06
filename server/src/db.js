@@ -289,6 +289,12 @@ async function runSchema() {
   // in plaintext (like the temp passwords), so it can be carried onto the user at approval.
   await tryExec(`ALTER TABLE registrations ADD COLUMN password_plain VARCHAR(255) DEFAULT NULL`);
 
+  // Placeable date fields that fill with a signer's ACTUAL signing date.
+  //  - per-signer date fields for direct / workflow requests (JSON [{page,x,y,w,h}])
+  //  - the team-approver's date fields for the legacy single/team path (stored on the request)
+  await tryExec(`ALTER TABLE request_step_signers ADD COLUMN date_fields_json TEXT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 }

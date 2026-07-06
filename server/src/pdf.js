@@ -46,7 +46,6 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     if (pageIdx >= pdf.getPageCount()) continue;
     const page = pdf.getPage(pageIdx);
     const { width: pw, height: ph } = page.getSize();
-    const sigImg = await embed(s.signaturePath);
 
     const boxW = (s.w / 100) * pw;
     const boxH = (s.h / 100) * ph;
@@ -54,6 +53,13 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     const boxYTop = (s.y / 100) * ph;
     const boxY = ph - boxYTop - boxH;
 
+    // A date stamp draws the signer's signing date as text in the placed box.
+    if (s.type === "date") {
+      drawDateInBox(page, font, String(s.text || ""), boxX, boxY, boxW, boxH);
+      continue;
+    }
+
+    const sigImg = await embed(s.signaturePath);
     drawStampedBlock({
       page, sigImg, font, fontBold,
       boxX, boxY, boxW, boxH,
@@ -133,6 +139,22 @@ function drawStampedBlock({ page, sigImg, font, fontBold, boxX, boxY, boxW, boxH
 }
 
 function clampNum(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+// Draws a date string centred in the placed box, auto-shrinking to fit the width.
+// Shared by stampPdfMulti (a signer's signing date) and applySelfMarks (the
+// requestor's own date). Coords are MediaBox y-up; box origin is bottom-left.
+function drawDateInBox(page, font, text, boxX, boxY, boxW, boxH) {
+  if (!text) return;
+  let size = Math.min(boxH * 0.72, 24);
+  const maxW = boxW * 0.96;
+  while (size > 4 && font.widthOfTextAtSize(text, size) > maxW) size -= 0.5;
+  const tw = font.widthOfTextAtSize(text, size);
+  page.drawText(text, {
+    x: boxX + Math.max(0, (boxW - tw) / 2),
+    y: boxY + (boxH - size) / 2 + size * 0.12,
+    size, font, color: rgb(0.1, 0.12, 0.2)
+  });
+}
 
 function formatSignedDate(ts) {
   const d = new Date(Number(ts));
@@ -249,17 +271,7 @@ export async function applySelfMarks(pdfBytes, marks) {
     const boxY = ph - ((m.y / 100) * ph) - boxH;
 
     if (m.type === "date") {
-      const text = String(m.text || "");
-      if (!text) continue;
-      let size = Math.min(boxH * 0.72, 24);
-      const maxW = boxW * 0.96;
-      while (size > 4 && font.widthOfTextAtSize(text, size) > maxW) size -= 0.5;
-      const tw = font.widthOfTextAtSize(text, size);
-      page.drawText(text, {
-        x: boxX + Math.max(0, (boxW - tw) / 2),
-        y: boxY + (boxH - size) / 2 + size * 0.12,
-        size, font, color: rgb(0.1, 0.12, 0.2)
-      });
+      drawDateInBox(page, font, String(m.text || ""), boxX, boxY, boxW, boxH);
     } else if (m.signaturePath) {
       const img = await embed(m.signaturePath);
       page.drawImage(img, { x: boxX, y: boxY, width: boxW, height: boxH });
