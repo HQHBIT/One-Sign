@@ -666,23 +666,27 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                             const isPlacingSig = here && placingSlot?.kind !== "date";
                             const isPlacingDate = here && placingSlot?.kind === "date";
                             return (
-                              <div key={gi} className="flex items-center gap-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
-                                <span className="font-mono text-xs opacity-50">{si + 1}.{gi + 1}</span>
-                                <span className="text-sm font-medium flex-1">{u?.name || "(unknown)"}</span>
-                                {!u?.hasSignature && <span className="pill pill-rejected text-[10px]">no signature</span>}
-                                {placed
-                                  ? <span className="text-xs opacity-60 font-mono">page {s.page} · placed{dfCount ? ` · ${dfCount} date` : ""}</span>
-                                  : <span className="text-xs opacity-60">no marker</span>}
-                                <button className={`text-xs ${isPlacingSig ? "btn-gold" : "btn-ghost"}`}
-                                  onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingSig ? null : { stepIdx: si, signerIdx: gi, kind: "signature" }); }}>
-                                  {placed ? "Re-place" : "Place signature"}
-                                </button>
-                                <button className={`text-xs ${isPlacingDate ? "btn-gold" : "btn-ghost"}`}
-                                  title="Place date field(s) that fill when this signer signs"
-                                  onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? null : { stepIdx: si, signerIdx: gi, kind: "date" }); }}>
-                                  + Date
-                                </button>
-                                <button className="opacity-40 hover:opacity-100" onClick={() => removeSigner(si, gi)}><X size={12} /></button>
+                              <div key={gi} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                                <div className="flex items-center gap-2 min-w-0 flex-1 basis-full sm:basis-0">
+                                  <span className="font-mono text-xs opacity-50 shrink-0">{si + 1}.{gi + 1}</span>
+                                  <span className="text-sm font-medium truncate min-w-0">{u?.name || "(unknown)"}</span>
+                                  {!u?.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature</span>}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 ml-auto">
+                                  {placed
+                                    ? <span className="text-xs opacity-60 font-mono">page {s.page} · placed{dfCount ? ` · ${dfCount} date` : ""}</span>
+                                    : <span className="text-xs opacity-60">no marker</span>}
+                                  <button className={`text-xs ${isPlacingSig ? "btn-gold" : "btn-ghost"}`}
+                                    onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingSig ? null : { stepIdx: si, signerIdx: gi, kind: "signature" }); }}>
+                                    {placed ? "Re-place" : "Place signature"}
+                                  </button>
+                                  <button className={`text-xs ${isPlacingDate ? "btn-gold" : "btn-ghost"}`}
+                                    title="Place date field(s) that fill when this signer signs"
+                                    onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? null : { stepIdx: si, signerIdx: gi, kind: "date" }); }}>
+                                    + Date
+                                  </button>
+                                  <button className="opacity-40 hover:opacity-100" onClick={() => removeSigner(si, gi)}><X size={12} /></button>
+                                </div>
                               </div>
                             );
                           })}

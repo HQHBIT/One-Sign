@@ -33,10 +33,10 @@ export function RequestRow({ r, teams, users, i, actions, subtitle }) {
         {r.fileType === "pdf" ? <FileText size={15} /> : <FileSpreadsheet size={15} />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="font-medium text-sm sm:text-base truncate flex items-center gap-2">
-          {r.fileName}
-          {r.instantApproval && <span title="Instant approval" style={{ color: "var(--c-gold)" }}><Zap size={11} /></span>}
-          {r.workflow?.length > 0 && <span title="Multi-step workflow" className="opacity-60"><GitBranch size={11} /></span>}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-medium text-sm sm:text-base truncate">{r.fileName}</span>
+          {r.instantApproval && <span title="Instant approval" className="shrink-0" style={{ color: "var(--c-gold)" }}><Zap size={11} /></span>}
+          {r.workflow?.length > 0 && <span title="Multi-step workflow" className="opacity-60 shrink-0"><GitBranch size={11} /></span>}
         </div>
         <div className="text-xs opacity-60 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 7px", borderRadius: 4, backgroundColor: `${typeColor}1A`, color: typeColor, fontWeight: 500 }}>
