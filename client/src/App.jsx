@@ -470,9 +470,18 @@ function RejectedList({ items, teams, users, back }) {
 
 
 function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
+  // Date markers show the date that will be stamped in a signer's date field —
+  // their actual signing date if already signed, otherwise today's date (a preview
+  // of what lands there when they approve). isDate keeps them out of the signature
+  // overlay in preview mode.
+  const fmtD = (ts) => { const d = ts ? new Date(Number(ts)) : new Date(); const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`; };
+  const dateMark = (d, key, ts) => ({ id: `date-${key}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h, color: "#C77D2E", label: fmtD(ts), isDate: true });
+
   if (!req.workflow || req.workflow.length === 0) {
-    if (req.marker) return [{ ...req.marker, page: req.marker.page || 1, label: "SIGN HERE" }];
-    return [];
+    const out = [];
+    if (req.marker) out.push({ ...req.marker, page: req.marker.page || 1, label: "SIGN HERE" });
+    (req.signerDateFields || []).forEach((d, i) => out.push(dateMark(d, `s-${i}`, req.approvedAt)));
+    return out;
   }
   const out = [];
   req.workflow.forEach((step, si) => {
@@ -485,6 +494,7 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
         label: `${step.order}.${s.order} ${s.userName}${team ? ` · ${team.name}` : ""}${s.status === "signed" ? " ✓" : ""}`,
         highlight: highlightUserId && s.userId === highlightUserId && s.status === "pending"
       });
+      (s.dateFields || []).forEach((d, fi) => out.push(dateMark(d, `${si}-${gi}-${fi}`, s.status === "signed" ? s.signedAt : null)));
     });
   });
   return out;
@@ -794,7 +804,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   // In preview mode, overlay the approver's signature image at the marked position.
   const baseMarkers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams, { highlightUserId: user.id });
   const markers = (previewing && sigUrl)
-    ? baseMarkers.map(m => (isWorkflow ? m.highlight : true) ? { ...m, signedDataUrl: sigUrl } : m)
+    ? baseMarkers.map(m => (!m.isDate && (isWorkflow ? m.highlight : true)) ? { ...m, signedDataUrl: sigUrl } : m)
     : baseMarkers;
 
   const jumpToSig = () => {

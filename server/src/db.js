@@ -365,6 +365,13 @@ export async function hydrateUser(row) {
   };
 }
 
+// Parse a stored date-fields JSON column into an array (never throws).
+function parseJsonArr(json) {
+  if (!json) return [];
+  try { const a = typeof json === "string" ? JSON.parse(json) : json; return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+
 export async function hydrateRequest(row) {
   if (!row) return null;
   const [rems] = await pool.execute(
@@ -414,7 +421,8 @@ export async function hydrateRequest(row) {
       h: Number(s.marker_h),
       rotation: Number(s.rotation || 0),
       status: s.status,
-      signedAt: s.signed_at ? Number(s.signed_at) : null
+      signedAt: s.signed_at ? Number(s.signed_at) : null,
+      dateFields: parseJsonArr(s.date_fields_json)
     }))
   }));
 
@@ -426,6 +434,7 @@ export async function hydrateRequest(row) {
     fileType: row.file_type,
     targetTeamId: row.target_team_id,
     marker: row.marker_json ? (typeof row.marker_json === "string" ? JSON.parse(row.marker_json) : row.marker_json) : null,
+    signerDateFields: parseJsonArr(row.signer_date_fields_json),
     note: row.note || "",
     status: row.status,
     createdAt: Number(row.created_at),
