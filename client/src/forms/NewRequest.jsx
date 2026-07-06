@@ -40,6 +40,21 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const [directResults, setDirectResults] = useState([]);
   const [directSearching, setDirectSearching] = useState(false);
 
+  // self-sign / date: the requestor stamps their OWN signature + date before sending
+  const [selfSignOn, setSelfSignOn] = useState(false);
+  const [selfMarks, setSelfMarks] = useState([]); // [{type:'signature'|'date', page, x, y, w, h}]
+  const [selfPlacing, setSelfPlacing] = useState(null); // 'signature' | 'date' | null
+  const [mySigUrl, setMySigUrl] = useState(null);
+  const todayDdMmYy = (() => { const d = new Date(); const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`; })();
+
+  // Load the requestor's signature (blob URL) for the self-sign preview overlay.
+  useEffect(() => {
+    if (!selfSignOn || !user.hasSignature) { setMySigUrl(null); return; }
+    let url = null, cancelled = false;
+    api.getSignatureBlob(user.id).then(u => { if (cancelled) { if (u) URL.revokeObjectURL(u); return; } url = u; setMySigUrl(u); }).catch(() => {});
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+  }, [selfSignOn, user.hasSignature, user.id]);
+
   // Debounced directory search for "send to a specific person".
   useEffect(() => {
     if (mode !== "direct") return;
@@ -138,6 +153,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       setWorkflow([]);
       setPlacingSlot(null);
       setDirectSigner(null);
+      setSelfSignOn(false); setSelfMarks([]); setSelfPlacing(null);
     };
     reader.readAsDataURL(f);
   };
@@ -231,6 +247,27 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     }));
   };
 
+  // --- self-sign / date placement (its own layer, independent of signer boxes) ---
+  const onAddSelfMark = (page, x, y, w, h) => {
+    if (!selfPlacing) { notify("Choose 'signature' or 'date' first, then drag on the document", "info"); return; }
+    setSelfMarks(ms => [...ms, { type: selfPlacing, page, x, y, w, h }]);
+    setSelfPlacing(null);
+  };
+  const onUpdateSelfMark = (id, patch) => {
+    const m = /^self-(\d+)$/.exec(id || ""); if (!m) return;
+    setSelfMarks(ms => ms.map((s, i) => i === Number(m[1]) ? { ...s, ...patch } : s));
+  };
+  const onDeleteSelfMark = (id) => {
+    const m = /^self-(\d+)$/.exec(id || ""); if (!m) return;
+    setSelfMarks(ms => ms.filter((_, i) => i !== Number(m[1])));
+  };
+  const selfPreviewMarkers = useMemo(() => selfMarks.map((s, i) => ({
+    id: `self-${i}`, page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h,
+    color: "#B8894A",
+    label: s.type === "date" ? todayDdMmYy : "Your signature",
+    ...(s.type === "signature" && mySigUrl ? { signedDataUrl: mySigUrl } : {})
+  })), [selfMarks, mySigUrl, todayDdMmYy]);
+
   // ---------- workflow editing ----------
   const addStep = () => setWorkflow(wf => [...wf, { teamId: "", signers: [] }]);
   const removeStep = (i) => setWorkflow(wf => wf.filter((_, idx) => idx !== i));
@@ -255,16 +292,17 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     setBusy(true);
     try {
       const submitFile = isLeave ? ((await buildXlsxBlob()) || file.blob) : file.blob;
+      const selfArg = (selfSignOn && selfMarks.length > 0) ? selfMarks : undefined;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
         const submitMarker = isLeave ? { page: 1, x: 30, y: 85, w: 22, h: 6 } : marker;
-        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: submitMarker, selfMarks: selfArg, instantApproval, note, requestType });
       } else if (mode === "direct") {
         if (!canSubmitDirect) { notify("Pick a person and place their signature box", "error"); return; }
-        await addRequest({ file: submitFile, direct: true, signers: [{ userId: directSigner.id, page: marker.page, x: marker.x, y: marker.y, w: marker.w, h: marker.h }], instantApproval, note, requestType });
+        await addRequest({ file: submitFile, direct: true, signers: [{ userId: directSigner.id, page: marker.page, x: marker.x, y: marker.y, w: marker.w, h: marker.h }], selfMarks: selfArg, instantApproval, note, requestType });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
-        await addRequest({ file: submitFile, workflow, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, workflow, selfMarks: selfArg, instantApproval, note, requestType });
       }
       notify("Request submitted", "success");
       onDone();
@@ -526,6 +564,53 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 })}
                 <button className="btn-ghost w-full justify-center" onClick={addStep}><Plus size={13} /> Add step</button>
               </div>
+            </Section>
+          )}
+
+          {/* 4b. sign / date it yourself (optional, PDF only) */}
+          {!isLeave && effectiveFile && file?.ext === "pdf" && (
+            <Section n="4b" title="Sign / date it yourself (optional)" desc="Add your own signature and today's date to the document before it goes for approval.">
+              <label className="flex items-center gap-2 mb-4 text-sm cursor-pointer">
+                <input type="checkbox" checked={selfSignOn}
+                  onChange={e => { setSelfSignOn(e.target.checked); if (!e.target.checked) { setSelfMarks([]); setSelfPlacing(null); } }} />
+                Add my signature / date to this document
+              </label>
+              {selfSignOn && (
+                <>
+                  {!user.hasSignature && (
+                    <div className="card p-3 mb-3 text-xs" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+                      You don't have a registered signature yet — you can still place a date. To sign, add a signature from the top-right menu first.
+                    </div>
+                  )}
+                  <div className="flex gap-2 mb-3">
+                    <button type="button" disabled={!user.hasSignature}
+                      className={`text-xs ${selfPlacing === "signature" ? "btn-gold" : "btn-ghost"}`}
+                      onClick={() => setSelfPlacing(selfPlacing === "signature" ? null : "signature")}>
+                      <Stamp size={12} /> Place my signature
+                    </button>
+                    <button type="button"
+                      className={`text-xs ${selfPlacing === "date" ? "btn-gold" : "btn-ghost"}`}
+                      onClick={() => setSelfPlacing(selfPlacing === "date" ? null : "date")}>
+                      Place a date ({todayDdMmYy})
+                    </button>
+                  </div>
+                  {selfPlacing && (
+                    <div className="mb-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
+                      Click and drag on the document to place your {selfPlacing === "date" ? "date" : "signature"}.
+                      <button type="button" className="underline ml-2" onClick={() => setSelfPlacing(null)}>Cancel</button>
+                    </div>
+                  )}
+                  <Suspense fallback={<ViewerFallback />}>
+                    <DocPreview file={file} markers={selfPreviewMarkers} editable
+                      onAddMarker={onAddSelfMark} onUpdateMarker={onUpdateSelfMark} onDeleteMarker={onDeleteSelfMark} />
+                  </Suspense>
+                  <div className="mt-2 text-xs opacity-60">
+                    {selfMarks.length === 0
+                      ? "Nothing placed yet — pick 'signature' or 'date' above, then drag on the document."
+                      : `${selfMarks.filter(m => m.type !== "date").length} signature + ${selfMarks.filter(m => m.type === "date").length} date box(es) will be stamped into the document when you submit.`}
+                  </div>
+                </>
+              )}
             </Section>
           )}
 
