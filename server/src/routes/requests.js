@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation } from "../pdf.js";
+import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, applySelfMarks } from "../pdf.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,13 @@ function transformMarkerForBake(marker, pageRotations) {
   if (pageRotations[pageIdx] !== 90) return marker;
   const r = rotateMarker90CW({ x: marker.x, y: marker.y, w: marker.w, h: marker.h });
   return { ...marker, ...r };
+}
+
+// Today's date as DD/MM/YY, for the requestor's own date stamps.
+function formatDdMmYy(ts) {
+  const d = new Date(Number(ts));
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`;
 }
 
 // ============================================================
@@ -108,6 +115,29 @@ router.post("/", authRequired, requireRole("requestor"), upload.single("file"), 
     const allowedTypes = ["leave", "document", "expense", "invoice", "general"];
     const rawType = (req.body?.requestType || "general").toString().toLowerCase();
     const requestType = allowedTypes.includes(rawType) ? rawType : "general";
+
+    // ---------- optional: the requestor's OWN signature / date stamps ----------
+    // Applied to the uploaded PDF up-front so the self-signed/dated document flows
+    // through whichever routing path (single / workflow / direct) below.
+    let selfMarks = null;
+    if (req.body?.selfMarks) {
+      try { selfMarks = JSON.parse(req.body.selfMarks); } catch { return res.status(400).json({ error: "selfMarks must be valid JSON" }); }
+    }
+    if (Array.isArray(selfMarks) && selfMarks.length > 0) {
+      if (fileType !== "pdf") return res.status(400).json({ error: "Signing or dating the document yourself is available for PDF files only" });
+      const hasSig = selfMarks.some(m => m.type !== "date");
+      if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature before signing the document yourself" });
+      const dateText = formatDdMmYy(Date.now());
+      const stamps = selfMarks
+        .filter(m => typeof m.x === "number" && typeof m.y === "number" && typeof m.w === "number" && typeof m.h === "number")
+        .map(m => m.type === "date"
+          ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
+          : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
+      if (stamps.length > 0) {
+        try { file.buffer = Buffer.from(await applySelfMarks(file.buffer, stamps)); }
+        catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature/date to the document" }); }
+      }
+    }
 
     // ---------- branch: workflow vs legacy ----------
     let workflow = null;

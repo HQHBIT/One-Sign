@@ -219,3 +219,52 @@ export async function writeXlsxSignatureManifest({ srcPath, signaturePath, marke
   await fs.writeFile(outPath, JSON.stringify(manifest, null, 2));
   return outPath;
 }
+
+// Stamps the REQUESTOR's own signature image(s) and/or date text(s) onto a PDF at
+// creation time, so the document goes out already self-signed / dated before it is
+// routed for approval. Works on raw bytes and returns new bytes (no disk write).
+// Coordinates are percentages of the page (same convention as stampPdfMulti).
+//   marks: [{ type: 'signature'|'date', signaturePath?, text?, page, x, y, w, h }]
+export async function applySelfMarks(pdfBytes, marks) {
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const cache = new Map();
+  async function embed(p) {
+    if (cache.has(p)) return cache.get(p);
+    const bytes = await fs.readFile(p);
+    let img;
+    try { img = await pdf.embedPng(bytes); } catch { img = await pdf.embedJpg(bytes); }
+    cache.set(p, img);
+    return img;
+  }
+
+  for (const m of marks) {
+    const pageIdx = Math.max(0, (m.page || 1) - 1);
+    if (pageIdx >= pdf.getPageCount()) continue;
+    const page = pdf.getPage(pageIdx);
+    const { width: pw, height: ph } = page.getSize();
+    const boxW = (m.w / 100) * pw;
+    const boxH = (m.h / 100) * ph;
+    const boxX = (m.x / 100) * pw;
+    const boxY = ph - ((m.y / 100) * ph) - boxH;
+
+    if (m.type === "date") {
+      const text = String(m.text || "");
+      if (!text) continue;
+      let size = Math.min(boxH * 0.72, 24);
+      const maxW = boxW * 0.96;
+      while (size > 4 && font.widthOfTextAtSize(text, size) > maxW) size -= 0.5;
+      const tw = font.widthOfTextAtSize(text, size);
+      page.drawText(text, {
+        x: boxX + Math.max(0, (boxW - tw) / 2),
+        y: boxY + (boxH - size) / 2 + size * 0.12,
+        size, font, color: rgb(0.1, 0.12, 0.2)
+      });
+    } else if (m.signaturePath) {
+      const img = await embed(m.signaturePath);
+      page.drawImage(img, { x: boxX, y: boxY, width: boxW, height: boxH });
+    }
+  }
+
+  return await pdf.save();
+}
