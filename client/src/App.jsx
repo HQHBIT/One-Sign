@@ -243,6 +243,9 @@ function Shell(props) {
   const [needsSig, setNeedsSig] = useState(false);
   const [editSig, setEditSig] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
+  // Bumped by the Home button — remounts the active role view, which resets its
+  // internal tab state back to "home" (the dashboard) from any sub-view.
+  const [homeKey, setHomeKey] = useState(0);
 
   // require signature for requestor & approver on first login
   useEffect(() => {
@@ -254,11 +257,12 @@ function Shell(props) {
     <>
       <TopBar user={user} logout={logout}
         onEditSignature={() => setEditSig(true)}
-        onChangePassword={() => setChangingPwd(true)} />
+        onChangePassword={() => setChangingPwd(true)}
+        onHome={() => setHomeKey(k => k + 1)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
-        {user.role === "requestor" && <RequestorView {...props} />}
-        {user.role === "approver" && <ApproverView {...props} />}
-        {user.role === "admin" && <AdminView {...props} />}
+        {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
+        {user.role === "approver" && <ApproverView key={homeKey} {...props} />}
+        {user.role === "admin" && <AdminView key={homeKey} {...props} />}
       </main>
       {needsSig && (
         <SignatureModal
