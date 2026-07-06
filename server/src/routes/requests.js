@@ -56,6 +56,34 @@ function formatDdMmYy(ts) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`;
 }
 
+// Validates + bakes a signer's placeable date fields ([{page,x,y,w,h}] in page
+// percentages) through the same orientation transform as the signature box, so
+// they line up after the PDF is baked. Returns a clean array (never null).
+function bakeDateFields(raw, pageRotations) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(d => d && typeof d.x === "number" && typeof d.y === "number" && typeof d.w === "number" && typeof d.h === "number")
+    .map(d => {
+      const b = transformMarkerForBake({ x: d.x, y: d.y, w: d.w, h: d.h, page: d.page || 1 }, pageRotations);
+      return { page: d.page || 1, x: b.x, y: b.y, w: b.w, h: b.h };
+    });
+}
+
+// Reads stored date-field JSON back into an array (never throws).
+function parseDateFields(json) {
+  if (!json) return [];
+  try { const a = JSON.parse(json); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+
+// Builds "date" stamps for a set of date fields, all showing the given signing date.
+function dateStampsFor(fields, signedAtMs) {
+  const text = formatDdMmYy(signedAtMs || Date.now());
+  return parseDateFields(fields).map(d => ({
+    type: "date", text, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h
+  }));
+}
+
 // ============================================================
 //   list (role-scoped)
 // ============================================================
@@ -186,15 +214,22 @@ router.post("/", authRequired, requireRole("requestor"), upload.single("file"), 
     }
     const bakedMarker = transformMarkerForBake(markerObj, pageRotations);
 
+    // Optional: date field(s) for the team approver, filled when they sign.
+    let signerDateFields = [];
+    if (req.body?.signerDateFields) {
+      try { signerDateFields = bakeDateFields(JSON.parse(req.body.signerDateFields), pageRotations); }
+      catch { return res.status(400).json({ error: "signerDateFields must be valid JSON" }); }
+    }
+
     const id = uid();
     const storedName = `${id}.${ext}`;
     await fs.mkdir(DOC_DIR, { recursive: true });
     await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
 
     await execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null]);
 
     for (const a of approvers) {
       sendEmail({
@@ -260,6 +295,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
         pageRotations
       );
       s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+      s.dateFields = bakeDateFields(s.dateFields, pageRotations);
       delete s.rotation;
     }
   }
@@ -289,9 +325,9 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
       for (let j = 0; j < step.signers.length; j++) {
         const s = step.signers[j];
         await conn.execute(
-          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0]
+          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, (s.dateFields && s.dateFields.length) ? JSON.stringify(s.dateFields) : null]
         );
       }
     }
@@ -340,6 +376,7 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   for (const s of signers) {
     const baked = transformMarkerForBake({ x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 }, pageRotations);
     s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+    s.dateFields = bakeDateFields(s.dateFields, pageRotations);
   }
 
   const id = uid();
@@ -364,9 +401,9 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     for (let j = 0; j < signers.length; j++) {
       const s = signers[j];
       await conn.execute(
-        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-        [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0]
+        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, s.dateFields.length ? JSON.stringify(s.dateFields) : null]
       );
     }
     await conn.commit();
@@ -478,7 +515,16 @@ router.post("/:id/approve", authRequired, async (req, res, next) => {
     try {
       if (row.file_type === "pdf") {
         const outName = `${row.id}.signed.pdf`;
-        await stampPdf({ srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName });
+        // signature box + any date fields the requestor placed for the approver,
+        // all showing this approval's date.
+        await stampPdfMulti({
+          srcPath: path.join(DOC_DIR, row.file_path),
+          stamps: [
+            { signaturePath: sigPathFull, page: marker.page || 1, x: marker.x, y: marker.y, w: marker.w, h: marker.h, signerName: marker.signerName, signedAt: marker.signedAt },
+            ...dateStampsFor(row.signer_date_fields_json, marker.signedAt)
+          ],
+          outName
+        });
         signedPath = outName;
       } else {
         const manifest = await writeXlsxSignatureManifest({
@@ -536,13 +582,20 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     ORDER BY st.step_order, sg.signer_order
   `, [row.id]);
 
-  const stamps = allSigned.map(s => ({
-    signaturePath: path.join(SIG_DIR, s.signature_path),
-    page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-    w: Number(s.marker_w), h: Number(s.marker_h),
-    signerName: s.user_name,
-    signedAt: s.signed_at ? Number(s.signed_at) : Date.now()
-  }));
+  const stamps = allSigned.flatMap(s => {
+    const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
+    return [
+      {
+        signaturePath: path.join(SIG_DIR, s.signature_path),
+        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
+        w: Number(s.marker_w), h: Number(s.marker_h),
+        signerName: s.user_name,
+        signedAt
+      },
+      // the signer's own placeable date fields, all showing their signing date
+      ...dateStampsFor(s.date_fields_json, signedAt)
+    ];
+  });
 
   let signedPath;
   try {
@@ -697,13 +750,20 @@ async function approveWorkflowStepInline({ req, row, signer }) {
     ORDER BY st.step_order, sg.signer_order
   `, [row.id]);
 
-  const stamps = allSigned.map(s => ({
-    signaturePath: path.join(SIG_DIR, s.signature_path),
-    page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-    w: Number(s.marker_w), h: Number(s.marker_h),
-    signerName: s.user_name,
-    signedAt: s.signed_at ? Number(s.signed_at) : Date.now()
-  }));
+  const stamps = allSigned.flatMap(s => {
+    const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
+    return [
+      {
+        signaturePath: path.join(SIG_DIR, s.signature_path),
+        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
+        w: Number(s.marker_w), h: Number(s.marker_h),
+        signerName: s.user_name,
+        signedAt
+      },
+      // the signer's own placeable date fields, all showing their signing date
+      ...dateStampsFor(s.date_fields_json, signedAt)
+    ];
+  });
 
   let signedPath;
   try {
