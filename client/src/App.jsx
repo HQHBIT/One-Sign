@@ -602,7 +602,7 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
         <div className="card mt-4 overflow-hidden">
           {items.map((r, i) => (
             <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <RequestRow r={r} teams={teams} users={users} i={0}
                   actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review &amp; sign <ArrowRight size={12} /></button>} />
               </div>
@@ -723,7 +723,7 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
                   </label>
                 )}
                 {!myTurn && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <RequestRow r={r} teams={teams} users={users} i={0}
                     actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review <ArrowRight size={12} /></button>} />
                 </div>
