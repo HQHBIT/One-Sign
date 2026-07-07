@@ -99,24 +99,32 @@ export function HelpGuide({ onClose }) {
         </div>
 
         {/* steps */}
-        <div className="space-y-10">
-          {STEPS.map(s => {
+        <div className="space-y-12 sm:space-y-16">
+          {STEPS.map((s, idx) => {
             const Icon = s.icon;
             return (
-              <section key={s.n} id={`step-${s.n}`} className="scroll-mt-24">
+              <section key={s.n} id={`step-${s.n}`} className="scroll-mt-24"
+                style={idx > 0 ? { borderTop: "1px solid var(--c-ink-08)", paddingTop: "2.5rem" } : undefined}>
                 <div className="flex items-start gap-3 mb-3">
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(184,137,74,.14)", color: "#B8894A" }}>
                     <Icon size={18} />
                   </div>
                   <div>
-                    <div className="text-[10px] tracking-widest uppercase opacity-50">Step {s.n}</div>
+                    <div className="text-[10px] tracking-widest uppercase opacity-50">Step {s.n} of {STEPS.length}</div>
                     <h2 className="font-display text-lg sm:text-xl leading-tight">{s.title}</h2>
                   </div>
                 </div>
-                <p className="text-sm opacity-80 leading-relaxed mb-4">{s.body}</p>
-                <figure className="card overflow-hidden">
+                <p className="text-sm opacity-80 leading-relaxed mb-5 max-w-3xl">{s.body}</p>
+                {/* screenshot in a subtle app-window frame */}
+                <figure className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--c-ink-10)", boxShadow: "0 12px 30px rgba(15,26,46,.10)" }}>
+                  <div className="flex items-center gap-1.5 px-3.5 py-2 border-b" style={{ backgroundColor: "rgba(15,26,46,.035)", borderColor: "var(--c-ink-08)" }}>
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#E0715F" }} />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#E5B95A" }} />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#5FA463" }} />
+                    <span className="ml-2 text-[10px] font-mono opacity-40 truncate">signflow.devhqhb.online</span>
+                  </div>
                   <img src={s.img} alt={`${s.title} — screenshot`} loading="lazy"
-                    className="w-full block" style={{ backgroundColor: "#0F1A2E" }} />
+                    className="w-full block" style={{ backgroundColor: "#F5F1E8", aspectRatio: "1280 / 840" }} />
                 </figure>
               </section>
             );
