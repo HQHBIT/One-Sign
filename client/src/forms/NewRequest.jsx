@@ -447,7 +447,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 </div>
               )}
               <div className="mt-3 text-xs opacity-60">
-                The signature will fill this exact rectangle. A "Digitally signed by … · date" line is added below it automatically.
+                The signature will fill this exact rectangle when the signer approves.
               </div>
               {signerDateBar}
               {selfBar}
