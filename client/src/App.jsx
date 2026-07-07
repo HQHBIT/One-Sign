@@ -37,6 +37,7 @@ import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
+import { HelpGuide } from "./components/HelpGuide.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
 import { SignatureModal } from "./components/SignatureModal.jsx";
 import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
@@ -243,6 +244,7 @@ function Shell(props) {
   const [needsSig, setNeedsSig] = useState(false);
   const [editSig, setEditSig] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   // Bumped by the Home button — remounts the active role view, which resets its
   // internal tab state back to "home" (the dashboard) from any sub-view.
   const [homeKey, setHomeKey] = useState(0);
@@ -258,7 +260,8 @@ function Shell(props) {
       <TopBar user={user} logout={logout}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
-        onHome={() => setHomeKey(k => k + 1)} />
+        onHome={() => setHomeKey(k => k + 1)}
+        onHelp={() => setHelpOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
         {user.role === "approver" && <ApproverView key={homeKey} {...props} />}
@@ -289,6 +292,7 @@ function Shell(props) {
           onClose={() => setChangingPwd(false)}
           notify={notify} />
       )}
+      {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
     </>
   );
 }
