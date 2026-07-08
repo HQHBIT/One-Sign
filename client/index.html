@@ -6,7 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0F1A2E" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HQHB SignFlow" />
+    <meta name="application-name" content="HQHB SignFlow" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <script>
+      // Capture the install prompt as early as possible: the browser fires
+      // beforeinstallprompt once, often before React has mounted. Stash it so the
+      // in-app "Install app" button can trigger it on demand.
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__bipEvent = e;
+        window.dispatchEvent(new Event('bip-available'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__bipEvent = null;
+        window.dispatchEvent(new Event('bip-installed'));
+      });
+    </script>
     <title>HQHB · SignFlow · UAT</title>
   </head>
   <body>

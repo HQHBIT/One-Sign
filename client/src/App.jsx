@@ -38,6 +38,7 @@ import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
 import { HelpGuide } from "./components/HelpGuide.jsx";
+import { useInstall, InstallBanner, IosInstallSheet } from "./components/InstallPrompt.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
 import { SignatureModal } from "./components/SignatureModal.jsx";
 import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
@@ -245,6 +246,11 @@ function Shell(props) {
   const [editSig, setEditSig] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
+  // so tapping install opens a short instructions sheet instead.
+  const install = useInstall();
+  const [iosSheet, setIosSheet] = useState(false);
+  const handleInstall = () => { if (install.canPrompt) install.promptInstall(); else if (install.ios) setIosSheet(true); };
   // Bumped by the Home button — remounts the active role view, which resets its
   // internal tab state back to "home" (the dashboard) from any sub-view.
   const [homeKey, setHomeKey] = useState(0);
@@ -261,8 +267,10 @@ function Shell(props) {
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
         onHome={() => setHomeKey(k => k + 1)}
+        onInstall={install.supported ? handleInstall : null}
         onHelp={() => setHelpOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
+        <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
         {user.role === "approver" && <ApproverView key={homeKey} {...props} />}
         {user.role === "admin" && <AdminView key={homeKey} {...props} />}
@@ -293,6 +301,7 @@ function Shell(props) {
           notify={notify} />
       )}
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
+      {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>
   );
 }
