@@ -3,3 +3,14 @@
 html, body, #root { margin: 0; padding: 0; min-height: 100vh; }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 button { cursor: pointer; font-family: inherit; }
+
+/* ── No sideways scroll, ever ─────────────────────────────────
+   overflow-x:hidden on body is unreliable on iOS/standalone (the page can
+   still be panned sideways). Clip horizontal overflow at the React root as
+   well: a too-wide element — e.g. a very long filename or email in real data —
+   can no longer create a phantom horizontal scroller. `clip` (not `hidden`)
+   is deliberate: it does NOT turn the vertical axis into a scroll container,
+   so the sticky top bar and normal page scrolling keep working, and
+   position:fixed modals still escape it. */
+html, body { overflow-x: hidden; }
+#root { overflow-x: clip; max-width: 100%; }
