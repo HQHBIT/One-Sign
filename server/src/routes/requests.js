@@ -103,18 +103,20 @@ router.get("/", authRequired, async (req, res, next) => {
         ORDER BY r.created_at DESC
       `, [u.id, u.id]);
     } else {
-      // Approver: any request where they are an assigned signer (workflow), OR legacy claim path
+      // Approver: requests they RAISED themselves, requests where they are an
+      // assigned signer (workflow), the legacy claim path, or a team they sign for.
       rows = await query(`
         SELECT DISTINCT r.* FROM requests r
         LEFT JOIN request_steps st ON st.request_id = r.id
         LEFT JOIN request_step_signers sg ON sg.step_id = st.id
-        WHERE r.approver_id = ?
+        WHERE r.requestor_id = ?
+           OR r.approver_id = ?
            OR sg.user_id = ?
            OR (r.status = 'pending'
                AND r.target_team_id IS NOT NULL
                AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id))
         ORDER BY r.created_at DESC
-      `, [u.id, u.id, u.id]);
+      `, [u.id, u.id, u.id, u.id]);
     }
     const requests = await Promise.all(rows.map(hydrateRequest));
     res.json({ requests });
@@ -124,7 +126,7 @@ router.get("/", authRequired, async (req, res, next) => {
 // ============================================================
 //   create — supports legacy single-team OR multi-step workflow
 // ============================================================
-router.post("/", authRequired, requireRole("requestor"), upload.single("file"), async (req, res, next) => {
+router.post("/", authRequired, requireRole("requestor", "approver"), upload.single("file"), async (req, res, next) => {
   try {
     const isDirect = req.body?.direct === "true" || req.body?.direct === true;
     // A direct request only routes a document to someone else to sign — the
@@ -882,7 +884,7 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
 // ============================================================
 //   reminder
 // ============================================================
-router.post("/:id/reminder", authRequired, requireRole("requestor"), async (req, res, next) => {
+router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });

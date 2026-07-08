@@ -399,11 +399,11 @@ function RecentActivity({ my, teams }) {
 // ============================================================
 //   PENDING · APPROVED · REJECTED LISTS (Requestor)
 // ============================================================
-function PendingList({ items, teams, users, sendReminder, back, notify }) {
+function PendingList({ items, teams, users, sendReminder, back, notify, title = "Pending requests" }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
-      <BackHeader back={back} title="Pending requests" step={`${items.length} total`} />
+      <BackHeader back={back} title={title} step={`${items.length} total`} />
       {items.length === 0 ? <Empty icon={Inbox} text="Nothing pending. You're all caught up." /> : (
         <div className="card mt-8 overflow-hidden">
           {items.map((r, i) => (
@@ -571,20 +571,29 @@ function PreviewDrawer({ req, onClose, users, teams }) {
 function ApproverView(props) {
   const { user, requests, teams } = props;
   const [tab, setTab] = useState("home");
-  useBackHandler(tab !== "home", () => setTab("home"));
+  const [newType, setNewType] = useState(null);
+  const openNew = (type = null) => { setNewType(type); setTab("new"); };
+  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSignedInWorkflow = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id && s.status === "signed"));
+  // Requests routed to me to SIGN — never my own (I don't approve what I raised).
   const mine = requests.filter(r => {
+    if (r.requestorId === user.id) return false;
     if (r.approverId === user.id) return true;
     if (isWorkflowSigner(r)) return true;
     if (r.status === "pending" && r.targetTeamId && (user.signingAuthorityTeams || []).includes(r.targetTeamId)) return true;
     return false;
   });
+  // Requests I raised myself, to track.
+  const myRequests = requests.filter(r => r.requestorId === user.id);
+  const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length;
   const pending = mine.filter(r => r.status === "pending");
   const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSignedInWorkflow(r)));
   const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSignedInWorkflow(r)));
   const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSignedInWorkflow(r)));
 
+  if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
   if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
@@ -594,11 +603,31 @@ function ApproverView(props) {
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
+    { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },
     { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length }
   ];
   return (
     <div>
-      <Hero title={`Good day, ${user.name.split(" ")[0]}`} subtitle="Documents are routed to you based on the teams you sign for." />
+      <Hero title={`Good day, ${user.name.split(" ")[0]}`} subtitle="Review documents routed to you — or raise a request of your own." />
+
+      {/* Quick Actions — raise your own request for signature */}
+      <div className="mt-10">
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="font-display text-2xl">Quick Actions</h3>
+          <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {REQUEST_TYPES.map(t => (
+            <button key={t.key} onClick={() => openNew(t.key)}
+              className="card p-4 text-left tile-hover"
+              style={{ borderLeft: `4px solid ${t.color}` }}>
+              <div className="text-sm font-medium">{t.label}</div>
+              <div className="text-xs opacity-60 mt-1">{t.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
