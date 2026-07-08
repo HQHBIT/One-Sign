@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download } from "lucide-react";
 
-export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome, onHelp }) {
+export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome, onHelp, onInstall }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
@@ -104,6 +104,12 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
                     onClick={() => { setMenuOpen(false); onHelp(); }}>
                     <HelpCircle size={15} className="opacity-70 shrink-0" /> Help
+                  </button>
+                )}
+                {onInstall && (
+                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                    onClick={() => { setMenuOpen(false); onInstall(); }}>
+                    <Download size={15} className="opacity-70 shrink-0" /> Install app
                   </button>
                 )}
                 <div className="border-t" style={{ borderColor: "var(--c-ink-10)" }} />
