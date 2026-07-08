@@ -66,6 +66,14 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
   const [renderedCount, setRenderedCount] = useState(0);
   // Bumped to force a retry from the error UI
   const [retryTick, setRetryTick] = useState(0);
+  // Touch placement mode. OFF by default so a one-finger drag SCROLLS the
+  // document on mobile. When armed, the next tap on a page drops a signature
+  // box (and it disarms). On touch you can also press-and-hold a page to drop
+  // a box without arming; on a mouse, plain click-drag works as before.
+  const [armed, setArmed] = useState(false);
+  // Detect a touch-primary device so the footer hint names the right gesture.
+  const isTouch = typeof window !== "undefined" &&
+    (("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,13 +137,36 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             rotation={0}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
+            armed={armed}
+            onPlaced={() => setArmed(false)}
             lockedAspect={lockedAspect}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
         ))}
       </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click-drag where the signature should go.</div>}
+      {editable && (
+        <div className="px-4 py-3 border-t flex items-center gap-3 flex-wrap" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+          {armed ? (
+            <>
+              <span className="inline-flex items-center gap-2 text-xs font-medium" style={{ color: "#B8894A" }}>
+                <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: "#B8894A" }} />
+                Tap the page where the signature should go
+              </span>
+              <button type="button" className="btn-ghost text-xs" onClick={() => setArmed(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn-primary text-xs" onClick={() => setArmed(true)}>+ Add signature box</button>
+              <span className="text-xs opacity-55">
+                {isTouch
+                  ? "Tap “Add signature box”, then tap the page — or just press and hold the page. Scroll freely with one finger."
+                  : "Click “Add signature box” then click the page, or click-drag on the page to size it."}
+              </span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -212,11 +243,18 @@ function LazyPdfPage({ pageAspect, onRendered, ...pageProps }) {
   );
 }
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, onRendered }) {
+// How long a stationary touch must be held to count as a "place here" long-press.
+const LONGPRESS_MS = 420;
+// If the finger travels more than this (px) the gesture is a scroll, not a press.
+const MOVE_CANCEL_PX = 12;
+
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, onRendered, armed = false, onPlaced }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // Pending long-press: { timer, cx, cy } while a stationary touch is held.
+  const longPressRef = useRef(null);
 
   // Constrain a viewport %-rectangle to satisfy lockedAspect (signature width/height
   // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger
@@ -282,30 +320,21 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     };
   };
 
-  const onDown = (e) => {
-    if (!editable || !onAddMarker) return;
-    const { x, y } = xy(e);
-    setDrawing({ sx: x, sy: y, x, y });
-  };
-  const onMove = (e) => {
-    if (!drawing) return;
-    const { x, y } = xy(e);
-    setDrawing({ ...drawing, x, y });
-  };
-  const onUp = () => {
-    if (!drawing) return;
-    const dragW = Math.abs(drawing.x - drawing.sx);
-    const dragH = Math.abs(drawing.y - drawing.sy);
+  // Commit a signature box from a start point + current point (viewport %).
+  // A negligible drag drops a compact standard-sized box centred on the start;
+  // a real drag uses the dragged rectangle. Shared by mouse-drag, armed tap,
+  // and touch long-press so all three behave identically.
+  const commitBox = (sx, sy, cx, cy) => {
+    const dragW = Math.abs(cx - sx);
+    const dragH = Math.abs(cy - sy);
     let vx, vy, vw, vh;
-    // If the user just clicked without a meaningful drag, drop a compact standard-sized
-    // box on the click — sized so it rarely needs resizing (drag for a custom size).
     if (dragW < 4 && dragH < 2) {
       vw = 15; vh = 5;
-      vx = drawing.sx - vw / 2;
-      vy = drawing.sy - vh / 2;
+      vx = sx - vw / 2;
+      vy = sy - vh / 2;
     } else {
-      vx = Math.min(drawing.sx, drawing.x);
-      vy = Math.min(drawing.sy, drawing.y);
+      vx = Math.min(sx, cx);
+      vy = Math.min(sy, cy);
       vw = dragW; vh = dragH;
     }
     // Clamp inside the viewport
@@ -316,12 +345,54 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     // Snap to the signer's signature aspect when one is known
     const locked = lockRect(vx, vy, vw, vh);
     if (locked) { vx = locked.vx; vy = locked.vy; vw = locked.vw; vh = locked.vh; }
-    // Convert viewport-space coords (what the user clicked at the current rotation) to
-    // MediaBox-space coords for storage and stamping.
+    // Convert viewport-space coords to MediaBox-space for storage and stamping.
     const m = viewportToMediabox(rotation, vx, vy, vw, vh);
     onAddMarker(m.x, m.y, m.w, m.h);
+    onPlaced?.();
+  };
+
+  const clearLongPress = () => {
+    if (longPressRef.current?.timer) clearTimeout(longPressRef.current.timer);
+    longPressRef.current = null;
+  };
+
+  const onDown = (e) => {
+    if (!editable || !onAddMarker) return;
+    const { x, y } = xy(e);
+    // Mouse / stylus, or an explicitly armed touch → start drawing immediately.
+    if (e.pointerType !== "touch" || armed) {
+      setDrawing({ sx: x, sy: y, x, y });
+      return;
+    }
+    // Bare touch: don't draw yet. A one-finger drag scrolls the page (touch-action
+    // allows it). Only a stationary press-and-hold drops a box, so accidental taps
+    // and scroll gestures never create markers.
+    clearLongPress();
+    const timer = setTimeout(() => {
+      longPressRef.current = null;
+      if (navigator.vibrate) { try { navigator.vibrate(15); } catch { /* ignore */ } }
+      commitBox(x, y, x, y);
+    }, LONGPRESS_MS);
+    longPressRef.current = { timer, cx: e.clientX, cy: e.clientY };
+  };
+  const onMove = (e) => {
+    // A moving finger means the user is scrolling — abort the pending long-press.
+    if (longPressRef.current) {
+      const dx = Math.abs(e.clientX - longPressRef.current.cx);
+      const dy = Math.abs(e.clientY - longPressRef.current.cy);
+      if (dx > MOVE_CANCEL_PX || dy > MOVE_CANCEL_PX) clearLongPress();
+    }
+    if (!drawing) return;
+    const { x, y } = xy(e);
+    setDrawing({ ...drawing, x, y });
+  };
+  const onUp = () => {
+    clearLongPress();
+    if (!drawing) return;
+    commitBox(drawing.sx, drawing.sy, drawing.x, drawing.y);
     setDrawing(null);
   };
+  const onCancel = () => { clearLongPress(); setDrawing(null); };
 
   // Live drag preview, locked to aspect if applicable
   const previewRect = (() => {
@@ -337,8 +408,8 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
 
   return (
     <div ref={wrapRef} data-page-num={pageNum} style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 12 }}>
-      <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)", touchAction: editable ? "none" : undefined }}
-           onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={() => setDrawing(null)}>
+      <div data-marker-parent style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,.12)", touchAction: editable ? (armed ? "none" : "manipulation") : undefined }}
+           onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onCancel} onPointerCancel={onCancel}>
         <canvas ref={canvasRef} style={{ display: "block", cursor: editable ? "crosshair" : "default" }} />
         {markers.map((m, i) => {
           // Convert MediaBox coords (storage) → viewport coords for display at current rotation
@@ -513,7 +584,11 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
   const [grid, setGrid] = useState([]);
   const [drawing, setDrawing] = useState(null);
   const [editTick, setEditTick] = useState(0);
+  const [armed, setArmed] = useState(false);
   const pageRef = useRef(null);
+  const longPressRef = useRef(null);
+  const isTouch = typeof window !== "undefined" &&
+    (("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -599,39 +674,65 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
     setEditTick(t => t + 1);
   };
 
-  const onDown = (e) => {
-    if (!editable || !onAddMarker) return;
+  const xyFrom = (e) => {
     const r = pageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 100;
-    const y = ((e.clientY - r.top) / r.height) * 100;
-    setDrawing({ sx: x, sy: y, x, y });
+    return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 };
   };
-  const onMove = (e) => {
-    if (!drawing) return;
-    const r = pageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 100;
-    const y = ((e.clientY - r.top) / r.height) * 100;
-    setDrawing({ ...drawing, x, y });
-  };
-  const onUp = () => {
-    if (!drawing) return;
-    const dragW = Math.abs(drawing.x - drawing.sx);
-    const dragH = Math.abs(drawing.y - drawing.sy);
+  // Commit a signature box from a start + current point (sheet %). Shared by
+  // mouse-drag, armed tap, and touch long-press.
+  const commitBox = (sx, sy, cx, cy) => {
+    const dragW = Math.abs(cx - sx);
+    const dragH = Math.abs(cy - sy);
     let x, y, w, h;
     if (dragW < 4 && dragH < 2) {
       w = 22; h = 6;
-      x = drawing.sx - w / 2;
-      y = drawing.sy - h / 2;
+      x = sx - w / 2;
+      y = sy - h / 2;
     } else {
-      x = Math.min(drawing.sx, drawing.x);
-      y = Math.min(drawing.sy, drawing.y);
+      x = Math.min(sx, cx);
+      y = Math.min(sy, cy);
       w = dragW; h = dragH;
     }
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     onAddMarker(1, x, y, w, h);
+    setArmed(false);
+  };
+  const clearLongPress = () => {
+    if (longPressRef.current?.timer) clearTimeout(longPressRef.current.timer);
+    longPressRef.current = null;
+  };
+  const onDown = (e) => {
+    if (!editable || !onAddMarker) return;
+    const { x, y } = xyFrom(e);
+    // Mouse / stylus, or an explicitly armed touch → draw immediately.
+    if (e.pointerType !== "touch" || armed) { setDrawing({ sx: x, sy: y, x, y }); return; }
+    // Bare touch: one-finger drag scrolls; only a press-and-hold drops a box.
+    clearLongPress();
+    const timer = setTimeout(() => {
+      longPressRef.current = null;
+      if (navigator.vibrate) { try { navigator.vibrate(15); } catch { /* ignore */ } }
+      commitBox(x, y, x, y);
+    }, LONGPRESS_MS);
+    longPressRef.current = { timer, cx: e.clientX, cy: e.clientY };
+  };
+  const onMove = (e) => {
+    if (longPressRef.current) {
+      const dx = Math.abs(e.clientX - longPressRef.current.cx);
+      const dy = Math.abs(e.clientY - longPressRef.current.cy);
+      if (dx > MOVE_CANCEL_PX || dy > MOVE_CANCEL_PX) clearLongPress();
+    }
+    if (!drawing) return;
+    const { x, y } = xyFrom(e);
+    setDrawing({ ...drawing, x, y });
+  };
+  const onUp = () => {
+    clearLongPress();
+    if (!drawing) return;
+    commitBox(drawing.sx, drawing.sy, drawing.x, drawing.y);
     setDrawing(null);
   };
+  const onCancel = () => { clearLongPress(); setDrawing(null); };
 
   const visibleSheets = cellEditable ? sheetNames.filter(s => s !== "Sheet1") : sheetNames;
   const sm = styleMap?.styles || {};
@@ -654,8 +755,8 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
       )}
       <div ref={pageRef}
            onPointerDown={editable ? onDown : undefined} onPointerMove={editable ? onMove : undefined}
-           onPointerUp={editable ? onUp : undefined} onPointerLeave={editable ? () => setDrawing(null) : undefined}
-           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff", touchAction: editable ? "none" : undefined }}>
+           onPointerUp={editable ? onUp : undefined} onPointerLeave={editable ? onCancel : undefined} onPointerCancel={editable ? onCancel : undefined}
+           style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff", touchAction: editable ? (armed ? "none" : "manipulation") : undefined }}>
         <style>{`
           .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
           .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
@@ -718,7 +819,28 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
           }} />
         )}
       </div>
-      {editable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click and drag on the active sheet to place a signature.</div>}
+      {editable && (
+        <div className="px-4 py-3 border-t flex items-center gap-3 flex-wrap" style={{ borderColor: "rgba(15,26,46,.08)" }}>
+          {armed ? (
+            <>
+              <span className="inline-flex items-center gap-2 text-xs font-medium" style={{ color: "#B8894A" }}>
+                <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: "#B8894A" }} />
+                Tap the sheet where the signature should go
+              </span>
+              <button type="button" className="btn-ghost text-xs" onClick={() => setArmed(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn-primary text-xs" onClick={() => setArmed(true)}>+ Add signature box</button>
+              <span className="text-xs opacity-55">
+                {isTouch
+                  ? "Tap “Add signature box”, then tap the sheet — or press and hold the sheet. Scroll freely with one finger."
+                  : "Click “Add signature box” then click the sheet, or click-drag to size it."}
+              </span>
+            </>
+          )}
+        </div>
+      )}
       {cellEditable && <div className="text-xs opacity-60 px-4 py-2 border-t" style={{ borderColor: "rgba(15,26,46,.08)" }}>Click any cell to edit its value.</div>}
     </div>
   );

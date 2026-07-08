@@ -273,7 +273,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       </div>
       {selfPlacing && (
         <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(62,142,90,.18)", color: "var(--c-sand)" }}>
-          Now click and drag on the document above to place your {selfPlacing === "date" ? `date (${todayDdMmYy})` : "signature"}. You can place as many as you like.
+          Now press and hold — or click-drag — on the document above to place your {selfPlacing === "date" ? `date (${todayDdMmYy})` : "signature"}. You can place as many as you like.
           <button type="button" className="underline ml-2" onClick={() => setSelfPlacing(null)}>Cancel</button>
         </div>
       )}
@@ -302,7 +302,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       )}
       {signerDatePlacing && (
         <div className="w-full mt-1 text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(199,125,46,.18)", color: "var(--c-sand)" }}>
-          Click and drag to drop a date box — it stays blank until they sign, then shows their signing date. Place as many as you like.
+          Press and hold — or click-drag — on the document to drop a date box. It stays blank until they sign, then shows their signing date. Place as many as you like.
           <button type="button" className="underline ml-2" onClick={() => setSignerDatePlacing(false)}>Cancel</button>
         </div>
       )}
@@ -435,7 +435,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
           {/* 3a. single mode: pick team + place marker */}
           {effectiveFile && mode ==="single" && (
-            <Section n="03" title="Mark the signature field" desc="Click the document to drop a standard-sized signature box, or drag to size your own.">
+            <Section n="03" title="Mark the signature field" desc="Place the box where the signer should sign — press and hold on a phone, or click-drag on a computer.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable
                   onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
@@ -522,7 +522,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                       </Suspense>
                       {marker
                         ? <div className="mt-3 text-xs font-mono opacity-60">Signature box placed on page {marker.page}.<button className="ml-2 underline" onClick={() => setMarker(null)}>Reset</button></div>
-                        : <div className="mt-3 text-xs opacity-60">Click to drop a standard-sized box for {directSigner.name}'s signature, or drag to size your own.</div>}
+                        : <div className="mt-3 text-xs opacity-60">Press and hold on a phone, or click-drag on a computer, to drop a signature box for {directSigner.name}.</div>}
                       {signerDateBar}
                       {selfBar}
                     </>
@@ -542,8 +542,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                   {placingSlot.kind === "date"
-                    ? <span>Click and drag to drop a date box for this signer — it stays blank until they sign, then shows their signing date. Place as many as you like.</span>
-                    : <>Click to drop a standard-sized box, or drag to size your own.{" "}
+                    ? <span>Press and hold — or click-drag — to drop a date box for this signer. It stays blank until they sign, then shows their signing date. Place as many as you like.</span>
+                    : <>Press and hold — or click-drag — to drop a standard-sized box.{" "}
                       {lockedAspect
                         ? <span>Aspect is locked to the signer's signature so what you draw is what gets stamped.</span>
                         : <span>(Once this signer uploads a signature, the box will lock to its aspect.)</span>}</>}
