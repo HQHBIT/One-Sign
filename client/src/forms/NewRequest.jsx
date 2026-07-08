@@ -355,7 +355,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     <div>
       <BackHeader back={onDone} title="Make a new request" />
       <div className="grid lg:grid-cols-3 gap-4 sm:gap-6 mt-6 sm:mt-8">
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-6 min-w-0">
 
           {/* 0. type */}
           <Section n="00" title="Request type" desc="Classifying the request lets approvers batch-process documents of the same kind.">
