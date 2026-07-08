@@ -759,14 +759,17 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
            style={{ position: "relative", minHeight: 400, ...(fill ? {} : { maxHeight: 720, overflow: "auto" }), cursor: editable ? "crosshair" : "default", backgroundColor: "#fff", touchAction: editable ? (armed ? "none" : "manipulation") : undefined }}>
         <style>{`
           .xlsx-grid { border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 10pt; table-layout: fixed; width: 100%; }
-          .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15);"} }
+          .xlsx-grid td { padding: 3px 6px; white-space: pre-wrap; overflow: hidden; word-break: break-word; ${hasStyles ? "" : "border: 1px solid rgba(15,26,46,.15); max-width: 260px;"} }
           .xlsx-grid td.cell-editable { cursor: text; }
           .xlsx-grid td.cell-editable:hover { background: rgba(184,137,74,.08); }
           .xlsx-grid td.cell-editable:focus { outline: 2px solid #B8894A; outline-offset: -2px; background: #FFFDF5; }
           .xlsx-grid td.cell-locked { cursor: default; background: rgba(15,26,46,.03); color: rgba(15,26,46,.55); font-style: italic; }
         `}</style>
-        <div style={{ padding: "12px 16px" }}>
-          <table className="xlsx-grid">
+        <div style={{ padding: "12px 16px", width: hasStyles ? undefined : "max-content", minWidth: "100%" }}>
+          {/* Uploaded (unstyled) sheets take their natural width so wide sheets stay
+              readable and scroll horizontally inside this viewer, instead of being
+              crushed to fit. Styled templates keep their fixed 100% layout. */}
+          <table className="xlsx-grid" style={hasStyles ? undefined : { tableLayout: "auto", width: "auto", minWidth: "100%" }}>
             {Object.keys(cw).length > 0 && (
               <colgroup>
                 {Array.from({ length: 9 }, (_, i) => {
