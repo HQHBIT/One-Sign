@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
+import { redactEmailBody } from "./redact.js";
 
 const {
   DB_HOST = "localhost",
@@ -297,6 +298,17 @@ async function runSchema() {
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
+
+  // One-time, idempotent: redact plaintext passwords already sitting in the Email
+  // log from before we started masking welcome / reset email bodies. Safe to run
+  // on every boot — redactEmailBody is a no-op once a body is already masked.
+  try {
+    const [oldEmails] = await pool.query("SELECT id, body FROM emails WHERE body LIKE '%assword:%'");
+    for (const e of oldEmails) {
+      const masked = redactEmailBody(e.body);
+      if (masked !== e.body) await pool.query("UPDATE emails SET body = ? WHERE id = ?", [masked, e.id]);
+    }
+  } catch { /* emails table not present yet on a brand-new schema — ignore */ }
 }
 
 async function seedIfEmpty() {

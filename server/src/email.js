@@ -1,5 +1,6 @@
 import sgMail from "@sendgrid/mail";
 import { execute } from "./db.js";
+import { redactEmailBody } from "./redact.js";
 
 const apiKey = process.env.SENDGRID_API_KEY;
 const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@hqhb.in";
@@ -73,12 +74,15 @@ export async function sendEmail({ to, template, ctx }) {
   const t = templates[template];
   if (!t) throw new Error(`Unknown template: ${template}`);
   const { subject, body } = t(ctx);
+  // `body` is the real email (with the password) — that's what we SEND.
+  // `logBody` is the redacted copy — that's the only thing we STORE in the log.
+  const logBody = redactEmailBody(body);
   const sentAt = Date.now();
 
   if (!apiKey) {
     await execute(
       "INSERT INTO emails (to_email, subject, body, template, sent_at, delivered, error) VALUES (?, ?, ?, ?, ?, 0, NULL)",
-      [to, subject, body, template, sentAt]
+      [to, subject, logBody, template, sentAt]
     );
     return { delivered: false, logged: true };
   }
@@ -87,7 +91,7 @@ export async function sendEmail({ to, template, ctx }) {
     await sgMail.send({ to, from: { email: fromEmail, name: fromName }, subject, text: body });
     await execute(
       "INSERT INTO emails (to_email, subject, body, template, sent_at, delivered, error) VALUES (?, ?, ?, ?, ?, 1, NULL)",
-      [to, subject, body, template, sentAt]
+      [to, subject, logBody, template, sentAt]
     );
     return { delivered: true };
   } catch (err) {
@@ -95,7 +99,7 @@ export async function sendEmail({ to, template, ctx }) {
     console.error("[email] Send failed:", msg);
     await execute(
       "INSERT INTO emails (to_email, subject, body, template, sent_at, delivered, error) VALUES (?, ?, ?, ?, ?, 0, ?)",
-      [to, subject, body, template, sentAt, msg]
+      [to, subject, logBody, template, sentAt, msg]
     );
     return { delivered: false, error: msg };
   }
