@@ -121,11 +121,10 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
             )}
           </div>
 
-          {/* Direct Sign out — one tap, no need to open the profile menu */}
-          <button onClick={logout} className="btn-ghost text-sm px-2 sm:px-3" title="Sign out"
+          {/* Direct Sign out — icon only, one tap (no menu needed) */}
+          <button onClick={logout} className="btn-ghost text-sm px-2" title="Sign out" aria-label="Sign out"
             style={{ color: "var(--c-rust-deep, #7A1F1F)" }}>
             <LogOut size={16} />
-            <span className="hidden sm:inline">Sign out</span>
           </button>
         </div>
       </div>
