@@ -325,7 +325,7 @@ export function LoginScreen({ login }) {
             <div className="anim-in">
               <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
               <div className="text-sm opacity-70 mb-6 leading-relaxed">
-                If <span className="font-mono">{forgotEmail}</span> is a registered account, your reset request has been sent to IT.
+                Your reset request for <span className="font-mono">{forgotEmail}</span> has been sent to IT.
                 Once they approve it, sign in with your new password.
               </div>
               <div className="card p-3 mb-6 flex items-start gap-3 text-xs" style={{ backgroundColor: "rgba(45,95,47,.06)", borderColor: "rgba(45,95,47,.2)" }}>

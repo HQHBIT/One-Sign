@@ -33,6 +33,15 @@ await conn.execute(
 const rr = await j(await fetch(`${BASE}/api/auth/request-reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: EMAIL, newPassword: NEW_PW }) }));
 check("request-reset -> 200 ok", rr.status === 200 && rr.body.ok === true);
 
+// 1b) request reset for an email with NO matching account -> clear error, no row.
+// (Previously this returned a silent { ok: true } which hid every mismatched
+// request from the admin — the user saw "submitted" but nothing was created.)
+const UNKNOWN = "nobody.here." + TS + "@hqhb.in";
+const rrU = await j(await fetch(`${BASE}/api/auth/request-reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: UNKNOWN, newPassword: NEW_PW }) }));
+check("request-reset for unknown email -> 404 with clear error (not silent ok)", rrU.status === 404 && /no account/i.test(rrU.body.error || ""));
+const [unknownRows] = await conn.execute("SELECT id FROM password_resets WHERE email = ?", [UNKNOWN]);
+check("no reset row created for an unknown email", unknownRows.length === 0);
+
 // 2) admin sees it pending, with the chosen password visible
 const list = await j(await fetch(`${BASE}/api/password-resets`, { headers: auth }));
 const mine = (list.body.resets || []).find(r => r.email === EMAIL);
