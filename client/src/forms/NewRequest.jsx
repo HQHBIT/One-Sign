@@ -34,7 +34,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
 
   // direct mode: search the directory + pick ONE person, place ONE marker
-  const [directSigner, setDirectSigner] = useState(null); // {id, name, email, hasSignature}
+  // direct mode: a flat list of specific people who each sign the document (in any
+  // order — all must sign). Each carries its own signature box + optional date
+  // fields: { userId, name, email, hasSignature, page, x, y, w, h, dateFields:[] }
+  const [directSigners, setDirectSigners] = useState([]);
   const [directQuery, setDirectQuery] = useState("");
   const [directResults, setDirectResults] = useState([]);
   const [directSearching, setDirectSearching] = useState(false);
@@ -84,7 +87,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       setMarker(null);
       setWorkflow([]);
       setPlacingSlot(null);
-      setDirectSigner(null);
+      setDirectSigners([]);
       setSelfMarks([]); setSelfPlacing(null);
       setSignerDateFields([]); setSignerDatePlacing(false);
     };
@@ -117,7 +120,16 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     if (mode === "single") {
       if (marker) base.push({ ...marker, id: "approver", label: "APPROVER SIGNS HERE" });
     } else if (mode === "direct") {
-      if (marker) base.push({ ...marker, id: "recipient", label: directSigner ? directSigner.name : "SIGNS HERE" });
+      directSigners.forEach((s, di) => {
+        if (s.x != null) base.push({
+          id: `d${di}`, page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h,
+          color: STEP_COLORS[di % STEP_COLORS.length], label: `${di + 1}. ${s.name}`
+        });
+        (s.dateFields || []).forEach((d, fi) => base.push({
+          id: `dd-${di}-${fi}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h,
+          color: "#C77D2E", label: "date on signing"
+        }));
+      });
     } else {
       workflow.forEach((step, si) => {
         const team = teams.find(t => t.id === step.teamId);
@@ -138,8 +150,9 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
         });
       });
     }
-    // signatory date field(s) for the one-signer paths (single / direct)
-    const sigDates = (mode === "single" || mode === "direct")
+    // signatory date field(s) for the single-approver path (direct dates are
+    // per-signer, handled in the direct branch above)
+    const sigDates = (mode === "single")
       ? signerDateFields.map((d, i) => ({
           id: `sd-${i}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h,
           color: "#C77D2E", label: "date on signing"
@@ -152,7 +165,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       ...(s.type === "signature" && mySigUrl ? { signedDataUrl: mySigUrl } : {})
     }));
     return [...base, ...sigDates, ...self];
-  }, [mode, marker, workflow, teams, directSigner, selfMarks, signerDateFields, mySigUrl, todayDdMmYy]);
+  }, [mode, marker, workflow, teams, directSigners, selfMarks, signerDateFields, mySigUrl, todayDdMmYy]);
 
   // ---------- click handler from PDF viewer ----------
   const onAddMarker = (page, x, y, w, h) => {
@@ -161,14 +174,30 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       setSelfMarks(ms => [...ms, { type: selfPlacing, page, x, y, w, h }]);
       return;
     }
-    // 2) signatory's date field(s) on the one-signer paths — also multi-place.
-    if (signerDatePlacing && (mode === "single" || mode === "direct")) {
+    // 2) signatory's date field(s) on the SINGLE-approver path — also multi-place.
+    if (signerDatePlacing && mode === "single") {
       setSignerDateFields(ds => [...ds, { page, x, y, w, h }]);
       return;
     }
-    // 3) the single / direct approver box (exactly one).
-    if (mode === "single" || mode === "direct") {
+    // 3) the single approver box (exactly one).
+    if (mode === "single") {
       setMarker({ page, x, y, w, h });
+      return;
+    }
+    // 3b) direct: place the currently-selected person's box / date fields. Which
+    //     person is chosen via placingSlot.directIdx (set by their row buttons).
+    if (mode === "direct") {
+      if (!placingSlot || placingSlot.directIdx == null) {
+        notify("Add people below, then tap 'Place signature' next to one of them", "info");
+        return;
+      }
+      const { directIdx, kind } = placingSlot;
+      if (kind === "date") {
+        setDirectSigners(list => list.map((s, i) => i !== directIdx ? s : { ...s, dateFields: [...(s.dateFields || []), { page, x, y, w, h }] }));
+        return; // keep active so multiple dates can be dropped
+      }
+      setDirectSigners(list => list.map((s, i) => i !== directIdx ? s : { ...s, page, x, y, w, h }));
+      setPlacingSlot(null);
       return;
     }
     // 4) workflow: place either a signer's box or one of their date fields.
@@ -208,7 +237,20 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       }));
       return;
     }
-    if (mode === "single" || mode === "direct") {
+    // direct signer box (d{di}) and their date fields (dd-{di}-{fi})
+    const ddm = /^dd-(\d+)-(\d+)$/.exec(markerId || "");
+    if (ddm) {
+      const di = Number(ddm[1]), fi = Number(ddm[2]);
+      setDirectSigners(list => list.map((s, i) => i !== di ? s : { ...s, dateFields: (s.dateFields || []).map((d, k) => k !== fi ? d : { ...d, ...patch }) }));
+      return;
+    }
+    const dm = /^d(\d+)$/.exec(markerId || "");
+    if (dm) {
+      const di = Number(dm[1]);
+      setDirectSigners(list => list.map((s, i) => i !== di ? s : { ...s, ...patch }));
+      return;
+    }
+    if (mode === "single") {
       setMarker(prev => prev ? { ...prev, ...patch } : prev);
       return;
     }
@@ -235,7 +277,12 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       }));
       return;
     }
-    if (mode === "single" || mode === "direct") { setMarker(null); return; }
+    // direct signer box (d{di}) / date (dd-{di}-{fi})
+    const ddm = /^dd-(\d+)-(\d+)$/.exec(markerId || "");
+    if (ddm) { const di = Number(ddm[1]), fi = Number(ddm[2]); setDirectSigners(list => list.map((s, i) => i !== di ? s : { ...s, dateFields: (s.dateFields || []).filter((_, k) => k !== fi) })); return; }
+    const dm = /^d(\d+)$/.exec(markerId || "");
+    if (dm) { const di = Number(dm[1]); setDirectSigners(list => list.map((s, i) => i !== di ? s : { ...s, x: null, y: null, w: null, h: null })); return; }
+    if (mode === "single") { setMarker(null); return; }
     const match = /^s(\d+)-(\d+)$/.exec(markerId || "");
     if (!match) return;
     const stepIdx = Number(match[1]), signerIdx = Number(match[2]);
@@ -285,10 +332,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
   // --- place date field(s) for the SIGNATORY (single / direct one-signer paths).
   //     Each stays blank until that person signs, then shows THEIR signing date.
-  const signerDateBar = ((mode === "single" || mode === "direct") && file?.ext === "pdf") ? (
+  const signerDateBar = (mode === "single" && file?.ext === "pdf") ? (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
       <span className="font-medium opacity-80 flex items-center gap-1">
-        <Calendar size={13} style={{ color: "#C77D2E" }} /> Date for {mode === "direct" && directSigner ? directSigner.name : "the signer"}:
+        <Calendar size={13} style={{ color: "#C77D2E" }} /> Date for the signer:
       </span>
       <button type="button"
         className={`text-xs ${signerDatePlacing ? "btn-gold" : "btn-ghost"}`}
@@ -326,7 +373,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const canSubmitWorkflow = effectiveFile && workflow.length > 0
     && workflow.every(st => st.teamId && st.signers.length > 0
         && st.signers.every(s => s.userId && s.x != null));
-  const canSubmitDirect = effectiveFile && file?.ext === "pdf" && !!directSigner && !!marker;
+  const canSubmitDirect = effectiveFile && file?.ext === "pdf"
+    && directSigners.length > 0 && directSigners.every(s => s.x != null);
 
   const submit = async () => {
     setBusy(true);
@@ -338,8 +386,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
         await addRequest({ file: submitFile, targetTeamId: targetTeam, marker, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType });
       } else if (mode === "direct") {
-        if (!canSubmitDirect) { notify("Pick a person and place their signature box", "error"); return; }
-        await addRequest({ file: submitFile, direct: true, signers: [{ userId: directSigner.id, page: marker.page, x: marker.x, y: marker.y, w: marker.w, h: marker.h, dateFields: signerDateFields }], selfMarks: selfArg, instantApproval, note, requestType });
+        if (!canSubmitDirect) { notify("Add at least one person and place each of their signature boxes", "error"); return; }
+        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, dateFields: s.dateFields || [] })), selfMarks: selfArg, instantApproval, note, requestType });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
         await addRequest({ file: submitFile, workflow, selfMarks: selfArg, instantApproval, note, requestType });
@@ -420,7 +468,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   style={{ borderColor: mode === "direct" ? "#B8894A" : undefined, backgroundColor: mode === "direct" ? "rgba(184,137,74,.08)" : undefined }}>
                   <Send size={18} className="mb-3 opacity-70" />
                   <div className="font-medium">Send to a specific person</div>
-                  <div className="text-xs opacity-60 mt-1">Search any user and request their signature directly.</div>
+                  <div className="text-xs opacity-60 mt-1">Search one or more people and request their signatures directly.</div>
                 </button>
               </div>
               <label className="flex items-start gap-3 mt-5 cursor-pointer">
@@ -473,57 +521,95 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             </Section>
           )}
 
-          {/* 3c. direct mode: pick a person + place marker */}
+          {/* 3c. direct mode: add one or more specific people, each with a box */}
           {effectiveFile && mode ==="direct" && (
-            <Section n="03" title="Choose who should sign" desc="Search any user by name or email, then place their signature box.">
+            <Section n="03" title="Choose who should sign" desc="Add one or more people — everyone you add signs the document (in any order).">
               {file.ext !== "pdf" ? (
                 <div className="card p-4 text-sm" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
                   Direct requests support PDF documents only. Upload a PDF to use this mode.
                 </div>
               ) : (
                 <>
-                  {!directSigner ? (
-                    <div>
-                      <input type="text" value={directQuery} onChange={e => setDirectQuery(e.target.value)}
-                        className="w-full mb-3" placeholder="Search by name or email (min 2 characters)…" autoFocus />
-                      {directSearching && <div className="text-xs opacity-50 px-1 mb-2">Searching…</div>}
-                      {!directSearching && directQuery.trim().length >= 2 && directResults.length === 0 && (
-                        <div className="text-xs opacity-50 px-1 mb-2">No user found for "{directQuery}".</div>
-                      )}
-                      <div className="space-y-1">
-                        {directResults.map(u => (
-                          <button key={u.id} onClick={() => { setDirectSigner(u); setDirectResults([]); setDirectQuery(""); }}
+                  {/* search + add people */}
+                  <input type="text" value={directQuery} onChange={e => setDirectQuery(e.target.value)}
+                    className="w-full mb-2" placeholder="Search by name or email to add a signer (min 2 characters)…" />
+                  {directSearching && <div className="text-xs opacity-50 px-1 mb-2">Searching…</div>}
+                  {(() => {
+                    const avail = directResults.filter(u => !directSigners.some(s => s.userId === u.id));
+                    if (!directSearching && directQuery.trim().length >= 2 && avail.length === 0)
+                      return <div className="text-xs opacity-50 px-1 mb-2">No {directResults.length ? "more " : ""}users found for "{directQuery}".</div>;
+                    if (avail.length === 0) return null;
+                    return (
+                      <div className="space-y-1 mb-4">
+                        {avail.map(u => (
+                          <button key={u.id}
+                            onClick={() => { setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, page: 1, x: null, y: null, w: null, h: null, dateFields: [] }]); setDirectResults([]); setDirectQuery(""); }}
                             className="w-full text-left px-3 py-2 rounded card tile-hover flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <div className="text-sm font-medium truncate">{u.name}</div>
                               <div className="text-xs opacity-60 font-mono truncate">{u.email}</div>
                             </div>
-                            {!u.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature yet</span>}
+                            <span className="flex items-center gap-2 shrink-0">
+                              {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no signature yet</span>}
+                              <span className="btn-ghost text-xs"><Plus size={11} /> Add</span>
+                            </span>
                           </button>
                         ))}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="card p-4 flex items-center gap-3 mb-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{directSigner.name}</div>
-                        <div className="text-xs opacity-60 font-mono truncate">{directSigner.email}</div>
-                      </div>
-                      {!directSigner.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature yet</span>}
-                      <button className="btn-ghost text-xs shrink-0" onClick={() => { setDirectSigner(null); setMarker(null); }}>Change</button>
-                    </div>
-                  )}
+                    );
+                  })()}
 
-                  {directSigner && (
+                  {directSigners.length > 0 && (
                     <>
                       <Suspense fallback={<ViewerFallback />}>
                         <DocPreview file={file} markers={allMarkers} editable
                           onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
                       </Suspense>
-                      {marker
-                        ? <div className="mt-3 text-xs font-mono opacity-60">Signature box placed on page {marker.page}.<button className="ml-2 underline" onClick={() => setMarker(null)}>Reset</button></div>
-                        : <div className="mt-3 text-xs opacity-60">Press and hold on a phone, or click-drag on a computer, to drop a signature box for {directSigner.name}.</div>}
-                      {signerDateBar}
+                      {placingSlot?.directIdx != null && (
+                        <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
+                          {placingSlot.kind === "date"
+                            ? <span>Press and hold — or click-drag — to drop a date box for {directSigners[placingSlot.directIdx]?.name}. It fills with their date when they sign. Place as many as you like.</span>
+                            : <span>Press and hold — or click-drag — to drop {directSigners[placingSlot.directIdx]?.name}'s signature box.</span>}
+                          <button className="underline ml-2" onClick={() => setPlacingSlot(null)}>Cancel</button>
+                        </div>
+                      )}
+
+                      {/* the people who will sign — each places their own box */}
+                      <div className="space-y-2 mt-4">
+                        {directSigners.map((s, di) => {
+                          const placed = s.x != null;
+                          const dfCount = (s.dateFields || []).length;
+                          const here = placingSlot?.directIdx === di;
+                          const isPlacingSig = here && placingSlot?.kind !== "date";
+                          const isPlacingDate = here && placingSlot?.kind === "date";
+                          const color = STEP_COLORS[di % STEP_COLORS.length];
+                          return (
+                            <div key={s.userId} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded card" style={{ borderLeft: `4px solid ${color}` }}>
+                              <div className="flex items-center gap-2 min-w-0 flex-1 basis-full sm:basis-0">
+                                <span className="font-mono text-xs opacity-50 shrink-0">{di + 1}</span>
+                                <span className="text-sm font-medium truncate min-w-0">{s.name}</span>
+                                {!s.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature</span>}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 ml-auto">
+                                {placed
+                                  ? <span className="text-xs opacity-60 font-mono">page {s.page} · placed{dfCount ? ` · ${dfCount} date` : ""}</span>
+                                  : <span className="text-xs opacity-60">no box yet</span>}
+                                <button className={`text-xs ${isPlacingSig ? "btn-gold" : "btn-ghost"}`}
+                                  onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingSig ? null : { directIdx: di, kind: "signature" }); }}>
+                                  {placed ? "Re-place" : "Place signature"}
+                                </button>
+                                <button className={`text-xs ${isPlacingDate ? "btn-gold" : "btn-ghost"}`}
+                                  title="Place date field(s) that fill when this person signs"
+                                  onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? null : { directIdx: di, kind: "date" }); }}>
+                                  + Date
+                                </button>
+                                <button className="opacity-40 hover:opacity-100" title="Remove person"
+                                  onClick={() => { setDirectSigners(list => list.filter((_, i) => i !== di)); setPlacingSlot(null); }}><X size={12} /></button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                       {selfBar}
                     </>
                   )}
@@ -615,7 +701,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           )}
 
           {/* 5. submit */}
-          {effectiveFile && (mode === "single" ? (marker && targetTeam) : mode === "direct" ? (directSigner && marker) : workflow.length > 0) && (
+          {effectiveFile && (mode === "single" ? (marker && targetTeam) : mode === "direct" ? directSigners.length > 0 : workflow.length > 0) && (
             <Section n={mode === "single" ? "05" : "04"} title="Add a note (optional)" desc="">
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} className="w-full" placeholder="Context for the signer(s)…" />
               <div className="flex justify-end mt-4 gap-3">
