@@ -76,11 +76,21 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
           SENDGRID_FROM_NAME: ${{ secrets.SENDGRID_FROM_NAME }}
+          ONEACCESS_API_BASE_URL: ${{ secrets.ONEACCESS_API_BASE_URL }}
+          ONEACCESS_FRONTEND_URL: ${{ secrets.ONEACCESS_FRONTEND_URL }}
+          ONEACCESS_APP_SLUG: ${{ secrets.ONEACCESS_APP_SLUG }}
+          ONEACCESS_REDIRECT_URL: ${{ secrets.ONEACCESS_REDIRECT_URL }}
+          ONEACCESS_APP_ID: ${{ secrets.ONEACCESS_APP_ID }}
+          ONEACCESS_CLIENT_ID: ${{ secrets.ONEACCESS_CLIENT_ID }}
+          ONEACCESS_CLIENT_SECRET: ${{ secrets.ONEACCESS_CLIENT_SECRET }}
+          ONEACCESS_PUBLIC_KEY_PATH: ${{ secrets.ONEACCESS_PUBLIC_KEY_PATH }}
+          ONEACCESS_ACCESS_TOKEN_TTL: ${{ secrets.ONEACCESS_ACCESS_TOKEN_TTL }}
+          AUTH_LOCAL_LOGIN_ENABLED: ${{ secrets.AUTH_LOCAL_LOGIN_ENABLED }}
         with:
           host: ${{ secrets.UAT_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
-          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,ONEACCESS_API_BASE_URL,ONEACCESS_FRONTEND_URL,ONEACCESS_APP_SLUG,ONEACCESS_REDIRECT_URL,ONEACCESS_APP_ID,ONEACCESS_CLIENT_ID,ONEACCESS_CLIENT_SECRET,ONEACCESS_PUBLIC_KEY_PATH,ONEACCESS_ACCESS_TOKEN_TTL,AUTH_LOCAL_LOGIN_ENABLED
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -98,6 +108,27 @@ jobs:
               echo "SendGrid config synced to .env (LIVE email)."
             else
               echo "No SENDGRID_API_KEY secret set — email stays in log-only mode."
+            fi
+            # Sync oneAccess SSO config from CI secrets. Rewrites the whole ONEACCESS_*
+            # block (+ the AUTH_LOCAL_LOGIN_ENABLED cutover flag) when API_BASE_URL is
+            # set; otherwise oneAccess stays disabled and local login is used.
+            if [ -n "$ONEACCESS_API_BASE_URL" ]; then
+              touch .env
+              grep -v -E '^(ONEACCESS_[A-Z_]+|AUTH_LOCAL_LOGIN_ENABLED)=' .env > .env.tmp || true
+              echo "ONEACCESS_API_BASE_URL=$ONEACCESS_API_BASE_URL" >> .env.tmp
+              [ -n "$ONEACCESS_FRONTEND_URL" ] && echo "ONEACCESS_FRONTEND_URL=$ONEACCESS_FRONTEND_URL" >> .env.tmp
+              [ -n "$ONEACCESS_APP_SLUG" ] && echo "ONEACCESS_APP_SLUG=$ONEACCESS_APP_SLUG" >> .env.tmp
+              [ -n "$ONEACCESS_REDIRECT_URL" ] && echo "ONEACCESS_REDIRECT_URL=$ONEACCESS_REDIRECT_URL" >> .env.tmp
+              [ -n "$ONEACCESS_APP_ID" ] && echo "ONEACCESS_APP_ID=$ONEACCESS_APP_ID" >> .env.tmp
+              [ -n "$ONEACCESS_CLIENT_ID" ] && echo "ONEACCESS_CLIENT_ID=$ONEACCESS_CLIENT_ID" >> .env.tmp
+              [ -n "$ONEACCESS_CLIENT_SECRET" ] && echo "ONEACCESS_CLIENT_SECRET=$ONEACCESS_CLIENT_SECRET" >> .env.tmp
+              [ -n "$ONEACCESS_PUBLIC_KEY_PATH" ] && echo "ONEACCESS_PUBLIC_KEY_PATH=$ONEACCESS_PUBLIC_KEY_PATH" >> .env.tmp
+              [ -n "$ONEACCESS_ACCESS_TOKEN_TTL" ] && echo "ONEACCESS_ACCESS_TOKEN_TTL=$ONEACCESS_ACCESS_TOKEN_TTL" >> .env.tmp
+              [ -n "$AUTH_LOCAL_LOGIN_ENABLED" ] && echo "AUTH_LOCAL_LOGIN_ENABLED=$AUTH_LOCAL_LOGIN_ENABLED" >> .env.tmp
+              mv .env.tmp .env
+              echo "oneAccess config synced to .env (SSO enabled: slug=$ONEACCESS_APP_SLUG)."
+            else
+              echo "No ONEACCESS_API_BASE_URL secret set — oneAccess stays disabled (local login)."
             fi
             npm ci --omit=dev
             pm2 delete onesign_backend_uat 2>/dev/null || true
