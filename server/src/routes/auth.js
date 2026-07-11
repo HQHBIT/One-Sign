@@ -1,15 +1,89 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import { queryOne, hydrateUser, execute } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
 import { validateRegistration } from "../registrationValidation.js";
+import {
+  oneAccessEnabled, localLoginEnabled, loginRedirectUrl,
+  verifyOneAccessToken, fetchOneAccessProfile, toLocalIdentity,
+} from "../oneaccess.js";
 
 const router = Router();
 
+// What the login screen should offer. Lets the client show the oneAccess button
+// and hide the local form once the cutover flag is flipped — no redeploy needed.
+router.get("/config", (req, res) => {
+  res.json({
+    oneAccessEnabled: oneAccessEnabled(),
+    localLoginEnabled: localLoginEnabled(),
+    oneAccessStartUrl: oneAccessEnabled() ? "/api/auth/oneaccess/start" : null,
+  });
+});
+
+// Bounce the browser to the oneAccess login page (redirect=<slug>).
+router.get("/oneaccess/start", (req, res) => {
+  if (!oneAccessEnabled()) return res.status(404).json({ error: "oneAccess not configured" });
+  res.redirect(loginRedirectUrl());
+});
+
+// SSO landing: oneAccess redirects the user back with ?token=<access_jwt>; the SPA
+// posts it here. We verify it locally, mirror the user, and issue a SignFlow session.
+router.post("/oneaccess/callback", async (req, res, next) => {
+  try {
+    if (!oneAccessEnabled()) return res.status(404).json({ error: "oneAccess not configured" });
+    const token = String(req.body?.token || "").trim();
+    if (!token) return res.status(400).json({ error: "Missing token" });
+
+    let claims;
+    try { claims = await verifyOneAccessToken(token); }
+    catch { return res.status(401).json({ error: "Invalid or expired oneAccess token" }); }
+
+    // Authoritative profile — best effort; fall back to the verified claims.
+    let profile = null;
+    try { profile = await fetchOneAccessProfile(token); } catch { /* use claims */ }
+
+    const { its, email, name } = toLocalIdentity(claims, profile);
+    if (!its && !email) return res.status(400).json({ error: "oneAccess profile missing its_id and email" });
+
+    const user = await upsertOneAccessUser({ its, email, name });
+    const sfToken = signToken(user.id);
+    res.json({ token: sfToken, user: await hydrateUser(user) });
+  } catch (e) { next(e); }
+});
+
+// Mirror an oneAccess identity into the local users table. New users are always
+// requestors (per config); existing ones (matched by ITS id, else email) are kept
+// in sync and marked oneAccess-managed.
+export async function upsertOneAccessUser({ its, email, name }) {
+  let row = null;
+  if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ?", [its]);
+  if (!row && email) row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+  if (row) {
+    await execute(
+      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), auth_provider = 'oneaccess' WHERE id = ?",
+      [name, email, its, row.id]
+    );
+    return await queryOne("SELECT * FROM users WHERE id = ?", [row.id]);
+  }
+  const id = "u_oa_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+  // Unusable local password — these users authenticate through oneAccess only.
+  const randomHash = bcrypt.hashSync(crypto.randomUUID(), 10);
+  const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
+  await execute(
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, auth_provider, created_at) VALUES (?, ?, ?, ?, 'requestor', ?, 'oneaccess', ?)",
+    [id, safeEmail, randomHash, name, its || null, Date.now()]
+  );
+  return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
+}
+
 router.post("/login", async (req, res, next) => {
   try {
+    if (!localLoginEnabled()) {
+      return res.status(403).json({ error: "Password sign-in is disabled. Please sign in with oneAccess." });
+    }
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 

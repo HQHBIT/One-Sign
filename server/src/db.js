@@ -264,6 +264,12 @@ async function runSchema() {
   await tryExec(`ALTER TABLE users ADD COLUMN last_temp_password VARCHAR(64) DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD COLUMN last_temp_password_at BIGINT DEFAULT NULL`);
 
+  // oneAccess SSO: mirror the external ITS id + which identity provider owns the
+  // account. auth_provider = 'local' (password) or 'oneaccess' (SSO).
+  await tryExec(`ALTER TABLE users ADD COLUMN its_id VARCHAR(16) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN auth_provider VARCHAR(16) NOT NULL DEFAULT 'local'`);
+  await tryExec(`ALTER TABLE users ADD INDEX idx_users_its_id (its_id)`);
+
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
   await tryExec(`ALTER TABLE requests MODIFY COLUMN requestor_id VARCHAR(64) NULL`);

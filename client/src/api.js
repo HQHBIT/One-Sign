@@ -46,6 +46,13 @@ export const api = {
   login(email, password) {
     return this.fetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
   },
+  // What the login screen should offer (oneAccess SSO vs local password form).
+  authConfig() { return this.fetch("/api/auth/config"); },
+  // Exchange an oneAccess access token (from the SSO redirect ?token=) for a
+  // SignFlow session. Returns { token, user }.
+  oneAccessCallback(token) {
+    return this.fetch("/api/auth/oneaccess/callback", { method: "POST", body: JSON.stringify({ token }) });
+  },
   logout() {
     // Local-only — server has no /logout endpoint on this branch.
     this.setToken(null);

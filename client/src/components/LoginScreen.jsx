@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ArrowRight, ArrowLeft, Check } from "lucide-react";
 import { api } from "../api.js";
 
@@ -14,6 +14,12 @@ export function LoginScreen({ login }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // Login options from the server: whether to offer oneAccess SSO and/or the local
+  // password form. Defaults keep the local form so a config hiccup never locks out.
+  const [authCfg, setAuthCfg] = useState({ oneAccessEnabled: false, localLoginEnabled: true, oneAccessStartUrl: null });
+  useEffect(() => { api.authConfig().then(setAuthCfg).catch(() => {}); }, []);
+  // Never hide the local form unless oneAccess is actually available.
+  const showLocal = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
   // Forgot-password panel state: idle | open | sending | sent | error
   const [forgotState, setForgotState] = useState("idle");
   const [forgotEmail, setForgotEmail] = useState("");
@@ -134,37 +140,52 @@ export function LoginScreen({ login }) {
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
           {forgotState === "idle" && !regOpen && (
-            <form onSubmit={submit}>
+            <div>
               <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
-              <div className="text-sm opacity-60 mb-8">Use the credentials provided by your administrator.</div>
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus />
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
-              <div className="flex justify-end mb-6">
-                <button type="button" onClick={openForgot}
-                  className="text-xs opacity-60 hover:opacity-100 underline">
-                  Forgot password?
-                </button>
+              <div className="text-sm opacity-60 mb-8">
+                {showLocal ? "Use the credentials provided by your administrator." : "Continue with your oneAccess account."}
               </div>
-              <button className="btn-primary w-full justify-center" disabled={busy}>
-                {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
-              </button>
-              <div className="text-center mt-6">
-                <button type="button" onClick={openReg}
-                  className="text-xs opacity-60 hover:opacity-100 underline">
-                  New here? Create an account →
-                </button>
-              </div>
-              {/* DISABLED: expense feature commented out — submit-an-expense link
-              <div className="text-center mt-6">
-                <button type="button" onClick={openExpense}
-                  className="text-xs opacity-60 hover:opacity-100 underline">
-                  Submit an expense →
-                </button>
-              </div>
-              */}
-            </form>
+
+              {authCfg.oneAccessEnabled && (
+                <>
+                  <button type="button" className="btn-primary w-full justify-center"
+                    onClick={() => { window.location.href = authCfg.oneAccessStartUrl; }}>
+                    Sign in with oneAccess <ArrowRight size={16} />
+                  </button>
+                  {showLocal && (
+                    <div className="flex items-center gap-3 my-6 text-xs opacity-50">
+                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
+                      or
+                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {showLocal && (
+                <form onSubmit={submit}>
+                  <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus={!authCfg.oneAccessEnabled} />
+                  <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
+                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
+                  <div className="flex justify-end mb-6">
+                    <button type="button" onClick={openForgot}
+                      className="text-xs opacity-60 hover:opacity-100 underline">
+                      Forgot password?
+                    </button>
+                  </div>
+                  <button className={`${authCfg.oneAccessEnabled ? "btn-ghost" : "btn-primary"} w-full justify-center`} disabled={busy}>
+                    {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
+                  </button>
+                  <div className="text-center mt-6">
+                    <button type="button" onClick={openReg}
+                      className="text-xs opacity-60 hover:opacity-100 underline">
+                      New here? Create an account →
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           )}
 
           {regOpen && regState !== "done" && (

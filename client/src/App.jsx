@@ -109,6 +109,26 @@ export default function App() {
   useEffect(() => {
     (async () => {
       api.onAuthExpired(() => { setUser(null); notify("Session expired — please sign in again", "error"); });
+
+      // oneAccess SSO landing: the redirect brings us back with ?token=<oneaccess jwt>.
+      // Exchange it for a SignFlow session, then scrub it from the URL so a refresh
+      // or bookmark can't replay it.
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const ssoToken = params.get("token");
+        if (ssoToken) {
+          params.delete("token");
+          const clean = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
+          try {
+            const { token: sfToken } = await api.oneAccessCallback(ssoToken);
+            api.setToken(sfToken);
+          } catch (e) {
+            notify(e.message || "oneAccess sign-in failed", "error");
+          }
+          window.history.replaceState({}, "", clean);
+        }
+      } catch { /* no-op */ }
+
       const token = api.init();
       if (token) {
         try {
