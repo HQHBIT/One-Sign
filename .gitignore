@@ -12,3 +12,6 @@ server/uploads/signed/*
 *.log
 .vite
 client/public/pdf.worker.min.js
+
+# oneAccess public key cache (fetched at runtime)
+server/keys/
