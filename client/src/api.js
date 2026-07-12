@@ -161,6 +161,8 @@ export const api = {
   },
   rejectRequest(id, reason) { return this.fetch(`/api/requests/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }); },
   withdrawRequest(id) { return this.fetch(`/api/requests/${id}/withdraw`, { method: "POST" }); },
+  // Requestor withdraws their OWN still-pending request.
+  cancelRequest(id) { return this.fetch(`/api/requests/${id}/cancel`, { method: "POST" }); },
   remindRequest(id) { return this.fetch(`/api/requests/${id}/reminder`, { method: "POST" }); },
   forceFinalizeRequest(id) { return this.fetch(`/api/requests/${id}/force-finalize`, { method: "POST" }); },
 

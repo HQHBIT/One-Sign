@@ -219,6 +219,19 @@ export default function App() {
     try { await api.forceFinalizeRequest(id); notify("Finalised", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
+  // Requestor withdraws their OWN still-pending request. Once an approver has
+  // accepted or rejected it, withdrawal is blocked server-side (400).
+  const cancelRequest = async id => {
+    const ok = await confirm({
+      title: "Withdraw this request?",
+      message: "The request will be withdrawn and removed from pending. Approvers will no longer see it. This can't be undone.",
+      confirmLabel: "Withdraw request",
+      destructive: true
+    });
+    if (!ok) return;
+    try { await api.cancelRequest(id); notify("Request withdrawn", "success"); await refresh(user); }
+    catch (e) { notify(e.message || "Could not withdraw", "error"); }
+  };
   const saveUsers = async () => { if (user?.role === "admin") setUsers(await api.listUsers()); };
   const saveTeams = async () => { setTeams(await api.listTeams()); };
 
@@ -243,6 +256,7 @@ export default function App() {
           saveUsers={saveUsers} saveTeams={saveTeams}
           addRequest={createRequest}
           sendReminder={sendReminder}
+          cancelRequest={cancelRequest}
           approveRequest={approveRequest} rejectRequest={rejectRequest}
           undoApproval={undoApproval} forceFinalize={forceFinalize}
           notify={notify}
@@ -333,7 +347,7 @@ function RequestorView(props) {
   const { user, requests } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null); // pre-selected request type when opening NewRequest
-  const my = requests.filter(r => r.requestorId === user.id);
+  const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
   const approved = my.filter(r => r.status === "approved");
   // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
@@ -428,7 +442,7 @@ function RecentActivity({ my, teams }) {
 // ============================================================
 //   PENDING · APPROVED · REJECTED LISTS (Requestor)
 // ============================================================
-function PendingList({ items, teams, users, sendReminder, back, notify, title = "Pending requests" }) {
+function PendingList({ items, teams, users, user, sendReminder, cancelRequest, back, notify, title = "Pending requests" }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -443,6 +457,12 @@ function PendingList({ items, teams, users, sendReminder, back, notify, title = 
                   {r.status === "pending" && (
                     <button className="btn-gold text-xs" onClick={() => sendReminder(r.id)}>
                       <Bell size={12} /> Remind
+                    </button>
+                  )}
+                  {/* Requestor can withdraw their own request while it's still pending. */}
+                  {r.status === "pending" && cancelRequest && r.requestorId === user?.id && (
+                    <button className="btn-ghost text-xs" style={{ color: "var(--c-rust-deep, #7A1F1F)" }} onClick={() => cancelRequest(r.id)}>
+                      <Undo2 size={12} /> Withdraw
                     </button>
                   )}
                   {r.hasSignedFile && <DownloadBtn req={r} />}
@@ -614,7 +634,7 @@ function ApproverView(props) {
     return false;
   });
   // Requests I raised myself, to track.
-  const myRequests = requests.filter(r => r.requestorId === user.id);
+  const myRequests = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length;
   const pending = mine.filter(r => r.status === "pending");
   const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSignedInWorkflow(r)));

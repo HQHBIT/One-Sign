@@ -302,6 +302,10 @@ async function runSchema() {
   await tryExec(`ALTER TABLE request_step_signers ADD COLUMN date_fields_json TEXT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
 
+  // Requestor can withdraw a still-pending request ('withdrawn' status + timestamp).
+  await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn') NOT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 
