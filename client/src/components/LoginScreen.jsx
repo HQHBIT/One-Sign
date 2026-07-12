@@ -114,9 +114,9 @@ export function LoginScreen({ login }) {
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
       <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-6 py-8 sm:px-8 sm:py-12 md:p-14 text-center gap-4 sm:gap-6" style={{ color: "var(--c-cream)" }}>
-        {/* Logo badge */}
-        <div className="logo-glow fade-up">
-          <img src="/signflow-logo.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
+        {/* Logo — light (cream) version sits directly on the navy panel, no box */}
+        <div className="fade-up">
+          <img src="/signflow-logo-light.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
         </div>
 
         {/* Gold divider */}
