@@ -113,28 +113,31 @@ export function LoginScreen({ login }) {
   return (
     <div className="min-h-screen grid md:grid-cols-2">
       {/* left panel */}
-      <div className="ink-grad text-white relative grain flex flex-col items-center justify-center px-6 py-8 sm:px-8 sm:py-12 md:p-14 text-center gap-4 sm:gap-6" style={{ color: "var(--c-cream)" }}>
-        {/* Logo — light (cream) version sits directly on the navy panel, no box */}
-        <div className="fade-up">
-          <img src="/signflow-logo-light.png" alt="HQHB · SignFlow" className="w-52 sm:w-64 md:w-80 mx-auto" />
+      <div className="ink-grad text-white relative grain flex flex-col items-center px-6 py-8 sm:px-8 sm:py-12 md:p-14 text-center" style={{ color: "var(--c-cream)" }}>
+        {/* Logo + hero copy, vertically centered as a group */}
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 sm:gap-6 w-full">
+          {/* Logo — light (cream) version sits directly on the navy panel, no box */}
+          <div className="fade-up">
+            <img src="/signflow-logo-light.png" alt="HQHB · SignFlow" className="w-44 sm:w-52 md:w-56 mx-auto" />
+          </div>
+
+          {/* Gold divider */}
+          <div className="fade-up fade-up-d1" style={{ width: 120, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.45), transparent)" }} />
+
+          {/* Hero copy */}
+          <div className="relative z-10 fade-up fade-up-d2">
+            <h1 className="font-display text-3xl sm:text-4xl md:text-5xl leading-[1.1]">
+              Request. Review.<br />
+              <span style={{ color: "var(--c-gold)" }}>Approve. Track.</span><br />
+              All in one place.
+            </h1>
+            <p className="mt-4 text-sm opacity-55 max-w-xs md:max-w-sm mx-auto leading-relaxed">
+              Route to the right authority, capture verified digital signatures, and maintain a complete audit trail at every step.
+            </p>
+          </div>
         </div>
 
-        {/* Gold divider */}
-        <div className="fade-up fade-up-d1" style={{ width: 120, height: 1, background: "linear-gradient(to right, transparent, rgba(184,137,74,.45), transparent)" }} />
-
-        {/* Hero copy */}
-        <div className="relative z-10 fade-up fade-up-d2">
-          <h1 className="font-display text-3xl sm:text-4xl md:text-5xl leading-[1.1]">
-            Request. Review.<br />
-            <span style={{ color: "var(--c-gold)" }}>Approve. Track.</span><br />
-            All in one place.
-          </h1>
-          <p className="mt-4 text-sm opacity-55 max-w-xs md:max-w-sm mx-auto leading-relaxed">
-            Route to the right authority, capture verified digital signatures, and maintain a complete audit trail at every step.
-          </p>
-        </div>
-
-        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 mt-auto pt-4">HQHB - Internal Build</div>
+        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 pt-4">HQHB - Internal Build</div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
