@@ -1,0 +1,275 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<!--
+  ============================================================================
+  SignFlow — Launch Announcement Email  (GOLD / NAVY brand version)
+  Email-safe: nested tables, inline CSS, 600px, bulletproof button, bgcolor
+  fallbacks. Tested-ready for Gmail, Outlook, Apple Mail, mobile.
+  ----------------------------------------------------------------------------
+  BEFORE SENDING — checklist:
+    [ ] Confirm the app URL. Using https://signflow.devhqhb.online (the live
+        UAT/prod host). The older announcement doc said onesign.devhqhb.online —
+        pick the correct one and update every href + the info box if needed.
+    [ ] Deploy the hosted images (already added under client/public/email/). They
+        resolve at https://signflow.devhqhb.online/email/<name> after deploy.
+    [ ] Optional: add partner/division logos in the header (only SignFlow logo used).
+
+  HOSTED IMAGES USED (all absolute https, live after the image deploy):
+    - https://signflow.devhqhb.online/signflow-logo.png        (logo, already hosted)
+    - https://signflow.devhqhb.online/email/hero-dashboard.png (hero — requestor dashboard, Taha Chunawala)
+    - https://signflow.devhqhb.online/email/card-new-request.png (featured — new-request flow)
+    - https://signflow.devhqhb.online/email/approver-pending.png (showcase — Mohammed Sabuwala reviewing Taha's docs)
+  Feature-row icons are Unicode glyphs on gold squares (no hosting needed);
+  swap for hosted line-icon PNGs if you prefer.
+  ============================================================================
+-->
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="x-apple-disable-message-reformatting" />
+  <meta name="color-scheme" content="light only" />
+  <title>Introducing SignFlow</title>
+  <!--[if mso]>
+  <style type="text/css">
+    body, table, td, a { font-family: Arial, Helvetica, sans-serif !important; }
+  </style>
+  <![endif]-->
+  <style type="text/css">
+    @media only screen and (max-width:600px) {
+      .container { width:100% !important; }
+      .px { padding-left:20px !important; padding-right:20px !important; }
+      .fluid { width:100% !important; height:auto !important; }
+      .h1 { font-size:34px !important; }
+      .ghost { font-size:30px !important; }
+    }
+    a { color:#A3763D; }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#ECE7DA;">
+  <!-- preheader (hidden preview text) -->
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:#ECE7DA; opacity:0;">
+    SignFlow is live — send documents for signature, approve online, and keep a complete audit trail. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ECE7DA;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+
+        <!-- 600px container -->
+        <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px; max-width:600px; background-color:#FFFFFF; border-radius:14px; overflow:hidden; box-shadow:0 1px 4px rgba(15,26,46,0.06);">
+
+          <!-- HEADER BAND -->
+          <tr>
+            <td bgcolor="#F5F1E8" align="center" style="background-color:#F5F1E8; padding:26px 24px; border-bottom:1px solid #EBE4D6;">
+              <img src="https://signflow.devhqhb.online/signflow-logo.png" width="150" alt="HQHB SignFlow" style="display:block; border:0; outline:none; text-decoration:none; height:auto; width:150px; max-width:150px;" />
+            </td>
+          </tr>
+
+          <!-- HERO (eyebrow + title) -->
+          <tr>
+            <td class="px" style="padding:36px 24px 4px 24px;">
+              <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:13px; letter-spacing:2px; text-transform:uppercase; color:#8A8A80; font-weight:600;">Introducing the New</div>
+              <div class="h1" style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:42px; line-height:1.08; font-weight:700; color:#B8894A; padding-top:6px;">SignFlow</div>
+              <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; color:#0F1A2E; padding-top:10px; font-weight:600;">HQHB's digital signature &amp; approval system</div>
+            </td>
+          </tr>
+
+          <!-- HERO image -->
+          <tr>
+            <td class="px" style="padding:20px 24px 0 24px;">
+              <img class="fluid" src="https://signflow.devhqhb.online/email/hero-dashboard.png" width="552" alt="SignFlow dashboard" style="display:block; border:1px solid #EBE4D6; border-radius:10px; width:552px; max-width:100%; height:auto;" />
+            </td>
+          </tr>
+
+          <!-- INTRO paragraph -->
+          <tr>
+            <td class="px" style="padding:24px 24px 4px 24px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:16px; line-height:1.62; color:#454556;">
+              We're rolling out <b style="color:#0F1A2E;">SignFlow</b>, HQHB's new digital signature and approval system — one place to send documents for signature, sign and approve them online, and keep a complete, auditable record of every approval.
+            </td>
+          </tr>
+
+          <!-- FEATURED CARD: send for signature -->
+          <tr>
+            <td class="px" style="padding:20px 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td bgcolor="#FAF7F0" style="background-color:#FAF7F0; border:1px solid #EBE4D6; border-radius:12px; padding:16px 16px 18px 16px;">
+                    <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:12px; letter-spacing:1.5px; text-transform:uppercase; color:#A3763D; font-weight:700; padding-bottom:12px;">Send for signature</div>
+                    <img class="fluid" src="https://signflow.devhqhb.online/email/card-new-request.png" width="520" alt="Make a new request in SignFlow" style="display:block; border:1px solid #EBE4D6; border-radius:8px; width:520px; max-width:100%; height:auto;" />
+                    <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:14px; line-height:1.55; color:#454556; padding-top:12px;">Upload any PDF or Excel, mark where it should be signed, and route it to the right approver — in seconds.</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CALLOUT ROW -->
+          <tr>
+            <td class="px" style="padding:22px 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td width="46" valign="middle" style="width:46px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                      <td bgcolor="#B8894A" width="36" height="36" align="center" valign="middle" style="background-color:#B8894A; width:36px; height:36px; border-radius:9px; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:18px; font-weight:700;">&#10003;</td>
+                    </tr></table>
+                  </td>
+                  <td valign="middle" style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; line-height:1.5; color:#0F1A2E; font-weight:600;">Fully digital, fully audit-ready — and nothing to install.</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- GHOST HEADING -->
+          <tr>
+            <td class="px" align="center" style="padding:30px 24px 2px 24px;">
+              <div class="ghost" style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:40px; font-weight:800; letter-spacing:1px; color:#EADCC4;">WHAT YOU CAN DO</div>
+            </td>
+          </tr>
+
+          <!-- ACCENT SHOWCASE CARD (navy) -->
+          <tr>
+            <td class="px" style="padding:8px 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td bgcolor="#0F1A2E" style="background-color:#0F1A2E; border-radius:12px; padding:18px;">
+                    <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:12px; letter-spacing:2px; text-transform:uppercase; color:#B8894A; font-weight:700;">Review &amp; sign</div>
+                    <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:17px; font-weight:600; color:#F5F1E8; padding:5px 0 14px 0;">Approvers review and sign online — every step time-stamped.</div>
+                    <img class="fluid" src="https://signflow.devhqhb.online/email/approver-pending.png" width="516" alt="Approver reviewing documents in SignFlow" style="display:block; border:0; border-radius:8px; width:516px; max-width:100%; height:auto;" />
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- FEATURE LIST (4 rows) -->
+          <tr>
+            <td class="px" style="padding:26px 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <!-- row 1 -->
+                <tr>
+                  <td width="52" valign="top" style="width:52px; padding-bottom:16px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                      <td bgcolor="#F4EAD6" width="40" height="40" align="center" valign="middle" style="background-color:#F4EAD6; width:40px; height:40px; border-radius:10px; font-size:18px;">&#128196;</td>
+                    </tr></table>
+                  </td>
+                  <td valign="top" style="padding-bottom:16px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; line-height:1.5; color:#454556;">
+                    <b style="color:#0F1A2E;">Submit in seconds.</b> Send any PDF or Excel document for signature straight from your browser.
+                  </td>
+                </tr>
+                <!-- row 2 -->
+                <tr>
+                  <td width="52" valign="top" style="width:52px; padding-bottom:16px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                      <td bgcolor="#F4EAD6" width="40" height="40" align="center" valign="middle" style="background-color:#F4EAD6; width:40px; height:40px; border-radius:10px; font-size:18px;">&#128256;</td>
+                    </tr></table>
+                  </td>
+                  <td valign="top" style="padding-bottom:16px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; line-height:1.5; color:#454556;">
+                    <b style="color:#0F1A2E;">Route to the right people.</b> A single sign-off or a multi-step chain, signed in order.
+                  </td>
+                </tr>
+                <!-- row 3 -->
+                <tr>
+                  <td width="52" valign="top" style="width:52px; padding-bottom:16px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                      <td bgcolor="#F4EAD6" width="40" height="40" align="center" valign="middle" style="background-color:#F4EAD6; width:40px; height:40px; border-radius:10px; font-size:18px;">&#9989;</td>
+                    </tr></table>
+                  </td>
+                  <td valign="top" style="padding-bottom:16px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; line-height:1.5; color:#454556;">
+                    <b style="color:#0F1A2E;">Signed &amp; audit-ready.</b> Every step is time-stamped, so you always know what a document is waiting on.
+                  </td>
+                </tr>
+                <!-- row 4 -->
+                <tr>
+                  <td width="52" valign="top" style="width:52px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                      <td bgcolor="#F4EAD6" width="40" height="40" align="center" valign="middle" style="background-color:#F4EAD6; width:40px; height:40px; border-radius:10px; font-size:18px;">&#127760;</td>
+                    </tr></table>
+                  </td>
+                  <td valign="top" style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:15px; line-height:1.5; color:#454556;">
+                    <b style="color:#0F1A2E;">Nothing to install.</b> It runs in your web browser, on desktop and mobile.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td class="px" align="center" style="padding:30px 24px 4px 24px;">
+              <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:20px; line-height:1.35; font-weight:700; color:#0F1A2E;">Explore SignFlow and start signing seamlessly.</div>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:18px 24px 6px 24px;">
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://signflow.devhqhb.online" style="height:48px;v-text-anchor:middle;width:220px;" arcsize="60%" strokecolor="#B8894A" fillcolor="#B8894A">
+                <w:anchorlock/>
+                <center style="color:#0F1A2E;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">Get Started Now</center>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-- -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">
+                <tr>
+                  <td bgcolor="#B8894A" align="center" style="background-color:#B8894A; border-radius:30px;">
+                    <a href="https://signflow.devhqhb.online" target="_blank" style="display:inline-block; padding:14px 34px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:16px; font-weight:700; color:#0F1A2E; text-decoration:none; border-radius:30px;">Get Started Now &nbsp;&#8594;</a>
+                  </td>
+                </tr>
+              </table>
+              <!--<![endif]-->
+            </td>
+          </tr>
+
+          <!-- INFO BOX -->
+          <tr>
+            <td class="px" style="padding:24px 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td bgcolor="#FAF7F0" style="background-color:#FAF7F0; border:1px solid #EBE4D6; border-radius:12px; padding:16px; font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#454556;">
+                    <b style="color:#0F1A2E;">Getting started.</b> IT will set up your account and email your login with a temporary password. Sign in at <a href="https://signflow.devhqhb.online" style="color:#A3763D; font-weight:600;">signflow.devhqhb.online</a>, change your password, and register your signature once — then you're ready to go.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- HELP BOX -->
+          <tr>
+            <td class="px" style="padding:14px 24px 4px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="border:1px solid #EBE4D6; border-radius:12px; background-color:#FFFFFF; padding:16px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td valign="top">
+                          <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:18px; font-weight:700; color:#B8894A;">Need help?</div>
+                          <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:14px; line-height:1.55; color:#454556; padding-top:6px;">For any questions or assistance, contact the IT team at <a href="mailto:it@hqhb.in" style="color:#A3763D; font-weight:600;">it@hqhb.in</a>.</div>
+                        </td>
+                        <td width="56" align="right" valign="top" style="width:56px;">
+                          <div style="font-family:Georgia,'Times New Roman',serif; font-size:54px; line-height:1; color:#EADCC4; font-weight:700;">?</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td align="center" style="padding:26px 24px 28px 24px;">
+              <div style="font-family:'Poppins',Arial,Helvetica,sans-serif; font-size:12px; line-height:1.6; color:#9A9A90;">
+                HQHB IT Department &middot; Umoor Iqtesadiyah<br />
+                You're receiving this internal announcement as a member of HQHB.
+              </div>
+            </td>
+          </tr>
+
+        </table>
+        <!-- /container -->
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

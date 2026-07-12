@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SignFlow · Launch Email Preview</title>
+  <style>
+    :root { --ink:#0F1A2E; --gold:#B8894A; --cream:#F5F1E8; --line:#E3DCCB; --muted:#8A8A80; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:'Poppins',system-ui,-apple-system,Segoe UI,Arial,sans-serif; background:#ECE7DA; color:var(--ink); }
+    header { position:sticky; top:0; z-index:5; background:rgba(245,241,232,.94); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); border-bottom:1px solid var(--line); }
+    .bar { max-width:1040px; margin:0 auto; padding:12px 18px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+    .brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; }
+    .brand img { height:26px; display:block; }
+    .controls { display:flex; gap:14px; flex-wrap:wrap; }
+    .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; background:#fff; }
+    .seg button { border:0; background:transparent; padding:7px 15px; font:inherit; font-size:13px; font-weight:600; color:var(--muted); cursor:pointer; }
+    .seg button.on { background:var(--ink); color:var(--cream); }
+    .seg.ver button.on { background:var(--gold); color:#fff; }
+    .stage { max-width:1040px; margin:0 auto; padding:24px 14px 26px; display:flex; justify-content:center; }
+    .frame { background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 8px 28px rgba(15,26,46,.14); overflow:hidden; transition:width .25s ease; width:600px; max-width:100%; }
+    iframe { display:block; width:100%; border:0; }
+    .hint { max-width:1040px; margin:0 auto; padding:0 18px 40px; color:var(--muted); font-size:12.5px; text-align:center; line-height:1.7; }
+    .hint a { color:var(--gold); font-weight:600; }
+    @media (max-width:640px){ .bar{ justify-content:center; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand"><img src="/signflow-logo.png" alt="SignFlow" /> Launch Email · Preview</div>
+      <div class="controls">
+        <div class="seg ver" id="ver">
+          <button data-v="gold" class="on">Gold / Navy</button>
+          <button data-v="purple">Purple</button>
+        </div>
+        <div class="seg" id="wid">
+          <button data-w="600" class="on">Desktop</button>
+          <button data-w="380">Mobile</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="stage">
+    <div class="frame" id="frame" style="width:600px;">
+      <iframe id="mail" src="/email/gold.html" scrolling="no" title="SignFlow launch email"></iframe>
+    </div>
+  </div>
+
+  <div class="hint">
+    Live preview of the SignFlow launch announcement email — toggle brand version and device width above.<br />
+    Direct files: <a href="/email/gold.html">gold.html</a> &middot; <a href="/email/purple.html">purple.html</a> &nbsp;·&nbsp; internal preview page.
+  </div>
+
+  <script>
+    var mail = document.getElementById('mail'), frame = document.getElementById('frame');
+    function fit(){ try { var d = mail.contentWindow.document; mail.style.height = (d.body.scrollHeight + 24) + 'px'; } catch (e) {} }
+    mail.addEventListener('load', fit);
+    window.addEventListener('resize', fit);
+    document.getElementById('ver').addEventListener('click', function(e){
+      var b = e.target.closest('button'); if(!b) return;
+      [].forEach.call(this.children, function(x){ x.classList.remove('on'); }); b.classList.add('on');
+      mail.src = '/email/' + b.dataset.v + '.html';
+    });
+    document.getElementById('wid').addEventListener('click', function(e){
+      var b = e.target.closest('button'); if(!b) return;
+      [].forEach.call(this.children, function(x){ x.classList.remove('on'); }); b.classList.add('on');
+      frame.style.width = b.dataset.w + 'px'; setTimeout(fit, 80);
+    });
+  </script>
+</body>
+</html>
