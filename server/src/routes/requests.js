@@ -882,6 +882,31 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
 });
 
 // ============================================================
+//   cancel / withdraw — the REQUESTOR pulls their own request while it's still
+//   pending (nobody has accepted or rejected it yet). Soft-delete to 'withdrawn'
+//   so it drops out of every actionable list but stays in the admin audit view.
+// ============================================================
+router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Not found" });
+    if (row.requestor_id !== req.user.id) return res.status(403).json({ error: "Not your request" });
+    if (row.status !== "pending") return res.status(400).json({ error: "Only a pending request can be withdrawn" });
+
+    await execute("UPDATE requests SET status = 'withdrawn', withdrawn_at = ? WHERE id = ?", [Date.now(), row.id]);
+    // Close any open steps/signers so nothing lingers as actionable.
+    await execute("UPDATE request_steps SET status = 'rejected' WHERE request_id = ? AND status IN ('pending','active')", [row.id]);
+    await execute(
+      "UPDATE request_step_signers SET status = 'rejected' WHERE status = 'pending' AND step_id IN (SELECT id FROM request_steps WHERE request_id = ?)",
+      [row.id]
+    );
+
+    const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
+    res.json({ request: await hydrateRequest(updated) });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 //   reminder
 // ============================================================
 router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
