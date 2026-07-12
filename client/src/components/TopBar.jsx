@@ -41,14 +41,12 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
       }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-3 sm:py-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-md flex items-center justify-center overflow-hidden shrink-0">
-            <svg width="32" height="32" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-              <rect width="48" height="48" rx="10" fill="#B8894A"/>
-              <rect x="8" y="6" width="20" height="26" rx="2.5" fill="#0F1A2E"/>
-              <path d="M12 13h12M12 17.5h10M12 22h7" stroke="#B8894A" strokeWidth="1.3" strokeLinecap="round" opacity="0.65"/>
-              <line x1="21" y1="37" x2="38" y2="14" stroke="#0F1A2E" strokeWidth="3.2" strokeLinecap="round"/>
-              <polygon points="21,37 18.5,41 23,38.5" fill="#0F1A2E"/>
-              <polygon points="38,14 40,10.5 36,12.5" fill="#0F1A2E"/>
+          <div className="w-8 h-8 flex items-center justify-center shrink-0">
+            <svg width="34" height="34" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <path d="M13 6 H29 L36 13 V37 Q36 42 31 42 H13 Q8 42 8 37 V11 Q8 6 13 6 Z" fill="#ffffff" stroke="#0F1A2E" strokeWidth="2.4" strokeLinejoin="round"/>
+              <path d="M29 6 V11 Q29 13 31 13 H36" fill="none" stroke="#0F1A2E" strokeWidth="2" strokeLinejoin="round"/>
+              <path d="M14 27 C 17 20, 20 21, 22 26 C 23 29, 25 24, 28 20" fill="none" stroke="#12274B" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M14 31 C 19 34, 25 32, 31 26" fill="none" stroke="#E8792E" strokeWidth="2.4" strokeLinecap="round"/>
             </svg>
           </div>
           <div className="min-w-0">
