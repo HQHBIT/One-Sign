@@ -269,6 +269,9 @@ async function runSchema() {
   await tryExec(`ALTER TABLE users ADD COLUMN its_id VARCHAR(16) DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD COLUMN auth_provider VARCHAR(16) NOT NULL DEFAULT 'local'`);
   await tryExec(`ALTER TABLE users ADD INDEX idx_users_its_id (its_id)`);
+  // Raw department string as sent by oneAccess (e.g. "IT"). Resolved to a team on
+  // login; kept for audit + re-mapping. Locally-created users may leave it null.
+  await tryExec(`ALTER TABLE users ADD COLUMN department VARCHAR(120) DEFAULT NULL`);
 
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
@@ -377,6 +380,7 @@ export async function hydrateUser(row) {
     name: row.name,
     role: row.role,
     team: row.team_id,
+    department: row.department || null,
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

@@ -98,11 +98,31 @@ export async function fetchOneAccessProfile(token) {
 }
 
 // Normalise a verified token + optional profile into the fields we store.
+// Profile (authoritative) wins over token claims for every field.
 export function toLocalIdentity(claims, profile) {
+  const src = { ...(claims || {}), ...(profile || {}) };
   const its = String(profile?.its_id ?? claims?.its_id ?? "").trim();
   const email = String(profile?.email ?? claims?.email ?? "").trim().toLowerCase();
   const name = String(profile?.fullname ?? claims?.fullname ?? claims?.name ?? email ?? "oneAccess user").trim();
-  return { its, email, name };
+  const department = pickDepartment(src);
+  return { its, email, name, department };
+}
+
+// oneAccess may label the department under different keys across environments;
+// try the common ones first, then any key that looks like a department/idara.
+export function pickDepartment(src) {
+  const known = ["department", "dept", "department_name", "departmentName", "idara", "team", "division", "unit"];
+  for (const k of known) {
+    const v = src?.[k];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  for (const k of Object.keys(src || {})) {
+    if (/depart|(^|_)dept($|_)|idara/i.test(k)) {
+      const v = src[k];
+      if (v != null && String(v).trim()) return String(v).trim();
+    }
+  }
+  return "";
 }
 
 export { crypto as _crypto };

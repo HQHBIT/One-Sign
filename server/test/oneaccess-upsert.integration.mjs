@@ -14,12 +14,18 @@ await initDb();
 const its = "T" + String(Date.now()).slice(-7);
 const email = "sso.new." + Date.now() + "@oneaccess.test";
 
-const u1 = await upsertOneAccessUser({ its, email, name: "SSO New User" });
+const norm = (s) => String(s || "").toLowerCase().replace(/\b(team|department)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+
+const u1 = await upsertOneAccessUser({ its, email, name: "SSO New User", department: "IT" });
 check("new SSO user is created", !!u1?.id);
 check("role is requestor", u1.role === "requestor");
 check("its_id is stored", u1.its_id === its);
 check("auth_provider is oneaccess", u1.auth_provider === "oneaccess");
 check("email is stored", (u1.email || "").toLowerCase() === email);
+check("department stored raw", u1.department === "IT");
+check("department resolved to a team", !!u1.team_id);
+const t1 = await queryOne("SELECT name FROM teams WHERE id = ?", [u1.team_id]);
+check("'IT' maps to the IT team (e.g. IT Team)", norm(t1?.name) === "it");
 
 // Same person signs in again (matched by ITS id) — update, never duplicate.
 const u2 = await upsertOneAccessUser({ its, email, name: "SSO Renamed" });
@@ -36,7 +42,16 @@ const u3 = await upsertOneAccessUser({ its: "", email: email2, name: "Local Pers
 check("adopts existing local account by email (keeps its id + role)", u3.id === seedId && u3.role === "approver");
 check("existing account is now oneaccess-managed", u3.auth_provider === "oneaccess");
 
+// Unknown department → a team is created so the SSO user is never left unmapped.
+const uniqDept = "QA-" + Date.now();
+const its5 = "T" + String(Date.now()).slice(-6) + "9";
+const u5 = await upsertOneAccessUser({ its: its5, email: "sso.qa." + Date.now() + "@oneaccess.test", name: "QA Person", department: uniqDept });
+check("unknown department creates + assigns a new team", !!u5.team_id);
+const t5 = await queryOne("SELECT name FROM teams WHERE id = ?", [u5.team_id]);
+check("new team is named after the department", t5?.name === uniqDept);
+
 // cleanup
-await execute("DELETE FROM users WHERE its_id = ? OR id = ?", [its, seedId]);
+await execute("DELETE FROM users WHERE its_id IN (?, ?) OR id = ?", [its, its5, seedId]);
+await execute("DELETE FROM teams WHERE id = ?", [u5.team_id]);
 console.log(fail ? `\n${fail} check(s) failed` : "\nAll oneAccess upsert checks passed");
 process.exit(fail ? 1 : 0);
