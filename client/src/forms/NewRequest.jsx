@@ -294,7 +294,9 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
   // --- "add your own" toolbar, rendered inside each mode's placement section so the
   //     requestor signs / dates the SAME document view where they place the signer box.
-  const selfBar = (requestType !== "leave" && file?.ext === "pdf") ? (
+  //     Available for any PDF (incl. Leave, now a normal upload type); a signature
+  //     can't be overlaid on a spreadsheet, so it stays PDF-only.
+  const selfBar = (file?.ext === "pdf") ? (
     <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,.08)" }}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-medium opacity-80 flex items-center gap-1">
