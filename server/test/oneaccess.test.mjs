@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
-import { _setPublicKeyForTest, verifyOneAccessToken, toLocalIdentity } from "../src/oneaccess.js";
+import { _setPublicKeyForTest, verifyOneAccessToken, toLocalIdentity, pickDepartment } from "../src/oneaccess.js";
 
 // Generate a throwaway RSA keypair so we can sign + verify offline (no network).
 const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
@@ -50,6 +50,19 @@ test("toLocalIdentity prefers the profile and lowercases email", () => {
 test("toLocalIdentity falls back to claims when profile is missing", () => {
   const id = toLocalIdentity({ its_id: "9", email: "C@D.com", fullname: "Claim Only" }, null);
   assert.deepEqual({ its: id.its, email: id.email, name: id.name }, { its: "9", email: "c@d.com", name: "Claim Only" });
+});
+
+test("toLocalIdentity extracts department from the profile", () => {
+  const id = toLocalIdentity({ its_id: "30309207" }, { its_id: "30309207", email: "moiz.barwaniwala@hqhb.in", fullname: "Moiz B.", department: "IT" });
+  assert.equal(id.department, "IT");
+  assert.equal(id.email, "moiz.barwaniwala@hqhb.in");
+});
+
+test("pickDepartment tolerates alternate field names", () => {
+  assert.equal(pickDepartment({ dept: "Finance" }), "Finance");
+  assert.equal(pickDepartment({ department_name: "Operations" }), "Operations");
+  assert.equal(pickDepartment({ idara: "IT" }), "IT");
+  assert.equal(pickDepartment({ email: "x@y.com" }), "");
 });
 
 console.log("oneaccess: all tests passed");

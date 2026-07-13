@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import { queryOne, hydrateUser, execute } from "../db.js";
+import { queryOne, query, hydrateUser, execute } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
@@ -45,26 +45,53 @@ router.post("/oneaccess/callback", async (req, res, next) => {
     let profile = null;
     try { profile = await fetchOneAccessProfile(token); } catch { /* use claims */ }
 
-    const { its, email, name } = toLocalIdentity(claims, profile);
+    const { its, email, name, department } = toLocalIdentity(claims, profile);
     if (!its && !email) return res.status(400).json({ error: "oneAccess profile missing its_id and email" });
+    // One-time visibility into the real profile shape so field names can be verified.
+    if (profile) console.log(`[oneaccess] profile keys: ${Object.keys(profile).join(", ")} | mapped department: ${JSON.stringify(department)}`);
 
-    const user = await upsertOneAccessUser({ its, email, name });
+    const user = await upsertOneAccessUser({ its, email, name, department });
     const sfToken = signToken(user.id);
     res.json({ token: sfToken, user: await hydrateUser(user) });
   } catch (e) { next(e); }
 });
 
+// Normalise a department/team name for matching: lowercase, drop the generic
+// words ("team", "department", …) and punctuation. So "IT" and "IT Team" both
+// collapse to "it" and map to the same team.
+const normDept = (s) => String(s || "").toLowerCase()
+  .replace(/\b(team|teams|department|departments|dept\.?|division|unit|section)\b/g, " ")
+  .replace(/[^a-z0-9]+/g, " ").trim();
+
+// Resolve an oneAccess department string to a local team id. Matches an existing
+// team by normalised name; if none matches, creates a team named after the
+// department so an SSO user is never left without one.
+export async function resolveTeamIdForDepartment(dept) {
+  const raw = String(dept || "").trim();
+  const target = normDept(raw);
+  if (!target) return null;
+  const teams = await query("SELECT id, name FROM teams");
+  const match = teams.find((t) => normDept(t.name) === target);
+  if (match) return match.id;
+  const id = "t_oa_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  await execute("INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?)", [id, raw, Date.now()]);
+  return id;
+}
+
 // Mirror an oneAccess identity into the local users table. New users are always
 // requestors (per config); existing ones (matched by ITS id, else email) are kept
-// in sync and marked oneAccess-managed.
-export async function upsertOneAccessUser({ its, email, name }) {
+// in sync and marked oneAccess-managed. Department is stored raw AND resolved to a
+// team so an SSO-created user is mapped identically to a locally-onboarded one.
+export async function upsertOneAccessUser({ its, email, name, department }) {
+  const dept = String(department || "").trim();
+  const teamId = dept ? await resolveTeamIdForDepartment(dept) : null;
   let row = null;
   if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ?", [its]);
   if (!row && email) row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email]);
   if (row) {
     await execute(
-      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), auth_provider = 'oneaccess' WHERE id = ?",
-      [name, email, its, row.id]
+      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), auth_provider = 'oneaccess' WHERE id = ?",
+      [name, email, its, dept, teamId, row.id]
     );
     return await queryOne("SELECT * FROM users WHERE id = ?", [row.id]);
   }
@@ -73,8 +100,8 @@ export async function upsertOneAccessUser({ its, email, name }) {
   const randomHash = bcrypt.hashSync(crypto.randomUUID(), 10);
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
   await execute(
-    "INSERT INTO users (id, email, password_hash, name, role, its_id, auth_provider, created_at) VALUES (?, ?, ?, ?, 'requestor', ?, 'oneaccess', ?)",
-    [id, safeEmail, randomHash, name, its || null, Date.now()]
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, auth_provider, created_at) VALUES (?, ?, ?, ?, 'requestor', ?, ?, ?, 'oneaccess', ?)",
+    [id, safeEmail, randomHash, name, its || null, dept || null, teamId, Date.now()]
   );
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
 }
