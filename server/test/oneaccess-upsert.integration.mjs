@@ -50,8 +50,14 @@ check("unknown department creates + assigns a new team", !!u5.team_id);
 const t5 = await queryOne("SELECT name FROM teams WHERE id = ?", [u5.team_id]);
 check("new team is named after the department", t5?.name === uniqDept);
 
+// oneAccess system/admin accounts send an email as its_id (longer than a numeric
+// ITS) — the column must accept it (regression for "Data too long for its_id").
+const longIts = "sso.admin." + Date.now() + "@onelogin.example";
+const u6 = await upsertOneAccessUser({ its: longIts, email: longIts, name: "OA Admin", department: "" });
+check("email-style its_id is accepted (its_id column widened)", !!u6?.id && u6.its_id === longIts);
+
 // cleanup
-await execute("DELETE FROM users WHERE its_id IN (?, ?) OR id = ?", [its, its5, seedId]);
+await execute("DELETE FROM users WHERE its_id IN (?, ?, ?) OR id = ?", [its, its5, longIts, seedId]);
 await execute("DELETE FROM teams WHERE id = ?", [u5.team_id]);
 console.log(fail ? `\n${fail} check(s) failed` : "\nAll oneAccess upsert checks passed");
 process.exit(fail ? 1 : 0);

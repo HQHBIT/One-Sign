@@ -266,7 +266,10 @@ async function runSchema() {
 
   // oneAccess SSO: mirror the external ITS id + which identity provider owns the
   // account. auth_provider = 'local' (password) or 'oneaccess' (SSO).
-  await tryExec(`ALTER TABLE users ADD COLUMN its_id VARCHAR(16) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN its_id VARCHAR(120) DEFAULT NULL`);
+  // Widen its_id for existing DBs: oneAccess sends a numeric ITS for members but an
+  // email for system/admin accounts (e.g. admin@onelogin.com), which overflowed 16.
+  await tryExec(`ALTER TABLE users MODIFY COLUMN its_id VARCHAR(120) DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD COLUMN auth_provider VARCHAR(16) NOT NULL DEFAULT 'local'`);
   await tryExec(`ALTER TABLE users ADD INDEX idx_users_its_id (its_id)`);
   // Raw department string as sent by oneAccess (e.g. "IT"). Resolved to a team on

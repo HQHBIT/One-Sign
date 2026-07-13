@@ -111,7 +111,10 @@ export function toLocalIdentity(claims, profile) {
 // oneAccess may label the department under different keys across environments;
 // try the common ones first, then any key that looks like a department/idara.
 export function pickDepartment(src) {
-  const known = ["department", "dept", "department_name", "departmentName", "idara", "team", "division", "unit"];
+  // oneAccess member profiles carry the department under `department_name`
+  // (confirmed against the live profile). Fall back to related fields, then a
+  // generic scan, so this still works if a deployment labels it differently.
+  const known = ["department_name", "department", "dept", "departmentName", "sub_department_name", "idara", "team", "division", "unit"];
   for (const k of known) {
     const v = src?.[k];
     if (v != null && String(v).trim()) return String(v).trim();
