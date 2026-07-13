@@ -65,4 +65,8 @@ test("pickDepartment tolerates alternate field names", () => {
   assert.equal(pickDepartment({ email: "x@y.com" }), "");
 });
 
+test("pickDepartment prefers department_name over idara (real oneAccess shape)", () => {
+  assert.equal(pickDepartment({ department_name: "IT", idara: "Umoor Iqtesadiyah", sub_department_name: "Support" }), "IT");
+});
+
 console.log("oneaccess: all tests passed");
