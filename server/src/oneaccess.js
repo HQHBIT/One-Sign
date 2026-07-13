@@ -110,7 +110,21 @@ export function toLocalIdentity(claims, profile) {
   const email = String(profile?.email ?? claims?.email ?? "").trim().toLowerCase();
   const name = String(profile?.fullname ?? claims?.fullname ?? claims?.name ?? email ?? "oneAccess user").trim();
   const department = pickDepartment(src);
-  return { its, email, name, department };
+  const isAdmin = pickIsAdmin(src);
+  // Community identifiers (region + local congregation). Reference only — SignFlow
+  // routes on team/department, so these are stored but not used for access control.
+  const jamaat = String(src?.jamaat ?? "").trim();
+  const jamiaat = String(src?.jamiaat ?? "").trim();
+  return { its, email, name, department, isAdmin, jamaat, jamiaat };
+}
+
+// Whether the oneAccess identity is an administrator. The token carries the
+// authoritative signals (`is_admin: true`, `central_role: "super_admin"`); the
+// profile's `role_name` is a fallback. Any of them being admin-ish → true.
+export function pickIsAdmin(src) {
+  if (src?.is_admin === true || src?.is_admin === 1 || src?.is_admin === "true") return true;
+  const roleText = `${src?.central_role ?? ""} ${src?.role_name ?? ""}`.toLowerCase();
+  return /\b(super[\s_-]?admin|administrator|admin)\b/.test(roleText);
 }
 
 // oneAccess may label the department under different keys across environments;

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
-import { _setPublicKeyForTest, verifyOneAccessToken, toLocalIdentity, pickDepartment } from "../src/oneaccess.js";
+import { _setPublicKeyForTest, verifyOneAccessToken, toLocalIdentity, pickDepartment, pickIsAdmin } from "../src/oneaccess.js";
 
 // Generate a throwaway RSA keypair so we can sign + verify offline (no network).
 const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
@@ -67,6 +67,34 @@ test("pickDepartment tolerates alternate field names", () => {
 
 test("pickDepartment prefers department_name over idara (real oneAccess shape)", () => {
   assert.equal(pickDepartment({ department_name: "IT", idara: "Umoor Iqtesadiyah", sub_department_name: "Support" }), "IT");
+});
+
+test("pickIsAdmin honours the token is_admin flag and super_admin role", () => {
+  assert.equal(pickIsAdmin({ is_admin: true }), true);
+  assert.equal(pickIsAdmin({ central_role: "super_admin" }), true);
+  assert.equal(pickIsAdmin({ role_name: "Administrator" }), true);
+  assert.equal(pickIsAdmin({ is_admin: "true" }), true);
+});
+
+test("pickIsAdmin treats regular members as non-admin", () => {
+  assert.equal(pickIsAdmin({ is_admin: false, role_name: "user", central_role: "member" }), false);
+  assert.equal(pickIsAdmin({ role_name: "Approver" }), false);
+  assert.equal(pickIsAdmin({}), false);
+});
+
+test("toLocalIdentity surfaces admin flag + jamaat/jamiaat from the profile", () => {
+  const id = toLocalIdentity(
+    { its_id: "1", is_admin: true, central_role: "super_admin" },
+    { its_id: "1", email: "a@b.com", fullname: "Admin", jamaat: "Mumbai", jamiaat: "Saifee" }
+  );
+  assert.equal(id.isAdmin, true);
+  assert.equal(id.jamaat, "Mumbai");
+  assert.equal(id.jamiaat, "Saifee");
+});
+
+test("toLocalIdentity marks ordinary members as non-admin", () => {
+  const id = toLocalIdentity({ its_id: "2", is_admin: false }, { its_id: "2", email: "m@b.com", fullname: "Member", role_name: "user" });
+  assert.equal(id.isAdmin, false);
 });
 
 console.log("oneaccess: all tests passed");

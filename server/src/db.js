@@ -275,6 +275,9 @@ async function runSchema() {
   // Raw department string as sent by oneAccess (e.g. "IT"). Resolved to a team on
   // login; kept for audit + re-mapping. Locally-created users may leave it null.
   await tryExec(`ALTER TABLE users ADD COLUMN department VARCHAR(120) DEFAULT NULL`);
+  // oneAccess community identifiers (reference only — not used for routing).
+  await tryExec(`ALTER TABLE users ADD COLUMN jamaat VARCHAR(120) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN jamiaat VARCHAR(120) DEFAULT NULL`);
 
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
@@ -384,6 +387,8 @@ export async function hydrateUser(row) {
     role: row.role,
     team: row.team_id,
     department: row.department || null,
+    jamaat: row.jamaat || null,
+    jamiaat: row.jamiaat || null,
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

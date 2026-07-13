@@ -45,12 +45,12 @@ router.post("/oneaccess/callback", async (req, res, next) => {
     let profile = null;
     try { profile = await fetchOneAccessProfile(token); } catch { /* use claims */ }
 
-    const { its, email, name, department } = toLocalIdentity(claims, profile);
+    const { its, email, name, department, isAdmin, jamaat, jamiaat } = toLocalIdentity(claims, profile);
     if (!its && !email) return res.status(400).json({ error: "oneAccess profile missing its_id and email" });
     // One-time visibility into the real profile shape so field names can be verified.
-    if (profile) console.log(`[oneaccess] profile keys: ${Object.keys(profile).join(", ")} | mapped department: ${JSON.stringify(department)}`);
+    if (profile) console.log(`[oneaccess] profile keys: ${Object.keys(profile).join(", ")} | department: ${JSON.stringify(department)} | admin: ${isAdmin} | jamaat: ${JSON.stringify(jamaat)} | jamiaat: ${JSON.stringify(jamiaat)}`);
 
-    const user = await upsertOneAccessUser({ its, email, name, department });
+    const user = await upsertOneAccessUser({ its, email, name, department, isAdmin, jamaat, jamiaat });
     const sfToken = signToken(user.id);
     res.json({ token: sfToken, user: await hydrateUser(user) });
   } catch (e) { next(e); }
@@ -78,20 +78,26 @@ export async function resolveTeamIdForDepartment(dept) {
   return id;
 }
 
-// Mirror an oneAccess identity into the local users table. New users are always
-// requestors (per config); existing ones (matched by ITS id, else email) are kept
-// in sync and marked oneAccess-managed. Department is stored raw AND resolved to a
-// team so an SSO-created user is mapped identically to a locally-onboarded one.
-export async function upsertOneAccessUser({ its, email, name, department }) {
+// Mirror an oneAccess identity into the local users table. Existing users are
+// matched by ITS id, else email, kept in sync, and marked oneAccess-managed.
+// Department is stored raw AND resolved to a team so an SSO-created user is mapped
+// identically to a locally-onboarded one. Role: an oneAccess admin (is_admin /
+// super_admin) becomes a SignFlow admin; everyone else defaults to requestor.
+// On re-login we PROMOTE to admin but never auto-demote, so a role granted inside
+// SignFlow (e.g. approver, or a manually-added admin) survives a plain SSO login.
+export async function upsertOneAccessUser({ its, email, name, department, isAdmin = false, jamaat = "", jamiaat = "" }) {
   const dept = String(department || "").trim();
+  const jam = String(jamaat || "").trim();
+  const jamia = String(jamiaat || "").trim();
   const teamId = dept ? await resolveTeamIdForDepartment(dept) : null;
   let row = null;
   if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ?", [its]);
   if (!row && email) row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email]);
   if (row) {
+    const role = isAdmin ? "admin" : row.role; // promote oneAccess admins; keep existing role otherwise
     await execute(
-      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), auth_provider = 'oneaccess' WHERE id = ?",
-      [name, email, its, dept, teamId, row.id]
+      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), role = ?, jamaat = COALESCE(NULLIF(?, ''), jamaat), jamiaat = COALESCE(NULLIF(?, ''), jamiaat), auth_provider = 'oneaccess' WHERE id = ?",
+      [name, email, its, dept, teamId, role, jam, jamia, row.id]
     );
     return await queryOne("SELECT * FROM users WHERE id = ?", [row.id]);
   }
@@ -99,9 +105,10 @@ export async function upsertOneAccessUser({ its, email, name, department }) {
   // Unusable local password — these users authenticate through oneAccess only.
   const randomHash = bcrypt.hashSync(crypto.randomUUID(), 10);
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
+  const role = isAdmin ? "admin" : "requestor";
   await execute(
-    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, auth_provider, created_at) VALUES (?, ?, ?, ?, 'requestor', ?, ?, ?, 'oneaccess', ?)",
-    [id, safeEmail, randomHash, name, its || null, dept || null, teamId, Date.now()]
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', ?)",
+    [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now()]
   );
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
 }
