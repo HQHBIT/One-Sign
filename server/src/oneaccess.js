@@ -18,14 +18,19 @@ import jwt from "jsonwebtoken";
 
 const trimSlash = (s) => (s || "").replace(/\/+$/, "");
 
+// The redirect SSO flow only needs these four PUBLIC values + the public key
+// (fetched at runtime). client_id/secret are for the server-to-server External
+// API only, which SignFlow doesn't use — so they're optional here. Defaults point
+// at the UAT oneAccess with the `signflow-uat` app so the prod deployment has SSO
+// on out of the box; local dev overrides them via server/.env (signflow-local).
 export const oneAccess = {
-  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL),     // .../api
-  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL), // login/registration site
-  appSlug: process.env.ONEACCESS_APP_SLUG || "",              // redirect=<slug>
+  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL || "https://uat-oneaccess.umooriqtesadiyah.org/api"),
+  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL || "https://uat-oneaccess.umooriqtesadiyah.org"),
+  appSlug: process.env.ONEACCESS_APP_SLUG || "signflow-uat",   // redirect=<slug>
   appId: process.env.ONEACCESS_APP_ID || "",
-  redirectUrl: process.env.ONEACCESS_REDIRECT_URL || "",      // our registered base_url (SSO landing)
-  clientId: process.env.ONEACCESS_CLIENT_ID || "",            // M2M — backend only
-  clientSecret: process.env.ONEACCESS_CLIENT_SECRET || "",    // M2M — backend only
+  redirectUrl: process.env.ONEACCESS_REDIRECT_URL || "https://signflow.umooriqtesadiyah.org", // registered base_url
+  clientId: process.env.ONEACCESS_CLIENT_ID || "",            // external API only — unused by SSO
+  clientSecret: process.env.ONEACCESS_CLIENT_SECRET || "",    // external API only — unused by SSO
   publicKeyPath: process.env.ONEACCESS_PUBLIC_KEY_PATH || "./keys/oneaccess-public.pem",
   accessTokenTtl: process.env.ONEACCESS_ACCESS_TOKEN_TTL || "15m",
 };
