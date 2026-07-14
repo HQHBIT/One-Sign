@@ -23,14 +23,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fill = false }) {
+export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fill = false, rotation = 0, onRotate }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} fill={fill} />;
+      onPages={onPages} lockedAspect={lockedAspect} fill={fill} rotation={rotation} onRotate={onRotate} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
 }
@@ -55,7 +55,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false, rotation = 0, onRotate }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
   // Page 1's native aspect — used so placeholders for unrendered pages reserve
@@ -123,18 +123,28 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
 
   return (
     <div className="card overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "var(--c-paper)" }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b gap-3" style={{ borderColor: "rgba(15,26,46,.08)", backgroundColor: "var(--c-paper)" }}>
         <div className="text-xs opacity-60">{pdf.numPages} page{pdf.numPages === 1 ? "" : "s"}</div>
-        {renderedCount < pdf.numPages && (
-          <div className="text-[10px] opacity-50 tracking-wider uppercase">{renderedCount} / {pdf.numPages} loaded</div>
-        )}
+        <div className="flex items-center gap-3">
+          {renderedCount < pdf.numPages && (
+            <div className="text-[10px] opacity-50 tracking-wider uppercase">{renderedCount} / {pdf.numPages} loaded</div>
+          )}
+          {onRotate && (
+            <button type="button" onClick={onRotate} title="Rotate the document 90°"
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md border transition-colors"
+              style={{ borderColor: "rgba(15,26,46,.18)", color: "var(--c-ink)" }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg>
+              Rotate{rotation ? ` · ${((rotation % 360) + 360) % 360}°` : ""}
+            </button>
+          )}
+        </div>
       </div>
       <div style={{ ...(fill ? {} : { maxHeight: 720, overflowY: "auto" }), backgroundColor: "var(--c-paper-2)" }}>
         {pages.map(p => (
           <LazyPdfPage key={p} pdf={pdf} pageNum={p}
             pageAspect={pageAspect}
             onRendered={() => setRenderedCount(c => c + 1)}
-            rotation={0}
+            rotation={rotation}
             markers={markers.filter(m => (m.page || 1) === p)}
             editable={editable}
             armed={armed}

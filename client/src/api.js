@@ -139,9 +139,10 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType }) {
+  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
+    if (rotation) fd.append("rotation", String(rotation));
     if (workflow) fd.append("workflow", JSON.stringify(workflow));
     if (direct) fd.append("direct", "true");
     if (signers) fd.append("signers", JSON.stringify(signers));

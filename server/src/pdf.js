@@ -134,6 +134,40 @@ export async function bakeOrientation(srcBytes, targetOrientation) {
   return { bakedBytes, pageRotations: plan };
 }
 
+// Rotate EVERY page clockwise by an explicit number of quarter-turns (0-3) — this
+// is the requestor's rotate-control choice, distinct from bakeOrientation's
+// portrait/landscape targeting. Returns the new bytes plus a per-page rotation
+// array (all the same total angle) so the markers can be remapped to match.
+export async function bakeUniformRotation(srcBytes, quarterTurns) {
+  const turns = ((((quarterTurns | 0) % 4) + 4) % 4);
+  const pageCount = (await PDFDocument.load(srcBytes)).getPageCount();
+  if (turns === 0) return { bakedBytes: srcBytes, pageRotations: Array(pageCount).fill(0) };
+  let bytes = srcBytes;
+  for (let t = 0; t < turns; t++) bytes = await rotateAll90CW(bytes);
+  return { bakedBytes: bytes, pageRotations: Array(pageCount).fill(turns * 90) };
+}
+
+// One 90° CW rebuild of every page (same technique as bakeOrientation, applied
+// unconditionally). New pages carry /Rotate = 0 with swapped MediaBox dims.
+async function rotateAll90CW(srcBytes) {
+  const src = await PDFDocument.load(srcBytes);
+  const srcPages = src.getPages();
+  for (const p of srcPages) { if (!p.node.Contents()) p.drawText(""); }
+  const out = await PDFDocument.create();
+  for (let i = 0; i < srcPages.length; i++) {
+    const { width, height } = srcPages[i].getSize();
+    const rot = ((srcPages[i].getRotation().angle % 360) + 360) % 360;
+    const sideways = rot === 90 || rot === 270;
+    const visW = sideways ? height : width;
+    const visH = sideways ? width : height;
+    const newPage = out.addPage([visH, visW]); // 90° swaps width/height
+    newPage.setRotation(degrees(0));
+    const embedded = await out.embedPage(srcPages[i]);
+    drawEmbeddedRotated(newPage, embedded, 90, visW, visH);
+  }
+  return await out.save();
+}
+
 // pdf-lib's drawPage anchor (x, y) is the rotation center; the embedded page is
 // translated to (x, y) and then rotated by `rotate` (CCW-positive). For 90° CW
 // we use degrees(-90) and anchor at (0, visW) so the four source corners map

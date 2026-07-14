@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, applySelfMarks } from "../pdf.js";
+import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,22 +30,38 @@ function parseOrientation(raw) {
   return v === "landscape" ? "landscape" : v === "portrait" ? "portrait" : null;
 }
 
-// Bake the orientation into the uploaded PDF bytes and return the new buffer
-// plus the per-page rotation plan. Non-PDFs and missing orientation pass through.
-async function bakeRequestFile({ buffer, fileType, orientation }) {
-  if (fileType !== "pdf" || !orientation) {
-    return { bakedBuffer: buffer, pageRotations: [] };
-  }
-  const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
-  return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
+// Normalise a rotation value to 0/90/180/270 (clockwise degrees).
+function normalizeRotation(raw) {
+  const n = Math.round(Number(raw) || 0);
+  return ((n % 360) + 360) % 360;
 }
 
-// Apply the per-page rotation plan to a marker. If the marker's page was rotated
-// 90° CW during the bake, rotate the marker the same way; otherwise return as-is.
+// Bake the requestor's rotate-control choice (explicit clockwise degrees) — or,
+// failing that, an orientation target — into the uploaded PDF bytes. Returns the
+// new buffer plus the per-page rotation plan so markers can be remapped. Non-PDFs
+// pass through untouched.
+async function bakeRequestFile({ buffer, fileType, orientation, rotation }) {
+  if (fileType !== "pdf") return { bakedBuffer: buffer, pageRotations: [] };
+  const deg = normalizeRotation(rotation);
+  if (deg) {
+    const { bakedBytes, pageRotations } = await bakeUniformRotation(buffer, deg / 90);
+    return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
+  }
+  if (orientation) {
+    const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
+    return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
+  }
+  return { bakedBuffer: buffer, pageRotations: [] };
+}
+
+// Apply the per-page rotation plan to a marker: rotate it the same number of 90°
+// CW quarter-turns the page was rotated (handles 0/90/180/270). Coords stay in
+// MediaBox %.
 function transformMarkerForBake(marker, pageRotations) {
   const pageIdx = (marker.page || 1) - 1;
-  if (pageRotations[pageIdx] !== 90) return marker;
-  const r = rotateMarker90CW({ x: marker.x, y: marker.y, w: marker.w, h: marker.h });
+  const deg = (((pageRotations[pageIdx] || 0) % 360) + 360) % 360;
+  let r = { x: marker.x, y: marker.y, w: marker.w, h: marker.h };
+  for (let i = 0; i < deg / 90; i++) r = rotateMarker90CW(r);
   return { ...marker, ...r };
 }
 
@@ -208,7 +224,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     let bakedBuffer, pageRotations;
     try {
       ({ bakedBuffer, pageRotations } = await bakeRequestFile({
-        buffer: file.buffer, fileType, orientation
+        buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation
       }));
     } catch (e) {
       console.error("[create] bake failed", e);
@@ -284,7 +300,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   let bakedBuffer, pageRotations;
   try {
     ({ bakedBuffer, pageRotations } = await bakeRequestFile({
-      buffer: file.buffer, fileType, orientation
+      buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation
     }));
   } catch (e) {
     console.error("[create workflow] bake failed", e);
@@ -370,7 +386,7 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   const orientation = parseOrientation(req.body?.orientation);
   let bakedBuffer, pageRotations;
   try {
-    ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation }));
+    ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation }));
   } catch (e) {
     console.error("[create direct] bake failed", e);
     return res.status(400).json({ error: "Could not process PDF orientation" });

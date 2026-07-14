@@ -19,6 +19,7 @@ const ViewerFallback = () =>
 
 export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType }) {
   const [file, setFile] = useState(null);
+  const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
   const [mode, setMode] = useState("single"); // "single" | "workflow"
   const [instantApproval, setInstantApproval] = useState(false);
   const [requestType, setRequestType] = useState(defaultType || "general");
@@ -84,6 +85,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     const reader = new FileReader();
     reader.onload = () => {
       setFile({ name: f.name, base64: reader.result, type: f.type, ext, blob: f });
+      setDocRotation(0);
       setMarker(null);
       setWorkflow([]);
       setPlacingSlot(null);
@@ -93,6 +95,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     };
     reader.readAsDataURL(f);
   };
+
+  // Rotate the document 90° clockwise per tap (0→90→180→270→0). Markers re-flow
+  // with the page in the viewer; the final angle is baked into the file on submit.
+  const rotate = () => setDocRotation(r => (r + 90) % 360);
 
   // ---------- aspect ratio to lock the marker rectangle to ----------
   // When placing a signer's marker in workflow mode, snap the rectangle to that
@@ -386,13 +392,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       const sdArg = signerDateFields.length > 0 ? signerDateFields : undefined;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType, rotation: docRotation });
       } else if (mode === "direct") {
         if (!canSubmitDirect) { notify("Add at least one person and place each of their signature boxes", "error"); return; }
-        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, dateFields: s.dateFields || [] })), selfMarks: selfArg, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, dateFields: s.dateFields || [] })), selfMarks: selfArg, instantApproval, note, requestType, rotation: docRotation });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
-        await addRequest({ file: submitFile, workflow, selfMarks: selfArg, instantApproval, note, requestType });
+        await addRequest({ file: submitFile, workflow, selfMarks: selfArg, instantApproval, note, requestType, rotation: docRotation });
       }
       notify("Request submitted", "success");
       onDone();
@@ -440,7 +446,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   <div className="font-medium truncate">{file.name}</div>
                   <div className="text-xs opacity-60 uppercase tracking-wider">{file.ext}</div>
                 </div>
-                <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarker(null); setWorkflow([]); }}>
+                <button className="btn-ghost text-xs" onClick={() => { setFile(null); setDocRotation(0); setMarker(null); setWorkflow([]); }}>
                   <X size={12} /> Remove
                 </button>
               </div>
@@ -488,7 +494,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             <Section n="03" title="Mark the signature field" desc="Place the box where the signer should sign — press and hold on a phone, or click-drag on a computer.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable
-                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
               </Suspense>
               {marker && (
                 <div className="mt-3 text-xs font-mono opacity-60">
@@ -565,7 +571,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                     <>
                       <Suspense fallback={<ViewerFallback />}>
                         <DocPreview file={file} markers={allMarkers} editable
-                          onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+                          onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                       </Suspense>
                       {placingSlot?.directIdx != null && (
                         <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
@@ -625,7 +631,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
               <Suspense fallback={<ViewerFallback />}>
                 <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
-                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
               </Suspense>
               {placingSlot && (
                 <div className="mt-2 text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
