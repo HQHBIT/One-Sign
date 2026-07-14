@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { ArrowRight, ArrowLeft, Check } from "lucide-react";
 import { api } from "../api.js";
+import { PasswordInput } from "./PasswordInput.jsx";
 
 // DISABLED: expense feature commented out
 /* Local-time YYYY-MM-DD for the date input's default value.
@@ -170,7 +171,7 @@ export function LoginScreen({ login }) {
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
                   <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus={!authCfg.oneAccessEnabled} />
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
+                  <PasswordInput value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
                   <div className="flex justify-end mb-6">
                     <button type="button" onClick={openForgot}
                       className="text-xs opacity-60 hover:opacity-100 underline">
@@ -203,7 +204,7 @@ export function LoginScreen({ login }) {
               <input type="email" value={reg.email} onChange={e => setReg({ ...reg, email: e.target.value })} className="w-full mb-4" maxLength={191} required />
 
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-              <input type="password" value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} className="w-full mb-4" placeholder="At least 6 characters" required />
+              <PasswordInput value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} className="w-full mb-4" placeholder="At least 6 characters" required />
 
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Team / Department</label>
               <input type="text" value={reg.teamName} onChange={e => setReg({ ...reg, teamName: e.target.value })} className="w-full mb-4" maxLength={191} placeholder="e.g., Finance" />
@@ -314,7 +315,7 @@ export function LoginScreen({ login }) {
                 autoFocus
                 disabled={forgotState === "sending"} />
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
-              <input type="password"
+              <PasswordInput
                 value={forgotNewPassword}
                 onChange={e => setForgotNewPassword(e.target.value)}
                 className="w-full mb-4"
@@ -322,7 +323,7 @@ export function LoginScreen({ login }) {
                 required
                 disabled={forgotState === "sending"} />
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
-              <input type="password"
+              <PasswordInput
                 value={forgotConfirm}
                 onChange={e => setForgotConfirm(e.target.value)}
                 className="w-full mb-5"

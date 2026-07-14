@@ -393,7 +393,10 @@ function RequestorView(props) {
   const [newType, setNewType] = useState(null); // pre-selected request type when opening NewRequest
   const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
-  const approved = my.filter(r => r.status === "approved");
+  // Approved documents the requestor can view: ones they RAISED, plus ones they were
+  // asked to sign and signed — so a requestor who also approves finds them here too.
+  const iSigned = r => (r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id && s.status === "signed"));
+  const approved = requests.filter(r => r.status === "approved" && (r.requestorId === user.id || iSigned(r)));
   // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
   const awaitingMySig = requests.filter(r => {
     if (r.status !== "pending" || !r.workflow?.length) return false;

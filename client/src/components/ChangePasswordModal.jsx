@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { X, Check, Eye as EyeIcon, EyeOff } from "lucide-react";
 import { api } from "../api.js";
+import { PasswordInput } from "./PasswordInput.jsx";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
 
@@ -58,9 +59,8 @@ export function ChangePasswordModal({ onClose, notify }) {
           <input type="text" name="username" autoComplete="username" style={{ display: "none" }} tabIndex={-1} aria-hidden="true" />
 
           <label className="text-xs tracking-wider uppercase opacity-70 block mb-1">Current password</label>
-          <input className="w-full mb-4"
+          <PasswordInput className="w-full mb-4"
             autoFocus
-            type="password"
             name="current-pwd"
             autoComplete="current-password"
             value={cur}
