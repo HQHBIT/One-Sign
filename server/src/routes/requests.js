@@ -236,7 +236,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     for (const a of approvers) {
       sendEmail({
         to: a.email, template: "new_request",
-        ctx: { approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name }
+        ctx: { approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id }
       }).catch(e => console.error("email fail", e));
     }
 
@@ -428,7 +428,7 @@ async function notifyNextSigner(requestId, fileName, requestorName) {
   if (!u) return;
   sendEmail({
     to: u.email, template: "new_request",
-    ctx: { approverName: u.name, requestorName, fileName, teamName: "(workflow step)" }
+    ctx: { approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId }
   }).catch(e => console.error("email fail", e));
 }
 
@@ -654,7 +654,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
       const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
       sendEmail({
         to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name }
+        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
       }).catch(() => {});
     }
   }
@@ -808,7 +808,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
       const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
       sendEmail({
         to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name }
+        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
       }).catch(() => {});
     }
   }
@@ -846,7 +846,7 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     sendEmail({
       to: requestor?.email, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason, requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -873,7 +873,7 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     sendEmail({
       to: requestor?.email, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: "Withdrawn within 1h window" }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: "Withdrawn within 1h window", requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -930,7 +930,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"),
     if (next) {
       const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
       if (u) {
-        sendEmail({ to: u.email, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name } }).catch(() => {});
+        sendEmail({ to: u.email, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
         count = 1;
       }
     } else if (row.target_team_id) {
@@ -939,7 +939,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"),
         WHERE u.role = 'approver' AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
-        sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name } }).catch(() => {});
+        sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
       }
       count = approvers.length;
     }
@@ -959,7 +959,7 @@ router.post("/:id/force-finalize", authRequired, requireRole("admin"), async (re
     const approver  = await queryOne("SELECT * FROM users WHERE id = ?", [row.approver_id]);
     sendEmail({
       to: requestor?.email, template: "approved",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: approver?.name }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: approver?.name, requestId: row.id }
     }).catch(() => {});
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });

@@ -67,6 +67,17 @@ const FileX = (props) => <FileText {...props} />;
    Constants + helpers live in ./lib/.
    ============================================================ */
 
+// Can this user act (approve/reject) on the request right now? Mirrors the
+// eligibility ApproverView uses — decides whether a deep-linked request opens the
+// actionable review drawer (ApproveDrawer) or the read-only preview (PreviewDrawer).
+function canActOnRequest(r, user) {
+  if (!r || !user || r.status !== "pending") return false;
+  if (r.approverId === user.id) return true;
+  if ((r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id))) return true;
+  if (r.targetTeamId && (user.signingAuthorityTeams || []).includes(r.targetTeamId)) return true;
+  return false;
+}
+
 // ============================================================
 //   ROOT APP
 // ============================================================
@@ -79,6 +90,7 @@ export default function App() {
   const [emails, setEmails] = useState([]);
   const [toasts, setToasts] = useState([]); // queue — multiple notifications stack
   const [tick, setTick] = useState(0);
+  const [deepLinkReq, setDeepLinkReq] = useState(null); // request opened via an email deep link (?request=<id>)
 
   const notify = useCallback((msg, kind = "info") => {
     const id = uid("t");
@@ -110,21 +122,26 @@ export default function App() {
     (async () => {
       api.onAuthExpired(() => { setUser(null); notify("Session expired — please sign in again", "error"); });
 
-      // oneAccess SSO landing: the redirect brings us back with ?token=<oneaccess jwt>.
-      // Exchange it for a SignFlow session, then scrub it from the URL so a refresh
-      // or bookmark can't replay it.
+      // Email deep link (?request=<id>) + oneAccess SSO landing (?token=<jwt>).
+      // Stash the request id up front so it survives a login / SSO round-trip, then
+      // scrub both params so a refresh or bookmark can't replay them.
       try {
         const params = new URLSearchParams(window.location.search);
+        const deepReq = params.get("request");
+        if (deepReq) localStorage.setItem("sf_deeplink", deepReq);
         const ssoToken = params.get("token");
         if (ssoToken) {
-          params.delete("token");
-          const clean = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
           try {
             const { token: sfToken } = await api.oneAccessCallback(ssoToken);
             api.setToken(sfToken);
           } catch (e) {
             notify(e.message || "oneAccess sign-in failed", "error");
           }
+        }
+        if (deepReq || ssoToken) {
+          params.delete("request");
+          params.delete("token");
+          const clean = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
           window.history.replaceState({}, "", clean);
         }
       } catch { /* no-op */ }
@@ -147,6 +164,26 @@ export default function App() {
       setBooted(true);
     })();
   }, []);
+
+  // Open a request deep-linked from an email button, once we're signed in. The id
+  // was stashed at boot so it survives the login / SSO round-trip. Fetch a fresh
+  // list so we're sure the request is present, then open the right drawer.
+  useEffect(() => {
+    if (!user) return;
+    const id = localStorage.getItem("sf_deeplink");
+    if (!id) return;
+    localStorage.removeItem("sf_deeplink");
+    (async () => {
+      try {
+        const list = await api.listRequests();
+        const r = (list || []).find(x => x.id === id);
+        if (r) setDeepLinkReq(r);
+        else notify("That document isn't available on your account.", "error");
+      } catch {
+        notify("Couldn't open that document — please try again.", "error");
+      }
+    })();
+  }, [user, notify]);
 
   // ---- refresh strategy ----
   // The countdown for the approval-window pill needs to tick at least every
@@ -263,6 +300,13 @@ export default function App() {
           refresh={() => refresh(user)}
           tick={tick}
         />
+      )}
+      {user && deepLinkReq && (
+        canActOnRequest(deepLinkReq, user)
+          ? <ApproveDrawer req={deepLinkReq} user={user} users={users} teams={teams}
+              approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+              onClose={() => setDeepLinkReq(null)} notify={notify} />
+          : <PreviewDrawer req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
       )}
       <ToastStack toasts={toasts} />
       <ConfirmHost />

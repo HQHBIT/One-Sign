@@ -64,6 +64,10 @@ const caption = (inner) => `<p style="margin:0 0 14px;font-family:Arial,Helvetic
 // punctuation) followed by the recipient's name.
 const greet = (name) => p(`${esc(BRAND.greeting)} ${esc(name)}`);
 
+// Deep link to a specific request in the app. Falls back to the app root when no
+// requestId is in the context, so the button is always a valid link.
+const requestUrl = (c) => (c && c.requestId ? `${BRAND.appUrl}/?request=${encodeURIComponent(c.requestId)}` : BRAND.appUrl);
+
 // A label/value detail box. Rows with an empty value are dropped.
 function details(rows, { mono = false, accent = false } = {}) {
   const list = rows.filter((r) => r && r.value);
@@ -158,14 +162,14 @@ const templates = {
           { label: "Team", value: c.teamName },
           { label: "Requested by", value: c.requestorName },
         ]) +
-        button("Review & sign", BRAND.appUrl, "gold") +
+        button("Review & sign", requestUrl(c), "gold") +
         caption("Sign in to SignFlow to review and sign the document."),
     }),
     text: [
       `${BRAND.greeting} ${c.approverName}`, ``,
       `${c.requestorName} has submitted "${c.fileName}" for your approval.`,
       c.teamName ? `Team: ${c.teamName}` : null, ``,
-      `Review & sign: ${BRAND.appUrl}`, ``, `— ${BRAND.fromName}`,
+      `Review & sign: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].filter((x) => x !== null).join("\n"),
   }),
 
@@ -182,13 +186,13 @@ const templates = {
           { label: "Document", value: c.fileName },
           { label: "Approved by", value: c.approverName },
         ]) +
-        button("View approved documents", BRAND.appUrl, "gold"),
+        button("View document", requestUrl(c), "gold"),
     }),
     text: [
       `${BRAND.greeting} ${c.requestorName}`, ``,
       `Your document "${c.fileName}" has been approved by ${c.approverName}.`,
       `The signed file is available under Approved Requests.`, ``,
-      `Open SignFlow: ${BRAND.appUrl}`, ``, `— ${BRAND.fromName}`,
+      `View the document: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].join("\n"),
   }),
 
@@ -206,12 +210,12 @@ const templates = {
           { label: "Rejected by", value: c.approverName },
           { label: "Reason", value: c.reason || "" },
         ]) +
-        button("Open SignFlow", BRAND.appUrl, "navy"),
+        button("View document", requestUrl(c), "navy"),
     }),
     text: [
       `${BRAND.greeting} ${c.requestorName}`, ``,
       `Your document "${c.fileName}" was rejected by ${c.approverName}${c.reason ? `.\nReason: ${c.reason}` : "."}`, ``,
-      `Open SignFlow: ${BRAND.appUrl}`, ``, `— ${BRAND.fromName}`,
+      `View the document: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].join("\n"),
   }),
 
@@ -225,12 +229,12 @@ const templates = {
         greet(c.approverName) +
         p(`This is a gentle reminder from <strong>${esc(c.requestorName)}</strong> about a document pending your approval.`) +
         details([{ label: "Document", value: c.fileName }]) +
-        button("Review & sign", BRAND.appUrl, "gold"),
+        button("Review & sign", requestUrl(c), "gold"),
     }),
     text: [
       `${BRAND.greeting} ${c.approverName}`, ``,
       `This is a reminder from ${c.requestorName} about "${c.fileName}" pending your approval.`, ``,
-      `Review & sign: ${BRAND.appUrl}`, ``, `— ${BRAND.fromName}`,
+      `Review & sign: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].join("\n"),
   }),
 
