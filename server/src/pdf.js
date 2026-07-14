@@ -7,6 +7,26 @@ import { bakeOrientationPlan } from "./pdf-rotation.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIGNED_DIR = path.join(__dirname, "..", "uploads", "signed");
 
+// Given a page's clockwise display rotation (from /Rotate) and a marker box in the
+// app's %-convention (top-down, relative to the UNROTATED MediaBox), return pdf-lib
+// draw params (x, y, width, height in points; y-up bottom-left; + a rotate angle)
+// that place content filling that box and UPRIGHT on the displayed (rotated) page.
+// For a /Rotate=0 page this is exactly the flat mapping used everywhere before.
+export function placeInRotatedPage(page, box) {
+  const rot = ((page.getRotation().angle % 360) + 360) % 360;
+  const { width: pw, height: ph } = page.getSize();
+  const bw = (box.w / 100) * pw;
+  const bh = (box.h / 100) * ph;
+  const bx = (box.x / 100) * pw;
+  const by = ph - (box.y / 100) * ph - bh;
+  switch (rot) {
+    case 90:  return { x: bx + bw, y: by,      width: bh, height: bw, rotate: degrees(90) };
+    case 180: return { x: bx + bw, y: by + bh, width: bw, height: bh, rotate: degrees(180) };
+    case 270: return { x: bx,      y: by + bh, width: bh, height: bw, rotate: degrees(270) };
+    default:  return { x: bx,      y: by,      width: bw, height: bh, rotate: degrees(0) };
+  }
+}
+
 export async function stampPdf({ srcPath, signaturePath, marker, outName }) {
   return stampPdfMulti({
     srcPath,
@@ -21,9 +41,9 @@ export async function stampPdf({ srcPath, signaturePath, marker, outName }) {
   });
 }
 
-// Stamps signatures onto a PDF using MediaBox-space coordinates. The applicant's
-// orientation choice is already baked into the PDF on submit (see bakeOrientation),
-// so every page has /Rotate = 0 and the signature is drawn flat in MediaBox y-up.
+// Stamps signatures onto a PDF using the app's %-coordinates. A page may carry a
+// native /Rotate (the requestor's rotate-control choice); placeInRotatedPage maps
+// each stamp so it lands upright on the displayed (rotated) page.
 export async function stampPdfMulti({ srcPath, stamps, outName }) {
   const pdfBytes = await fs.readFile(srcPath);
   const pdf = await PDFDocument.load(pdfBytes);
@@ -44,24 +64,18 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     const pageIdx = Math.max(0, (s.page || 1) - 1);
     if (pageIdx >= pdf.getPageCount()) continue;
     const page = pdf.getPage(pageIdx);
-    const { width: pw, height: ph } = page.getSize();
-
-    const boxW = (s.w / 100) * pw;
-    const boxH = (s.h / 100) * ph;
-    const boxX = (s.x / 100) * pw;
-    const boxYTop = (s.y / 100) * ph;
-    const boxY = ph - boxYTop - boxH;
+    const place = placeInRotatedPage(page, s);
 
     // A date stamp draws the signer's signing date as text in the placed box.
     if (s.type === "date") {
-      drawDateInBox(page, font, String(s.text || ""), boxX, boxY, boxW, boxH);
+      drawDateInBox(page, font, String(s.text || ""), place);
       continue;
     }
 
     // Signature fills the exact rectangle the requestor placed — no caption line.
     // The signing date, when wanted, is stamped separately in its own date box.
     const sigImg = await embed(s.signaturePath);
-    page.drawImage(sigImg, { x: boxX, y: boxY, width: boxW, height: boxH });
+    page.drawImage(sigImg, place);
   }
 
   const out = await pdf.save();
@@ -72,19 +86,29 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
 }
 
 
-// Draws a date string centred in the placed box, auto-shrinking to fit the width.
-// Shared by stampPdfMulti (a signer's signing date) and applySelfMarks (the
-// requestor's own date). Coords are MediaBox y-up; box origin is bottom-left.
-function drawDateInBox(page, font, text, boxX, boxY, boxW, boxH) {
+// Draws a date string centred in a placed box, auto-shrinking to fit. Shared by
+// stampPdfMulti and applySelfMarks. `place` is the output of placeInRotatedPage:
+// the box's pre-rotation rectangle (x, y bottom-left; width along the text; height)
+// plus a rotate angle, so the date reads upright on rotated pages too. For a
+// /Rotate=0 page this reduces to the original centred, horizontal placement.
+function drawDateInBox(page, font, text, place) {
   if (!text) return;
-  let size = Math.min(boxH * 0.72, 24);
-  const maxW = boxW * 0.96;
+  const { x, y, width, height, rotate } = place;
+  let size = Math.min(height * 0.72, 24);
+  const maxW = width * 0.96;
   while (size > 4 && font.widthOfTextAtSize(text, size) > maxW) size -= 0.5;
   const tw = font.widthOfTextAtSize(text, size);
+  // Centre in the rectangle's own (pre-rotation) frame, then rotate the start point
+  // into place — drawText rotates around its baseline origin.
+  const lx = Math.max(0, (width - tw) / 2);
+  const ly = (height - size) / 2 + size * 0.12;
+  const ang = (typeof rotate === "object" ? rotate.angle : rotate) || 0;
+  const rad = (ang * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
   page.drawText(text, {
-    x: boxX + Math.max(0, (boxW - tw) / 2),
-    y: boxY + (boxH - size) / 2 + size * 0.12,
-    size, font, color: rgb(0.1, 0.12, 0.2)
+    x: x + (lx * cos - ly * sin),
+    y: y + (lx * sin + ly * cos),
+    size, font, rotate, color: rgb(0.1, 0.12, 0.2)
   });
 }
 
@@ -134,38 +158,21 @@ export async function bakeOrientation(srcBytes, targetOrientation) {
   return { bakedBytes, pageRotations: plan };
 }
 
-// Rotate EVERY page clockwise by an explicit number of quarter-turns (0-3) — this
-// is the requestor's rotate-control choice, distinct from bakeOrientation's
-// portrait/landscape targeting. Returns the new bytes plus a per-page rotation
-// array (all the same total angle) so the markers can be remapped to match.
+// Rotate EVERY page clockwise by an explicit number of quarter-turns (0-3) — the
+// requestor's rotate-control choice. Uses pdf-lib's NATIVE page rotation (/Rotate),
+// which is lossless: the page content bytes are untouched, so scanned/image PDFs
+// stay crisp. (Re-embedding each page into a fresh document to force /Rotate=0
+// visibly faded + stretched real scans — the bug this replaces.) The stamping reads
+// /Rotate and places signatures upright via placeInRotatedPage, so no per-page
+// marker transform is needed here → pageRotations is empty.
 export async function bakeUniformRotation(srcBytes, quarterTurns) {
   const turns = ((((quarterTurns | 0) % 4) + 4) % 4);
-  const pageCount = (await PDFDocument.load(srcBytes)).getPageCount();
-  if (turns === 0) return { bakedBytes: srcBytes, pageRotations: Array(pageCount).fill(0) };
-  let bytes = srcBytes;
-  for (let t = 0; t < turns; t++) bytes = await rotateAll90CW(bytes);
-  return { bakedBytes: bytes, pageRotations: Array(pageCount).fill(turns * 90) };
-}
-
-// One 90° CW rebuild of every page (same technique as bakeOrientation, applied
-// unconditionally). New pages carry /Rotate = 0 with swapped MediaBox dims.
-async function rotateAll90CW(srcBytes) {
-  const src = await PDFDocument.load(srcBytes);
-  const srcPages = src.getPages();
-  for (const p of srcPages) { if (!p.node.Contents()) p.drawText(""); }
-  const out = await PDFDocument.create();
-  for (let i = 0; i < srcPages.length; i++) {
-    const { width, height } = srcPages[i].getSize();
-    const rot = ((srcPages[i].getRotation().angle % 360) + 360) % 360;
-    const sideways = rot === 90 || rot === 270;
-    const visW = sideways ? height : width;
-    const visH = sideways ? width : height;
-    const newPage = out.addPage([visH, visW]); // 90° swaps width/height
-    newPage.setRotation(degrees(0));
-    const embedded = await out.embedPage(srcPages[i]);
-    drawEmbeddedRotated(newPage, embedded, 90, visW, visH);
+  if (turns === 0) return { bakedBytes: srcBytes, pageRotations: [] };
+  const pdf = await PDFDocument.load(srcBytes);
+  for (const p of pdf.getPages()) {
+    p.setRotation(degrees((p.getRotation().angle + turns * 90) % 360));
   }
-  return await out.save();
+  return { bakedBytes: await pdf.save(), pageRotations: [] };
 }
 
 // pdf-lib's drawPage anchor (x, y) is the rotation center; the embedded page is
@@ -225,17 +232,13 @@ export async function applySelfMarks(pdfBytes, marks) {
     const pageIdx = Math.max(0, (m.page || 1) - 1);
     if (pageIdx >= pdf.getPageCount()) continue;
     const page = pdf.getPage(pageIdx);
-    const { width: pw, height: ph } = page.getSize();
-    const boxW = (m.w / 100) * pw;
-    const boxH = (m.h / 100) * ph;
-    const boxX = (m.x / 100) * pw;
-    const boxY = ph - ((m.y / 100) * ph) - boxH;
+    const place = placeInRotatedPage(page, m);
 
     if (m.type === "date") {
-      drawDateInBox(page, font, String(m.text || ""), boxX, boxY, boxW, boxH);
+      drawDateInBox(page, font, String(m.text || ""), place);
     } else if (m.signaturePath) {
       const img = await embed(m.signaturePath);
-      page.drawImage(img, { x: boxX, y: boxY, width: boxW, height: boxH });
+      page.drawImage(img, place);
     }
   }
 

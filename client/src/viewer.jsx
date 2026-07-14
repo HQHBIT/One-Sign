@@ -263,6 +263,11 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // The page's own /Rotate (e.g. a stored file the requestor rotated on submit).
+  // The `rotation` prop is ADDED on top so an approver viewing an already-rotated
+  // file sees it upright, and markers (stored in the un-rotated frame) still align.
+  const [nativeRot, setNativeRot] = useState(0);
+  const effRot = (((nativeRot + rotation) % 360) + 360) % 360;
   // Pending long-press: { timer, cx, cy } while a stationary touch is held.
   const longPressRef = useRef(null);
 
@@ -295,15 +300,18 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     let cancelled = false;
     (async () => {
       const page = await pdf.getPage(pageNum);
+      const nr = page.rotate || 0;
+      if (!cancelled) setNativeRot(nr);
+      const eff = (((nr + rotation) % 360) + 360) % 360;
       const wrapEl = wrapRef.current;
       const padX = 24;
       const containerW = Math.max(200, (wrapEl?.clientWidth || 800) - padX);
-      // Render at the user's chosen rotation. The stamp itself is always drawn
-      // horizontally in MediaBox regardless of this rotation.
-      const baseViewport = page.getViewport({ scale: 1, rotation });
+      // Render at the page's native rotation plus the user's chosen rotation. The
+      // stamp itself is drawn upright regardless (see placeInRotatedPage server-side).
+      const baseViewport = page.getViewport({ scale: 1, rotation: eff });
       const cssScale = containerW / baseViewport.width;
       const dpr = window.devicePixelRatio || 1;
-      const viewport = page.getViewport({ scale: cssScale * dpr, rotation });
+      const viewport = page.getViewport({ scale: cssScale * dpr, rotation: eff });
       const cssW = baseViewport.width * cssScale;
       const cssH = baseViewport.height * cssScale;
       const canvas = canvasRef.current;
@@ -356,7 +364,7 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     const locked = lockRect(vx, vy, vw, vh);
     if (locked) { vx = locked.vx; vy = locked.vy; vw = locked.vw; vh = locked.vh; }
     // Convert viewport-space coords to MediaBox-space for storage and stamping.
-    const m = viewportToMediabox(rotation, vx, vy, vw, vh);
+    const m = viewportToMediabox(effRot, vx, vy, vw, vh);
     onAddMarker(m.x, m.y, m.w, m.h);
     onPlaced?.();
   };
@@ -423,11 +431,11 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
         <canvas ref={canvasRef} style={{ display: "block", cursor: editable ? "crosshair" : "default" }} />
         {markers.map((m, i) => {
           // Convert MediaBox coords (storage) → viewport coords for display at current rotation
-          const v = mediaboxToViewport(rotation, m.x, m.y, m.w, m.h);
+          const v = mediaboxToViewport(effRot, m.x, m.y, m.w, m.h);
           const updateHandler = (editable && onUpdateMarker)
             ? (vpNext) => {
                 // Convert viewport coords back to MediaBox before propagating up
-                const mb = viewportToMediabox(rotation, vpNext.x, vpNext.y, vpNext.w, vpNext.h);
+                const mb = viewportToMediabox(effRot, vpNext.x, vpNext.y, vpNext.w, vpNext.h);
                 onUpdateMarker(m.id, { x: mb.x, y: mb.y, w: mb.w, h: mb.h, page: pageNum });
               }
             : undefined;

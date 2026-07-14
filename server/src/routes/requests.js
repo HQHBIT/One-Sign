@@ -36,22 +36,14 @@ function normalizeRotation(raw) {
   return ((n % 360) + 360) % 360;
 }
 
-// Bake the requestor's rotate-control choice (explicit clockwise degrees) — or,
-// failing that, an orientation target — into the uploaded PDF bytes. Returns the
-// new buffer plus the per-page rotation plan so markers can be remapped. Non-PDFs
-// pass through untouched.
-async function bakeRequestFile({ buffer, fileType, orientation, rotation }) {
-  if (fileType !== "pdf") return { bakedBuffer: buffer, pageRotations: [] };
-  const deg = normalizeRotation(rotation);
-  if (deg) {
-    const { bakedBytes, pageRotations } = await bakeUniformRotation(buffer, deg / 90);
-    return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
-  }
-  if (orientation) {
-    const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
-    return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
-  }
-  return { bakedBuffer: buffer, pageRotations: [] };
+// Bake an orientation target into the uploaded PDF bytes and return the new buffer
+// plus the per-page rotation plan. (The requestor's explicit rotate-control choice
+// is applied separately + losslessly up front — see the create handler.) Non-PDFs
+// and missing orientation pass through untouched.
+async function bakeRequestFile({ buffer, fileType, orientation }) {
+  if (fileType !== "pdf" || !orientation) return { bakedBuffer: buffer, pageRotations: [] };
+  const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
+  return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
 }
 
 // Apply the per-page rotation plan to a marker: rotate it the same number of 90°
@@ -162,6 +154,24 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     const rawType = (req.body?.requestType || "general").toString().toLowerCase();
     const requestType = allowedTypes.includes(rawType) ? rawType : "general";
 
+    // ---------- the requestor's rotate-control choice (0/90/180/270 CW) ----------
+    // Applied losslessly up front via native /Rotate, so the stored file stays crisp
+    // and the self-signature, approver markers, and content all share one upright
+    // orientation. Stamping is rotation-aware (placeInRotatedPage), so the markers
+    // themselves need no coordinate transform.
+    if (fileType === "pdf") {
+      const rotDeg = normalizeRotation(req.body?.rotation);
+      if (rotDeg) {
+        try {
+          const { bakedBytes } = await bakeUniformRotation(file.buffer, rotDeg / 90);
+          file.buffer = Buffer.from(bakedBytes);
+        } catch (e) {
+          console.error("[create] rotate failed", e);
+          return res.status(400).json({ error: "Could not rotate the PDF" });
+        }
+      }
+    }
+
     // ---------- optional: the requestor's OWN signature / date stamps ----------
     // Applied to the uploaded PDF up-front so the self-signed/dated document flows
     // through whichever routing path (single / workflow / direct) below.
@@ -224,7 +234,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     let bakedBuffer, pageRotations;
     try {
       ({ bakedBuffer, pageRotations } = await bakeRequestFile({
-        buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation
+        buffer: file.buffer, fileType, orientation
       }));
     } catch (e) {
       console.error("[create] bake failed", e);
@@ -386,7 +396,7 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   const orientation = parseOrientation(req.body?.orientation);
   let bakedBuffer, pageRotations;
   try {
-    ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation }));
+    ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation }));
   } catch (e) {
     console.error("[create direct] bake failed", e);
     return res.status(400).json({ error: "Could not process PDF orientation" });
