@@ -92,6 +92,16 @@ function dateStampsFor(fields, signedAtMs) {
   }));
 }
 
+// A signer's signature box(es): the stored multi-box list (boxes_json) if present,
+// else the single legacy marker column. One signer may sign in several spots — each
+// box gets stamped with the same signer's signature.
+export function signerBoxes(s) {
+  let arr = [];
+  if (s.boxes_json) { try { const a = JSON.parse(s.boxes_json); if (Array.isArray(a)) arr = a; } catch { /* fall through */ } }
+  if (arr.length) return arr.map(b => ({ page: b.page || s.page || 1, x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) }));
+  return [{ page: s.page || 1, x: Number(s.marker_x), y: Number(s.marker_y), w: Number(s.marker_w), h: Number(s.marker_h) }];
+}
+
 // ============================================================
 //   list (role-scoped)
 // ============================================================
@@ -383,8 +393,17 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
   for (const [i, s] of signers.entries()) {
     if (!s.userId) return res.status(400).json({ error: `Recipient ${i + 1}: userId required` });
-    if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.w !== "number" || typeof s.h !== "number") {
-      return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+    // Accept a boxes[] array (one signer, several signature spots) or the legacy
+    // single x/y/w/h shape.
+    if (!Array.isArray(s.boxes) || s.boxes.length === 0) {
+      if (typeof s.x === "number" && typeof s.y === "number" && typeof s.w === "number" && typeof s.h === "number") {
+        s.boxes = [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+      } else {
+        return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+      }
+    }
+    if (s.boxes.some(b => typeof b.x !== "number" || typeof b.y !== "number" || typeof b.w !== "number" || typeof b.h !== "number")) {
+      return res.status(400).json({ error: `Recipient ${i + 1}: invalid signature box` });
     }
   }
 
@@ -402,8 +421,10 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     return res.status(400).json({ error: "Could not process PDF orientation" });
   }
   for (const s of signers) {
-    const baked = transformMarkerForBake({ x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 }, pageRotations);
-    s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+    s.boxes = s.boxes.map(b => {
+      const baked = transformMarkerForBake({ x: b.x, y: b.y, w: b.w, h: b.h, page: b.page || 1 }, pageRotations);
+      return { page: b.page || 1, x: baked.x, y: baked.y, w: baked.w, h: baked.h };
+    });
     s.dateFields = bakeDateFields(s.dateFields, pageRotations);
   }
 
@@ -428,10 +449,11 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     );
     for (let j = 0; j < signers.length; j++) {
       const s = signers[j];
+      const first = s.boxes[0];
       await conn.execute(
-        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, s.dateFields.length ? JSON.stringify(s.dateFields) : null]
+        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json, boxes_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [uid("sg"), stepId, j + 1, s.userId, first.page || 1, first.x, first.y, first.w, first.h, 0, s.dateFields.length ? JSON.stringify(s.dateFields) : null, s.boxes.length > 1 ? JSON.stringify(s.boxes) : null]
       );
     }
     await conn.commit();
@@ -613,13 +635,13 @@ async function approveWorkflowStep({ req, res, row, signer }) {
   const stamps = allSigned.flatMap(s => {
     const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
     return [
-      {
+      // one stamp per signature box this signer placed (multi-box)
+      ...signerBoxes(s).map(b => ({
         signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-        w: Number(s.marker_w), h: Number(s.marker_h),
+        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
         signerName: s.user_name,
         signedAt
-      },
+      })),
       // the signer's own placeable date fields, all showing their signing date
       ...dateStampsFor(s.date_fields_json, signedAt)
     ];
@@ -781,13 +803,13 @@ async function approveWorkflowStepInline({ req, row, signer }) {
   const stamps = allSigned.flatMap(s => {
     const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
     return [
-      {
+      // one stamp per signature box this signer placed (multi-box)
+      ...signerBoxes(s).map(b => ({
         signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-        w: Number(s.marker_w), h: Number(s.marker_h),
+        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
         signerName: s.user_name,
         signedAt
-      },
+      })),
       // the signer's own placeable date fields, all showing their signing date
       ...dateStampsFor(s.date_fields_json, signedAt)
     ];

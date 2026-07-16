@@ -591,13 +591,16 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
   req.workflow.forEach((step, si) => {
     const team = teams.find(t => t.id === step.teamId);
     step.signers.forEach((s, gi) => {
-      out.push({
-        id: s.id || `s${si}-${gi}`,
-        page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h,
+      // A signer may have several signature boxes (multi-box). Hydration always
+      // provides `boxes`; fall back to the single legacy marker just in case.
+      const boxes = (s.boxes && s.boxes.length) ? s.boxes : [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+      boxes.forEach((b, bi) => out.push({
+        id: `${s.id || `s${si}-${gi}`}-b${bi}`,
+        page: b.page || 1, x: b.x, y: b.y, w: b.w, h: b.h,
         color: STEP_COLORS[si % STEP_COLORS.length],
-        label: `${step.order}.${s.order} ${s.userName}${team ? ` · ${team.name}` : ""}${s.status === "signed" ? " ✓" : ""}`,
+        label: `${step.order}.${s.order} ${s.userName}${boxes.length > 1 ? ` #${bi + 1}` : ""}${team ? ` · ${team.name}` : ""}${s.status === "signed" ? " ✓" : ""}`,
         highlight: highlightUserId && s.userId === highlightUserId && s.status === "pending"
-      });
+      }));
       (s.dateFields || []).forEach((d, fi) => out.push(dateMark(d, `${si}-${gi}-${fi}`, s.status === "signed" ? s.signedAt : null)));
     });
   });

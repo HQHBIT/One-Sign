@@ -309,6 +309,10 @@ async function runSchema() {
   //  - per-signer date fields for direct / workflow requests (JSON [{page,x,y,w,h}])
   //  - the team-approver's date fields for the legacy single/team path (stored on the request)
   await tryExec(`ALTER TABLE request_step_signers ADD COLUMN date_fields_json TEXT NULL`);
+  // A signer may have MORE THAN ONE signature box on the document (multiple
+  // signatures from the same person). boxes_json holds the full list; the legacy
+  // marker_x/y/w/h columns keep the first box for back-compat. Null => single box.
+  await tryExec(`ALTER TABLE request_step_signers ADD COLUMN boxes_json TEXT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
 
   // Requestor can withdraw a still-pending request ('withdrawn' status + timestamp).
@@ -456,7 +460,12 @@ export async function hydrateRequest(row) {
       rotation: Number(s.rotation || 0),
       status: s.status,
       signedAt: s.signed_at ? Number(s.signed_at) : null,
-      dateFields: parseJsonArr(s.date_fields_json)
+      dateFields: parseJsonArr(s.date_fields_json),
+      // All signature boxes for this signer (multi-box). Falls back to the single
+      // legacy marker box so older requests hydrate unchanged.
+      boxes: (parseJsonArr(s.boxes_json).length
+        ? parseJsonArr(s.boxes_json)
+        : [{ page: s.page, x: Number(s.marker_x), y: Number(s.marker_y), w: Number(s.marker_w), h: Number(s.marker_h) }])
     }))
   }));
 
