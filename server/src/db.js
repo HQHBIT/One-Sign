@@ -347,6 +347,15 @@ async function runSchema() {
     INDEX idx_user_merges_merged (merged_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // oneAccess accounts are never admins — admin access is via the local
+  // email/password login only. Downgrade any oneAccess-provider admin (e.g. an SSO
+  // super-admin auto-promoted under the earlier rule) to requestor so it signs in
+  // as a normal user; the admin role stays on the local account (it@hqhb.in).
+  // Idempotent: updates 0 rows once none remain. Guarded so a transient error
+  // never blocks boot.
+  try { await pool.query("UPDATE users SET role = 'requestor' WHERE auth_provider = 'oneaccess' AND role = 'admin'"); }
+  catch { /* users table shape not ready on a brand-new schema — next boot applies it */ }
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 

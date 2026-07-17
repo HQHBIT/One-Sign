@@ -51,6 +51,11 @@ router.post("/oneaccess/callback", async (req, res, next) => {
     if (profile) console.log(`[oneaccess] profile keys: ${Object.keys(profile).join(", ")} | department: ${JSON.stringify(department)} | admin: ${isAdmin} | jamaat: ${JSON.stringify(jamaat)} | jamiaat: ${JSON.stringify(jamiaat)}`);
 
     const user = await upsertOneAccessUser({ its, email, emails, name, department, isAdmin, jamaat, jamiaat });
+    // Admins never get a session via oneAccess — they must use the email/password
+    // admin login. (Regular users continue normally.)
+    if (user?.adminBlocked) {
+      return res.status(403).json({ error: "Admin accounts sign in through the admin login (email and password), not oneAccess." });
+    }
     const sfToken = signToken(user.id);
     res.json({ token: sfToken, user: await hydrateUser(user) });
   } catch (e) { next(e); }
@@ -81,10 +86,11 @@ export async function resolveTeamIdForDepartment(dept) {
 // Mirror an oneAccess identity into the local users table. Existing users are
 // matched by ITS id, else email, kept in sync, and marked oneAccess-managed.
 // Department is stored raw AND resolved to a team so an SSO-created user is mapped
-// identically to a locally-onboarded one. Role: an oneAccess admin (is_admin /
-// super_admin) becomes a SignFlow admin; everyone else defaults to requestor.
-// On re-login we PROMOTE to admin but never auto-demote, so a role granted inside
-// SignFlow (e.g. approver, or a manually-added admin) survives a plain SSO login.
+// identically to a locally-onboarded one.
+// ROLE RULE: oneAccess users are NEVER admins — admin access is email/password
+// only. New SSO users default to requestor; a matched account keeps whatever role
+// it already has; and if the matched account is an admin the login is REFUSED
+// (returns { adminBlocked }) so no admin session is ever issued via oneAccess.
 export async function upsertOneAccessUser({ its, email, emails, name, department, isAdmin = false, jamaat = "", jamiaat = "" }) {
   const dept = String(department || "").trim();
   // Emails to try when matching an existing account — the full oneAccess set if we
@@ -108,16 +114,19 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
     );
   }
   if (row) {
-    const role = isAdmin ? "admin" : row.role; // promote oneAccess admins; keep existing role otherwise
+    // Admins never authenticate via oneAccess — leave the account untouched and
+    // signal the callback to refuse. Admin access is email/password only.
+    if (row.role === "admin") return { adminBlocked: true, email: row.email };
     // Preserve the existing PRIMARY email (e.g. @hqhb.in) as the account identity —
     // never let a differing oneAccess address (e.g. gmail) displace it. Keep that
     // address as secondary so a future login by it still resolves to this account.
+    // Role is deliberately NOT touched here — oneAccess never changes it.
     const incoming = String(email || "").trim().toLowerCase();
     const primary = String(row.email || "").trim().toLowerCase();
     const secondary = incoming && incoming !== primary && !incoming.endsWith("@oneaccess.local") ? incoming : null;
     await execute(
-      "UPDATE users SET name = ?, its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), role = ?, jamaat = COALESCE(NULLIF(?, ''), jamaat), jamiaat = COALESCE(NULLIF(?, ''), jamiaat), secondary_email = COALESCE(?, secondary_email), auth_provider = 'oneaccess' WHERE id = ?",
-      [name, its, dept, teamId, role, jam, jamia, secondary, row.id]
+      "UPDATE users SET name = ?, its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), jamaat = COALESCE(NULLIF(?, ''), jamaat), jamiaat = COALESCE(NULLIF(?, ''), jamiaat), secondary_email = COALESCE(?, secondary_email), auth_provider = 'oneaccess' WHERE id = ?",
+      [name, its, dept, teamId, jam, jamia, secondary, row.id]
     );
     return await queryOne("SELECT * FROM users WHERE id = ?", [row.id]);
   }
@@ -125,7 +134,7 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   // Unusable local password — these users authenticate through oneAccess only.
   const randomHash = bcrypt.hashSync(crypto.randomUUID(), 10);
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
-  const role = isAdmin ? "admin" : "requestor";
+  const role = "requestor"; // oneAccess users are never admins — admin access is email/password only
   await execute(
     "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', ?)",
     [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now()]

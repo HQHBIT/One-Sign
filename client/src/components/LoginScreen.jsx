@@ -19,8 +19,17 @@ export function LoginScreen({ login }) {
   // password form. Defaults keep the local form so a config hiccup never locks out.
   const [authCfg, setAuthCfg] = useState({ oneAccessEnabled: false, localLoginEnabled: true, oneAccessStartUrl: null });
   useEffect(() => { api.authConfig().then(setAuthCfg).catch(() => {}); }, []);
-  // Never hide the local form unless oneAccess is actually available.
-  const showLocal = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
+  const oneAccessAvailable = authCfg.oneAccessEnabled;
+  // Whether the server will accept a password login at all (kept on for the admin door).
+  const localAvailable = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
+  // Admins sign in with email+password, hidden behind a link / the #superadmin (or
+  // /superadmin) URL. Regular users only ever see the oneAccess button.
+  const [adminMode, setAdminMode] = useState(() => {
+    try { return /superadmin/i.test(window.location.pathname) || /superadmin/i.test(window.location.hash); }
+    catch { return false; }
+  });
+  const openAdmin = () => { try { window.history.replaceState(null, "", "#superadmin"); } catch {} setAdminMode(true); };
+  const closeAdmin = () => { try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch {} setAdminMode(false); };
   // Forgot-password panel state: idle | open | sending | sent | error
   const [forgotState, setForgotState] = useState("idle");
   const [forgotEmail, setForgotEmail] = useState("");
@@ -28,28 +37,7 @@ export function LoginScreen({ login }) {
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotConfirm, setForgotConfirm] = useState("");
 
-  // Self-registration panel.
-  const [regOpen, setRegOpen] = useState(false);
-  const [reg, setReg] = useState({ name: "", email: "", password: "", teamName: "", reportingManager: "" });
-  const [regState, setRegState] = useState("form"); // form | saving | done | error
-  const [regErr, setRegErr] = useState(null);
-
-  const resetReg = () => { setReg({ name: "", email: "", password: "", teamName: "", reportingManager: "" }); setRegState("form"); setRegErr(null); };
-  const openReg = () => { resetReg(); setRegOpen(true); };
-  const closeReg = () => { setRegOpen(false); resetReg(); };
-
-  const submitReg = async e => {
-    e.preventDefault();
-    if (!reg.name.trim() || !reg.email.trim() || reg.password.length < 6) return;
-    setRegState("saving"); setRegErr(null);
-    try {
-      await api.register({ name: reg.name.trim(), email: reg.email.trim(), password: reg.password, teamName: reg.teamName.trim(), reportingManager: reg.reportingManager.trim() });
-      setRegState("done");
-    } catch (err) {
-      setRegErr(err.message || "Could not submit registration");
-      setRegState("error");
-    }
-  };
+  // Self-registration removed — users are provisioned through oneAccess.
 
   /* DISABLED: expense feature commented out
   // Expense panel: anyone can record an expense without signing in.
@@ -143,33 +131,39 @@ export function LoginScreen({ login }) {
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
-          {forgotState === "idle" && !regOpen && (
+          {forgotState === "idle" && (
             <div>
-              <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
+              <div className="font-display text-2xl sm:text-3xl mb-2">{adminMode ? "Admin sign in" : "Sign in"}</div>
               <div className="text-sm opacity-60 mb-8">
-                {showLocal ? "Use the credentials provided by your administrator." : "Continue with your oneAccess account."}
+                {adminMode
+                  ? "Administrators sign in with email and password."
+                  : "Continue with your oneAccess account."}
               </div>
 
-              {authCfg.oneAccessEnabled && (
+              {/* Regular users: oneAccess only, with a discreet admin link below. */}
+              {!adminMode && oneAccessAvailable && (
                 <>
                   <button type="button" className="btn-primary w-full justify-center"
                     onClick={() => { window.location.href = authCfg.oneAccessStartUrl; }}>
                     Sign in with oneAccess <ArrowRight size={16} />
                   </button>
-                  {showLocal && (
-                    <div className="flex items-center gap-3 my-6 text-xs opacity-50">
-                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
-                      or
-                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
+                  {localAvailable && (
+                    <div className="text-center mt-6">
+                      <button type="button" onClick={openAdmin}
+                        className="text-xs opacity-60 hover:opacity-100 underline">
+                        Click here to login as an Admin
+                      </button>
                     </div>
                   )}
                 </>
               )}
 
-              {showLocal && (
+              {/* Admin email+password form — in admin mode, or as the sole option if
+                  oneAccess isn't configured (safety fallback so no deploy is locked out). */}
+              {(adminMode || !oneAccessAvailable) && localAvailable && (
                 <form onSubmit={submit}>
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
-                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus={!authCfg.oneAccessEnabled} />
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus />
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
                   <PasswordInput value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
                   <div className="flex justify-end mb-6">
@@ -178,60 +172,23 @@ export function LoginScreen({ login }) {
                       Forgot password?
                     </button>
                   </div>
-                  <button className={`${authCfg.oneAccessEnabled ? "btn-ghost" : "btn-primary"} w-full justify-center`} disabled={busy}>
+                  <button className="btn-primary w-full justify-center" disabled={busy}>
                     {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
                   </button>
-                  <div className="text-center mt-6">
-                    <button type="button" onClick={openReg}
-                      className="text-xs opacity-60 hover:opacity-100 underline">
-                      New here? Create an account →
-                    </button>
-                  </div>
+                  {adminMode && oneAccessAvailable && (
+                    <div className="text-center mt-6">
+                      <button type="button" onClick={closeAdmin}
+                        className="text-xs opacity-60 hover:opacity-100 underline inline-flex items-center gap-1">
+                        <ArrowLeft size={12} /> Back to oneAccess sign-in
+                      </button>
+                    </div>
+                  )}
                 </form>
               )}
             </div>
           )}
 
-          {regOpen && regState !== "done" && (
-            <form onSubmit={submitReg}>
-              <div className="font-display text-2xl sm:text-3xl mb-2">Create an account</div>
-              <div className="text-sm opacity-60 mb-8">Your request goes to IT for approval. You'll be able to sign in once it's approved.</div>
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Full name</label>
-              <input type="text" value={reg.name} onChange={e => setReg({ ...reg, name: e.target.value })} className="w-full mb-4" maxLength={191} required autoFocus />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Work email</label>
-              <input type="email" value={reg.email} onChange={e => setReg({ ...reg, email: e.target.value })} className="w-full mb-4" maxLength={191} required />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-              <PasswordInput value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} className="w-full mb-4" placeholder="At least 6 characters" required />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Team / Department</label>
-              <input type="text" value={reg.teamName} onChange={e => setReg({ ...reg, teamName: e.target.value })} className="w-full mb-4" maxLength={191} placeholder="e.g., Finance" />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Reporting manager</label>
-              <input type="text" value={reg.reportingManager} onChange={e => setReg({ ...reg, reportingManager: e.target.value })} className="w-full mb-5" maxLength={191} placeholder="Manager's name" />
-
-              {regErr && (
-                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{regErr}</div>
-              )}
-
-              <div className="flex gap-2">
-                <button type="button" className="btn-ghost" onClick={closeReg}><ArrowLeft size={14} /> Back</button>
-                <button className="btn-primary flex-1 justify-center" disabled={regState === "saving" || !reg.name.trim() || !reg.email.trim() || reg.password.length < 6}>
-                  {regState === "saving" ? "Submitting…" : <>Request access <ArrowRight size={14} /></>}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {regOpen && regState === "done" && (
-            <div className="anim-in">
-              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
-              <div className="text-sm opacity-70 mb-6 leading-relaxed">Thanks! IT will review your request. Once approved, sign in with the email and password you just chose.</div>
-              <button className="btn-primary w-full justify-center" onClick={closeReg}><ArrowLeft size={14} /> Back to sign-in</button>
-            </div>
-          )}
+          {/* Self-registration removed — users come through oneAccess. */}
 
           {/* DISABLED: expense feature commented out — submission + success panels
           {expenseOpen && expState !== "done" && (
