@@ -393,10 +393,11 @@ function RequestorView(props) {
   const [newType, setNewType] = useState(null); // pre-selected request type when opening NewRequest
   const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
-  // Approved documents the requestor can view: ones they RAISED, plus ones they were
-  // asked to sign and signed — so a requestor who also approves finds them here too.
+  // Two separate lists: requests I RAISED that are approved, and documents I was
+  // asked to sign and signed (someone else's request).
   const iSigned = r => (r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id && s.status === "signed"));
-  const approved = requests.filter(r => r.status === "approved" && (r.requestorId === user.id || iSigned(r)));
+  const myApproved = my.filter(r => r.status === "approved");
+  const mySigned = requests.filter(r => r.status === "approved" && r.requestorId !== user.id && iSigned(r));
   // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
   const awaitingMySig = requests.filter(r => {
     if (r.status !== "pending" || !r.workflow?.length) return false;
@@ -411,14 +412,16 @@ function RequestorView(props) {
   if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
   if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
-  if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={approved} />;
+  if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={myApproved} title="My approved requests" />;
+  if (tab === "signed") return <ApprovedList {...props} back={() => setTab("home")} items={mySigned} title="My signed documents" />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
   const tiles = [
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
-    { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Signed and finalised documents, ready to download.", badge: approved.length }
+    { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
+    { key: "signed", icon: PenTool, title: "My signed documents", desc: "Documents sent to you that you have signed.", badge: mySigned.length }
   ];
 
   return (
@@ -524,12 +527,12 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
   );
 }
 
-function ApprovedList({ items, teams, users, back }) {
+function ApprovedList({ items, teams, users, back, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
-      <BackHeader back={back} title="Approved requests" step={`${items.length} signed`} />
-      {items.length === 0 ? <Empty icon={Archive} text="No approved requests yet." /> : (
+      <BackHeader back={back} title={title} step={`${items.length} signed`} />
+      {items.length === 0 ? <Empty icon={Archive} text={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`} /> : (
         <div className="card mt-8 overflow-hidden">
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
