@@ -492,14 +492,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {/* 3a. single mode: pick team + place marker */}
           {effectiveFile && mode ==="single" && (
             <Section n="03" title="Mark the signature field" desc="Place the box where the signer should sign — press and hold on a phone, or click-drag on a computer.">
-              <div className="flex flex-col lg:flex-row gap-4">
+              <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
                     <DocPreview file={file} markers={allMarkers} editable
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
-                <div className="w-full lg:w-72 shrink-0 space-y-3 lg:sticky lg:top-4 lg:self-start">
+                <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start">
                   <div className="card p-4 space-y-3">
                     <div className="text-[10px] tracking-widest uppercase opacity-50">Placement</div>
                     {marker ? (
@@ -576,14 +576,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   })()}
 
                   {directSigners.length > 0 && (
-                    <div className="flex flex-col lg:flex-row gap-4">
+                    <div className="flex flex-col xl:flex-row gap-4">
                       <div className="flex-1 min-w-0">
                         <Suspense fallback={<ViewerFallback />}>
                           <DocPreview file={file} markers={allMarkers} editable
                             onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                         </Suspense>
                       </div>
-                      <div className="w-full lg:w-72 shrink-0 space-y-3 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+                      <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
                         {placingSlot?.directIdx != null && (
                           <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                             {placingSlot.kind === "date"
@@ -643,14 +643,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {/* 3b. workflow mode */}
           {effectiveFile && mode ==="workflow" && (
             <Section n="03" title="Build the workflow" desc="Add steps in the order they should sign. Within a step, list the signers in order.">
-              <div className="flex flex-col lg:flex-row gap-4">
+              <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
                     <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
-                <div className="w-full lg:w-72 shrink-0 space-y-3 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+                <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
                   {placingSlot && (
                     <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                       {placingSlot.kind === "date"
