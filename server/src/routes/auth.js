@@ -45,12 +45,12 @@ router.post("/oneaccess/callback", async (req, res, next) => {
     let profile = null;
     try { profile = await fetchOneAccessProfile(token); } catch { /* use claims */ }
 
-    const { its, email, name, department, isAdmin, jamaat, jamiaat } = toLocalIdentity(claims, profile);
+    const { its, email, emails, name, department, isAdmin, jamaat, jamiaat } = toLocalIdentity(claims, profile);
     if (!its && !email) return res.status(400).json({ error: "oneAccess profile missing its_id and email" });
     // One-time visibility into the real profile shape so field names can be verified.
     if (profile) console.log(`[oneaccess] profile keys: ${Object.keys(profile).join(", ")} | department: ${JSON.stringify(department)} | admin: ${isAdmin} | jamaat: ${JSON.stringify(jamaat)} | jamiaat: ${JSON.stringify(jamiaat)}`);
 
-    const user = await upsertOneAccessUser({ its, email, name, department, isAdmin, jamaat, jamiaat });
+    const user = await upsertOneAccessUser({ its, email, emails, name, department, isAdmin, jamaat, jamiaat });
     const sfToken = signToken(user.id);
     res.json({ token: sfToken, user: await hydrateUser(user) });
   } catch (e) { next(e); }
@@ -85,14 +85,21 @@ export async function resolveTeamIdForDepartment(dept) {
 // super_admin) becomes a SignFlow admin; everyone else defaults to requestor.
 // On re-login we PROMOTE to admin but never auto-demote, so a role granted inside
 // SignFlow (e.g. approver, or a manually-added admin) survives a plain SSO login.
-export async function upsertOneAccessUser({ its, email, name, department, isAdmin = false, jamaat = "", jamiaat = "" }) {
+export async function upsertOneAccessUser({ its, email, emails, name, department, isAdmin = false, jamaat = "", jamiaat = "" }) {
   const dept = String(department || "").trim();
+  // Emails to try when matching an existing account — the full oneAccess set if we
+  // have it, else just the primary. Lets a login link to a local account even when
+  // the primary oneAccess email differs from the work email on file.
+  const matchEmails = [...new Set((Array.isArray(emails) && emails.length ? emails : [email]).map(e => String(e || "").trim().toLowerCase()).filter(Boolean))];
   const jam = String(jamaat || "").trim();
   const jamia = String(jamiaat || "").trim();
   const teamId = dept ? await resolveTeamIdForDepartment(dept) : null;
   let row = null;
   if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ?", [its]);
-  if (!row && email) row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+  if (!row && matchEmails.length) {
+    const ph = matchEmails.map(() => "?").join(",");
+    row = await queryOne(`SELECT * FROM users WHERE LOWER(email) IN (${ph}) ORDER BY created_at ASC LIMIT 1`, matchEmails);
+  }
   if (row) {
     const role = isAdmin ? "admin" : row.role; // promote oneAccess admins; keep existing role otherwise
     await execute(

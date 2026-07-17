@@ -402,4 +402,45 @@ router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array
   } catch (e) { next(e); }
 });
 
+// ---------- detect likely-duplicate accounts (same person, two logins) ----------
+// A person can end up with a local account AND a separate oneAccess account when
+// their oneAccess email differs from their work email. We flag pairs that share the
+// same ITS id, or share at least two "name parts" once honorifics are stripped —
+// which catches e.g. "Taha Chunawala" (local) vs "Taha bhai … Chunawala" (oneAccess).
+const HONORIFICS = new Set(["bhai", "bhaisaheb", "bsb", "behen", "behn", "bhen", "mulla", "shaikh", "sheikh", "janab", "mr", "mrs", "ms", "dr", "the"]);
+function nameTokens(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(t => t.length > 1 && !HONORIFICS.has(t));
+}
+export async function findDuplicateCandidates() {
+  const users = await query("SELECT id, email, name, role, its_id, auth_provider FROM users");
+  const toks = users.map(u => nameTokens(u.name));
+  const pairs = [];
+  for (let i = 0; i < users.length; i++) {
+    for (let j = i + 1; j < users.length; j++) {
+      const sameIts = users[i].its_id && users[i].its_id === users[j].its_id;
+      const setJ = new Set(toks[j]);
+      const shared = toks[i].filter(t => setJ.has(t)).length;
+      if (sameIts || shared >= 2) {
+        pairs.push({
+          reason: sameIts ? "same ITS id" : `${shared} name parts match`,
+          sharedTokens: shared,
+          crossProvider: users[i].auth_provider !== users[j].auth_provider,
+          a: users[i],
+          b: users[j],
+        });
+      }
+    }
+  }
+  // Cross-provider pairs (a local + a oneAccess account) are the most likely real
+  // splits — surface those first, then the strongest name matches.
+  pairs.sort((p, q) => (Number(q.crossProvider) - Number(p.crossProvider)) || (q.sharedTokens - p.sharedTokens));
+  return pairs;
+}
+
+router.get("/duplicates", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    res.json({ pairs: await findDuplicateCandidates() });
+  } catch (e) { next(e); }
+});
+
 export default router;

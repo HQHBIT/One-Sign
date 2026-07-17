@@ -1167,6 +1167,8 @@ function ApproverAuthority({ user, teams, back, users, requests }) {
 function AdminView(props) {
   const [tab, setTab] = useState("home");
   const [docsTeamId, setDocsTeamId] = useState(null); // when set, opens AdminDocuments pre-filtered to this team
+  const [dupCount, setDupCount] = useState(null); // count of likely-duplicate accounts, for the tile badge
+  useEffect(() => { api.listDuplicateUsers().then(p => setDupCount(p.length)).catch(() => {}); }, []);
   useBackHandler(tab !== "home", () => { setDocsTeamId(null); setTab("home"); });
   if (tab === "onboard") return <OnboardTeam {...props} back={() => setTab("home")} />;
   if (tab === "users") return <AdminUsers {...props} back={() => setTab("home")} />;
@@ -1181,6 +1183,7 @@ function AdminView(props) {
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
   if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
   if (tab === "password-resets") return <AdminPasswordResets {...props} back={() => setTab("home")} />;
+  if (tab === "duplicates") return <AdminDuplicates {...props} back={() => setTab("home")} />;
   // if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />; // DISABLED: expense feature commented out
 
   const { users, teams, requests, emails } = props;
@@ -1193,7 +1196,8 @@ function AdminView(props) {
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
     { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
-    { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." }
+    { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." },
+    { key: "duplicates", icon: Users, title: "Duplicate accounts", desc: "People with two accounts (e.g. local + oneAccess) — review, then merge.", badge: dupCount ?? undefined }
     // DISABLED: expense feature commented out — Expenses dashboard tile
     // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
@@ -1203,6 +1207,53 @@ function AdminView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+//   DUPLICATE ACCOUNTS — read-only detector (merge tool comes next)
+// ============================================================
+function AdminDuplicates({ back }) {
+  const [pairs, setPairs] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { api.listDuplicateUsers().then(setPairs).catch(e => setErr(e.message || "Could not load")); }, []);
+  return (
+    <div>
+      <BackHeader back={back} title="Duplicate accounts" step={pairs ? `${pairs.length} found` : "…"} />
+      <p className="text-sm opacity-70 mt-2 max-w-2xl">
+        Likely the same person with two accounts — usually a local (email) account plus a separate oneAccess account under a different email. Review these; the tool to merge each pair into one account is coming next.
+      </p>
+      {err && <div className="card p-4 mt-4 text-sm" style={{ color: "var(--c-rust)" }}>{err}</div>}
+      {!pairs ? (
+        <div className="card p-8 mt-6 text-sm opacity-50 text-center">Scanning accounts…</div>
+      ) : pairs.length === 0 ? (
+        <Empty icon={CheckCircle} text="No duplicate accounts found." />
+      ) : (
+        <div className="space-y-3 mt-6">
+          {pairs.map((p, i) => (
+            <div key={i} className="card p-4">
+              <div className="text-[10px] tracking-widest uppercase opacity-50 mb-3">
+                {p.reason}{p.crossProvider ? " · local + oneAccess" : ""}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {[p.a, p.b].map(u => (
+                  <div key={u.id} className="rounded p-3" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                    <div className="font-medium text-sm truncate">{u.name}</div>
+                    <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+                    <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+                      <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>{u.role}</span>
+                      <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.auth_provider}</span>
+                      {u.its_id ? <span className="pill font-mono" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>ITS {u.its_id}</span>
+                                : <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>no ITS</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

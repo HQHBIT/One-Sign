@@ -108,6 +108,12 @@ export function toLocalIdentity(claims, profile) {
   const src = { ...(claims || {}), ...(profile || {}) };
   const its = String(profile?.its_id ?? claims?.its_id ?? "").trim();
   const email = String(profile?.email ?? claims?.email ?? "").trim().toLowerCase();
+  // Every email oneAccess knows for this person — used to match an existing local
+  // account even when their primary oneAccess email differs from their work email.
+  const emails = [...new Set(
+    [profile?.email, profile?.secondary_email, profile?.email_default, claims?.email]
+      .map(e => String(e || "").trim().toLowerCase()).filter(Boolean)
+  )];
   const name = String(profile?.fullname ?? claims?.fullname ?? claims?.name ?? email ?? "oneAccess user").trim();
   const department = pickDepartment(src);
   const isAdmin = pickIsAdmin(src);
@@ -115,7 +121,7 @@ export function toLocalIdentity(claims, profile) {
   // routes on team/department, so these are stored but not used for access control.
   const jamaat = String(src?.jamaat ?? "").trim();
   const jamiaat = String(src?.jamiaat ?? "").trim();
-  return { its, email, name, department, isAdmin, jamaat, jamiaat };
+  return { its, email, emails, name, department, isAdmin, jamaat, jamiaat };
 }
 
 // Whether the oneAccess identity is an administrator. The token carries the
