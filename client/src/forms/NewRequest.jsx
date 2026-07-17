@@ -410,8 +410,16 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   return (
     <div>
       <BackHeader back={onDone} title="Make a new request" />
-      <div className="grid lg:grid-cols-3 gap-4 sm:gap-6 mt-6 sm:mt-8">
-        <div className="lg:col-span-2 space-y-6 min-w-0">
+      <div className="card p-4 mt-6 sm:mt-8">
+        <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">How this works</div>
+        <ol className="grid sm:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 text-xs sm:text-sm opacity-80">
+          <li className="flex gap-2"><span className="font-mono opacity-50">01</span> Upload the document.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">02</span> Choose single approver or multi-step workflow.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">03</span> Place each signer's box where it should appear.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">04</span> Submit. Each signer is notified in turn.</li>
+        </ol>
+      </div>
+      <div className="space-y-6 mt-6 min-w-0">
 
           {/* 0. type */}
           <Section n="00" title="Request type" desc="Classifying the request lets approvers batch-process documents of the same kind.">
@@ -740,41 +748,6 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               </div>
             </Section>
           )}
-        </div>
-
-        {/* sidebar helper */}
-        <aside className="space-y-4">
-          <div className="card p-5">
-            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">How this works</div>
-            <ol className="space-y-3 text-sm opacity-80">
-              <li className="flex gap-3"><span className="font-mono opacity-50">01</span> Upload the document.</li>
-              <li className="flex gap-3"><span className="font-mono opacity-50">02</span> Choose single approver or multi-step workflow. Optionally enable instant approval.</li>
-              <li className="flex gap-3"><span className="font-mono opacity-50">03</span> Place each signer's signature box on the page where it should appear.</li>
-              <li className="flex gap-3"><span className="font-mono opacity-50">04</span> Submit. Each signer is notified in turn.</li>
-            </ol>
-          </div>
-          {mode === "workflow" && workflow.length > 0 && (
-            <div className="card p-5">
-              <div className="text-[10px] tracking-widest uppercase opacity-50 mb-3">Workflow summary</div>
-              <ol className="space-y-2 text-sm">
-                {workflow.map((st, i) => {
-                  const team = teams.find(t => t.id === st.teamId);
-                  const c = STEP_COLORS[i % STEP_COLORS.length];
-                  return (
-                    <li key={i} className="flex gap-2">
-                      <span style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: c, marginTop: 5 }} />
-                      <div className="flex-1">
-                        <div className="text-xs opacity-60">Step {i + 1} · {team?.name || "—"}</div>
-                        <div>{st.signers.length} signer{st.signers.length === 1 ? "" : "s"}</div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-              {instantApproval && <div className="mt-4 text-xs flex items-center gap-1.5" style={{ color: "var(--c-gold)" }}><Zap size={12} /> Instant approval enabled</div>}
-            </div>
-          )}
-        </aside>
       </div>
     </div>
   );
