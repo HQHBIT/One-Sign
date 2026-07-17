@@ -1197,7 +1197,7 @@ function AdminView(props) {
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
     { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
     { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." },
-    { key: "duplicates", icon: Users, title: "Duplicate accounts", desc: "People with two accounts (e.g. local + oneAccess) — review, then merge.", badge: dupCount ?? undefined }
+    { key: "duplicates", icon: Users, title: "Accounts review", desc: "oneAccess sign-ins + possible duplicate accounts.", badge: dupCount ?? undefined }
     // DISABLED: expense feature commented out — Expenses dashboard tile
     // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
@@ -1216,12 +1216,57 @@ function AdminView(props) {
 // ============================================================
 function AdminDuplicates({ back }) {
   const [pairs, setPairs] = useState(null);
+  const [oa, setOa] = useState(null);
   const [err, setErr] = useState(null);
-  useEffect(() => { api.listDuplicateUsers().then(setPairs).catch(e => setErr(e.message || "Could not load")); }, []);
+  useEffect(() => {
+    api.listDuplicateUsers().then(setPairs).catch(e => setErr(e.message || "Could not load"));
+    api.oneAccessUsers().then(setOa).catch(() => {});
+  }, []);
+  const oaWithDocs = oa ? oa.filter(u => u.raised + u.signed > 0) : [];
   return (
     <div>
-      <BackHeader back={back} title="Duplicate accounts" step={pairs ? `${pairs.length} found` : "…"} />
-      <p className="text-sm opacity-70 mt-2 max-w-2xl">
+      <BackHeader back={back} title="Accounts review" step={oa ? `${oa.length} via oneAccess` : "…"} />
+
+      {/* who signs in via oneAccess + their document footprint */}
+      <div className="card p-4 mt-5">
+        <div className="flex items-baseline justify-between mb-1">
+          <div className="text-[10px] tracking-widest uppercase opacity-50">oneAccess sign-ins</div>
+          <div className="text-xs opacity-60">{oa ? `${oa.length} account${oa.length === 1 ? "" : "s"}` : "…"}</div>
+        </div>
+        {!oa ? <div className="text-sm opacity-50 py-2">Loading…</div>
+          : oa.length === 0 ? <div className="text-sm opacity-60 py-2">No one has signed in via oneAccess yet.</div>
+          : (
+            <>
+              <div className="text-xs opacity-70 mb-3">
+                <b>{oaWithDocs.length}</b> of these own or have signed documents (handle with care); the other <b>{oa.length - oaWithDocs.length}</b> have none and are safe to link or merge freely.
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs" style={{ borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr className="text-left opacity-50 uppercase tracking-wider text-[10px]">
+                      <th className="py-1 pr-3">Name</th><th className="py-1 pr-3">Email</th><th className="py-1 pr-3">ITS</th><th className="py-1 pr-3">Role</th><th className="py-1 pr-3 text-right">Raised</th><th className="py-1 text-right">Signed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {oa.map(u => (
+                      <tr key={u.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                        <td className="py-1.5 pr-3 font-medium">{u.name}</td>
+                        <td className="py-1.5 pr-3 font-mono opacity-70 truncate max-w-[220px]">{u.email}</td>
+                        <td className="py-1.5 pr-3 font-mono">{u.its_id || "—"}</td>
+                        <td className="py-1.5 pr-3">{u.role}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono" style={u.raised ? { color: "var(--c-gold-deep)", fontWeight: 600 } : { opacity: 0.4 }}>{u.raised}</td>
+                        <td className="py-1.5 text-right font-mono" style={u.signed ? { color: "var(--c-gold-deep)", fontWeight: 600 } : { opacity: 0.4 }}>{u.signed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+      </div>
+
+      <div className="text-[10px] tracking-widest uppercase opacity-50 mt-8 mb-1">Possible duplicates</div>
+      <p className="text-sm opacity-70 mb-2 max-w-2xl">
         Likely the same person with two accounts — usually a local (email) account plus a separate oneAccess account under a different email. Review these; the tool to merge each pair into one account is coming next.
       </p>
       {err && <div className="card p-4 mt-4 text-sm" style={{ color: "var(--c-rust)" }}>{err}</div>}

@@ -443,4 +443,22 @@ router.get("/duplicates", authRequired, requireRole("admin"), async (req, res, n
   } catch (e) { next(e); }
 });
 
+// ---------- everyone who signs in via oneAccess, with their document footprint ----
+// So an admin can gauge risk before linking/merging: an account with 0 raised + 0
+// signed is safe to touch; one that owns/signed documents needs care.
+router.get("/oneaccess", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const rows = await query(`
+      SELECT u.id, u.name, u.email, u.its_id, u.role,
+        (SELECT COUNT(*) FROM requests r WHERE r.requestor_id = u.id) AS raised,
+        (SELECT COUNT(DISTINCT st.request_id) FROM request_step_signers sg
+           JOIN request_steps st ON st.id = sg.step_id
+           WHERE sg.user_id = u.id AND sg.status = 'signed') AS signed
+      FROM users u WHERE u.auth_provider = 'oneaccess'
+      ORDER BY LOWER(u.name)
+    `);
+    res.json({ users: rows.map(r => ({ ...r, raised: Number(r.raised), signed: Number(r.signed) })) });
+  } catch (e) { next(e); }
+});
+
 export default router;

@@ -102,6 +102,7 @@ export const api = {
   // -------- users --------
   listUsers() { return this.fetch("/api/users").then(r => r.users); },
   listDuplicateUsers() { return this.fetch("/api/users/duplicates").then(r => r.pairs); },
+  oneAccessUsers() { return this.fetch("/api/users/oneaccess").then(r => r.users); },
   createUser(data) { return this.fetch("/api/users", { method: "POST", body: JSON.stringify(data) }); },
   bulkCreateUsers(rows) { return this.fetch("/api/users/bulk", { method: "POST", body: JSON.stringify({ rows }) }); },
   deleteUser(id) { return this.fetch(`/api/users/${id}`, { method: "DELETE" }); },
