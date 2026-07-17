@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -1214,14 +1214,18 @@ function AdminView(props) {
 // ============================================================
 //   DUPLICATE ACCOUNTS — read-only detector (merge tool comes next)
 // ============================================================
-function AdminDuplicates({ back }) {
+function AdminDuplicates({ back, notify }) {
   const [pairs, setPairs] = useState(null);
   const [oa, setOa] = useState(null);
+  const [cands, setCands] = useState(null);      // ITS-collision merge candidates
+  const [mergeTarget, setMergeTarget] = useState(null); // preview shown in the merge modal
   const [err, setErr] = useState(null);
-  useEffect(() => {
+  const reload = useCallback(() => {
     api.listDuplicateUsers().then(setPairs).catch(e => setErr(e.message || "Could not load"));
     api.oneAccessUsers().then(setOa).catch(() => {});
+    api.mergeCandidates().then(setCands).catch(() => {});
   }, []);
+  useEffect(() => { reload(); }, [reload]);
   const oaWithDocs = oa ? oa.filter(u => u.raised + u.signed > 0) : [];
   return (
     <div>
@@ -1265,9 +1269,53 @@ function AdminDuplicates({ back }) {
           )}
       </div>
 
-      <div className="text-[10px] tracking-widest uppercase opacity-50 mt-8 mb-1">Possible duplicates</div>
+      {/* ITS collisions ready to merge — the actionable list */}
+      {cands && cands.length > 0 && (
+        <div className="mt-8">
+          <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Merge candidates · same ITS</div>
+          <p className="text-sm opacity-70 mb-3 max-w-2xl">
+            These accounts share an ITS number — the same person, two sign-ins. Merge each into the <b>@hqhb.in</b> account: its documents move over and the duplicate is deactivated (reversible).
+          </p>
+          <div className="space-y-3">
+            {cands.map((c, i) => {
+              const [a, b] = c.accounts;
+              return (
+                <div key={i} className="card p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-[10px] tracking-widest uppercase opacity-50">ITS <span className="font-mono">{c.its}</span></div>
+                    <button className="btn-primary text-xs" onClick={() => setMergeTarget({ ...c, its: c.its })}><GitMerge size={12} /> Review &amp; merge</button>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    {[a, b].map(u => {
+                      const keeper = c.survivorId === u.id;
+                      return (
+                        <div key={u.id} className="rounded p-3" style={{ backgroundColor: keeper ? "var(--c-gold-15)" : "rgba(15,26,46,.04)" }}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium text-sm truncate">{u.name}</div>
+                            {keeper && <span className="pill text-[9px]" style={{ backgroundColor: "var(--c-gold)", color: "#1a1a1a" }}>keeper</span>}
+                          </div>
+                          <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+                          <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+                            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.role}</span>
+                            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.authProvider}</span>
+                            {u.isHqhb && <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>@hqhb.in</span>}
+                          </div>
+                          <div className="text-[11px] opacity-70 mt-2">{u.footprint.raised} raised · {u.footprint.approved} approved · {u.footprint.signed} signed</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {c.ambiguous && <div className="text-[11px] mt-2" style={{ color: "var(--c-rust-deep)" }}>Neither address is @hqhb.in — you'll choose the keeper in the review.</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="text-[10px] tracking-widest uppercase opacity-50 mt-8 mb-1">Possible duplicates · by name</div>
       <p className="text-sm opacity-70 mb-2 max-w-2xl">
-        Likely the same person with two accounts — usually a local (email) account plus a separate oneAccess account under a different email. Review these; the tool to merge each pair into one account is coming next.
+        Same person likely split across two accounts, matched by name (not yet linked by ITS). To line one up for a merge, open <b>Users</b> and add the ITS number to the <b>@hqhb.in</b> account — a matching account then appears under “Merge candidates” above.
       </p>
       {err && <div className="card p-4 mt-4 text-sm" style={{ color: "var(--c-rust)" }}>{err}</div>}
       {!pairs ? (
@@ -1299,6 +1347,85 @@ function AdminDuplicates({ back }) {
           ))}
         </div>
       )}
+
+      {mergeTarget && (
+        <MergeReviewModal preview={mergeTarget} notify={notify}
+          onClose={() => setMergeTarget(null)} onDone={reload} />
+      )}
+    </div>
+  );
+}
+
+// Review + confirm merging two accounts that share an ITS. `preview` matches the
+// server's shape: { its?, survivorId, ambiguous, accounts: [a, b] }. The kept
+// account keeps its role + login; the other's documents move onto it and it is
+// then deactivated (reversible). Reused by the Users page (on an ITS collision)
+// and the Accounts-review "Merge candidates" list.
+function MergeReviewModal({ preview, onClose, onDone, notify }) {
+  const [a, b] = preview.accounts;
+  const [keepId, setKeepId] = useState(preview.survivorId || "");
+  const [busy, setBusy] = useState(false);
+  useEscapeKey(onClose);
+  const keeper = [a, b].find(x => x.id === keepId) || null;
+  const dupe = [a, b].find(x => x.id !== keepId) || null;
+
+  const confirmMerge = async () => {
+    if (!keeper || !dupe) { notify("Choose which account to keep", "error"); return; }
+    setBusy(true);
+    try {
+      const r = await api.mergeUsers(keeper.id, dupe.id);
+      const m = r.moved || {};
+      const n = (m.requestsRaised || 0) + (m.requestsApproved || 0) + (m.signerRows || 0) + (m.signingAuthorities || 0);
+      notify(`Merged into ${keeper.email} — ${n} record${n === 1 ? "" : "s"} moved, duplicate deactivated`, "success");
+      onDone?.(); onClose();
+    } catch (e) { notify(e.message || "Merge failed", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const Card = ({ u }) => {
+    const isKeeper = keepId === u.id;
+    return (
+      <button type="button" onClick={() => setKeepId(u.id)} className="text-left rounded-lg p-3 border transition"
+        style={{ borderColor: isKeeper ? "var(--c-gold)" : "var(--c-ink-10)", backgroundColor: isKeeper ? "var(--c-gold-15)" : "rgba(15,26,46,.03)" }}>
+        <div className="flex items-center justify-between gap-2 mb-0.5">
+          <div className="font-medium text-sm truncate">{u.name}</div>
+          {isKeeper
+            ? <span className="pill" style={{ backgroundColor: "var(--c-gold)", color: "#1a1a1a" }}>KEEP</span>
+            : <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>deactivate</span>}
+        </div>
+        <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+        <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+          <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.role}</span>
+          <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.authProvider}</span>
+          {u.isHqhb && <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>@hqhb.in</span>}
+        </div>
+        <div className="text-[11px] opacity-70 mt-2">{u.footprint.raised} raised · {u.footprint.approved} approved · {u.footprint.signed} signed</div>
+      </button>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }} onClick={onClose}>
+      <div className="card p-6 max-w-lg w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+        <div className="font-display text-2xl mb-1">Merge duplicate accounts</div>
+        <div className="text-sm opacity-60 mb-4">
+          {preview.its ? <>Both accounts share ITS <span className="font-mono">{preview.its}</span>. </> : null}
+          The kept account keeps its role and password login; the other's documents move onto it, then it's deactivated. This can be undone.
+        </div>
+        {preview.ambiguous && (
+          <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+            Neither address is <b>@hqhb.in</b> — choose which account to keep.
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3 mb-1"><Card u={a} /><Card u={b} /></div>
+        <div className="text-[11px] opacity-50 mb-4">Tap a card to choose which account survives.</div>
+        <div className="flex justify-end gap-3">
+          <button className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-primary" onClick={confirmMerge} disabled={busy || !keeper}>
+            <GitMerge size={14} /> {busy ? "Merging…" : "Merge & deactivate duplicate"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1803,6 +1930,11 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   // Default is hidden — admins click the eye icon to reveal.
   const [revealedIds, setRevealedIds] = useState(() => new Set());
   const [refreshing, setRefreshing] = useState(false);
+  // Inline ITS editing + the merge-review modal that opens when a saved ITS
+  // collides with another active account.
+  const [editingItsId, setEditingItsId] = useState(null);
+  const [itsDraft, setItsDraft] = useState("");
+  const [mergePreview, setMergePreview] = useState(null);
   const confirm = useConfirmation();
 
   // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
@@ -1897,6 +2029,40 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
     setResetTarget(null);
   };
 
+  // Set/clear a user's ITS. If the server reports another active account with the
+  // same ITS, open the merge-review modal so the admin can reconcile them.
+  const startEditIts = (u) => { setEditingItsId(u.id); setItsDraft(u.itsId || ""); };
+  const saveIts = async (u) => {
+    const val = itsDraft.trim();
+    try {
+      const r = await api.setUserItsId(u.id, val);
+      setEditingItsId(null);
+      await saveUsers();
+      if (r.collision) setMergePreview({ ...r.collision, its: val });
+      else notify(val ? "ITS saved" : "ITS cleared", "success");
+    } catch (e) { notify(e.message || "Could not save ITS", "error"); }
+  };
+  const reactivate = async (u) => {
+    try { await api.reactivateUser(u.id); notify("Account reactivated", "success"); await saveUsers(); }
+    catch (e) { notify(e.message || "Could not reactivate", "error"); }
+  };
+  // ITS display / inline editor — shared by the desktop table and mobile cards.
+  const renderIts = (u) => editingItsId === u.id ? (
+    <div className="flex items-center gap-1 mt-1">
+      <input autoFocus value={itsDraft} onChange={e => setItsDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") saveIts(u); else if (e.key === "Escape") setEditingItsId(null); }}
+        placeholder="ITS id" className="text-xs font-mono px-1.5 py-0.5 rounded border w-32" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }} />
+      <button className="opacity-60 hover:opacity-100" onClick={() => saveIts(u)} title="Save ITS"><Check size={12} /></button>
+      <button className="opacity-40 hover:opacity-100" onClick={() => setEditingItsId(null)} title="Cancel"><X size={12} /></button>
+    </div>
+  ) : (
+    <button onClick={() => startEditIts(u)} className="mt-1 inline-flex items-center gap-1 text-[10px] opacity-60 hover:opacity-100"
+      title="Set the ITS id used to match this person's oneAccess sign-in">
+      {u.itsId ? <span className="font-mono">ITS {u.itsId}</span> : <span style={{ color: "var(--c-gold-deep)" }}>+ Add ITS</span>}
+      <Pencil size={9} />
+    </button>
+  );
+
   return (
     <div>
       <BackHeader back={back} title="Users" step={`${users.length} total · auto-refresh 20s`} />
@@ -1923,12 +2089,16 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         {users.map(u => {
           const revealed = revealedIds.has(u.id);
           return (
-          <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+          <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)", opacity: u.active === false ? 0.55 : 1 }}>
             <div className="col-span-3 font-medium flex items-center gap-2">
               {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} />}
-              {u.name}
+              <span className="truncate">{u.name}</span>
+              {u.active === false && <span className="pill text-[9px]" style={{ backgroundColor: "rgba(15,26,46,.08)" }}>merged</span>}
             </div>
-            <div className="col-span-3 font-mono text-xs opacity-70 truncate">{u.email}</div>
+            <div className="col-span-3 min-w-0">
+              <div className="font-mono text-xs opacity-70 truncate">{u.email}</div>
+              {renderIts(u)}
+            </div>
             <div className="col-span-1"><span className="pill pill-pending">{u.role}</span></div>
             <div className="col-span-2 text-xs opacity-70 truncate">
               {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
@@ -1953,21 +2123,28 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               ) : <span className="text-xs opacity-40 italic">— not set —</span>}
             </div>
             <div className="col-span-1 text-right flex items-center justify-end gap-2">
-              {u.role !== "admin" && (
-                <button className="opacity-50 hover:opacity-100"
-                  onClick={() => sendInvite(u.id, u.name, u.email)}
-                  disabled={invitingId === u.id}
-                  title="Send / resend invite — generates a fresh password and emails it">
-                  {invitingId === u.id
-                    ? <span className="text-xs">…</span>
-                    : <Mail size={13} />}
-                </button>
+              {u.active === false ? (
+                <button className="opacity-60 hover:opacity-100" onClick={() => reactivate(u)}
+                  title="Reactivate — restore sign-in (migrated documents stay on the keeper)"><RotateCcw size={13} /></button>
+              ) : (
+                <>
+                  {u.role !== "admin" && (
+                    <button className="opacity-50 hover:opacity-100"
+                      onClick={() => sendInvite(u.id, u.name, u.email)}
+                      disabled={invitingId === u.id}
+                      title="Send / resend invite — generates a fresh password and emails it">
+                      {invitingId === u.id
+                        ? <span className="text-xs">…</span>
+                        : <Mail size={13} />}
+                    </button>
+                  )}
+                  <button className="opacity-50 hover:opacity-100"
+                    onClick={() => setResetTarget(u)}
+                    title="Reset password — choose a new password or auto-generate">
+                    <KeyRound size={13} />
+                  </button>
+                </>
               )}
-              <button className="opacity-50 hover:opacity-100"
-                onClick={() => setResetTarget(u)}
-                title="Reset password — choose a new password or auto-generate">
-                <KeyRound size={13} />
-              </button>
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
           </div>
@@ -1979,30 +2156,40 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         {users.map(u => {
           const revealed = revealedIds.has(u.id);
           return (
-          <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+          <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)", opacity: u.active === false ? 0.55 : 1 }}>
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} className="shrink-0" />}
                 <div className="font-medium text-sm truncate">{u.name}</div>
+                {u.active === false && <span className="pill text-[9px] shrink-0" style={{ backgroundColor: "rgba(15,26,46,.08)" }}>merged</span>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {u.role !== "admin" && (
-                  <button className="opacity-50 hover:opacity-100"
-                    onClick={() => sendInvite(u.id, u.name, u.email)}
-                    disabled={invitingId === u.id}
-                    title="Send / resend invite">
-                    {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
-                  </button>
+                {u.active === false ? (
+                  <button className="opacity-60 hover:opacity-100" onClick={() => reactivate(u)} title="Reactivate account"><RotateCcw size={13} /></button>
+                ) : (
+                  <>
+                    {u.role !== "admin" && (
+                      <button className="opacity-50 hover:opacity-100"
+                        onClick={() => sendInvite(u.id, u.name, u.email)}
+                        disabled={invitingId === u.id}
+                        title="Send / resend invite">
+                        {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
+                      </button>
+                    )}
+                    <button className="opacity-50 hover:opacity-100"
+                      onClick={() => setResetTarget(u)}
+                      title="Reset password">
+                      <KeyRound size={13} />
+                    </button>
+                  </>
                 )}
-                <button className="opacity-50 hover:opacity-100"
-                  onClick={() => setResetTarget(u)}
-                  title="Reset password">
-                  <KeyRound size={13} />
-                </button>
                 <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
               </div>
             </div>
-            <div className="text-xs font-mono opacity-70 truncate mb-2">{u.email}</div>
+            <div className="mb-2">
+              <div className="text-xs font-mono opacity-70 truncate">{u.email}</div>
+              {renderIts(u)}
+            </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
               <span className="pill pill-pending">{u.role}</span>
               <span className="text-xs opacity-70">
@@ -2040,6 +2227,10 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }
         catch (e) { notify(e.message, "error"); }
       }} />}
+      {mergePreview && (
+        <MergeReviewModal preview={mergePreview} notify={notify}
+          onClose={() => setMergePreview(null)} onDone={saveUsers} />
+      )}
     </div>
   );
 }

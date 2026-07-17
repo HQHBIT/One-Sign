@@ -236,7 +236,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
 
     const approvers = await query(`
       SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-      WHERE u.role = 'approver' AND sa.team_id = ?
+      WHERE u.role = 'approver' AND u.active = 1 AND sa.team_id = ?
     `, [targetTeamId]);
     if (approvers.length === 0) return res.status(400).json({ error: "No approvers configured for this team" });
 
@@ -984,7 +984,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"),
     } else if (row.target_team_id) {
       const approvers = await query(`
         SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-        WHERE u.role = 'approver' AND sa.team_id = ?
+        WHERE u.role = 'approver' AND u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
         sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});

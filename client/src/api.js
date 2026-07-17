@@ -103,6 +103,10 @@ export const api = {
   listUsers() { return this.fetch("/api/users").then(r => r.users); },
   listDuplicateUsers() { return this.fetch("/api/users/duplicates").then(r => r.pairs); },
   oneAccessUsers() { return this.fetch("/api/users/oneaccess").then(r => r.users); },
+  setUserItsId(id, its) { return this.fetch(`/api/users/${id}/its-id`, { method: "PUT", body: JSON.stringify({ its }) }); }, // -> { ok, its, collision }
+  mergeCandidates() { return this.fetch("/api/users/merge-candidates").then(r => r.candidates); },
+  mergeUsers(survivorId, loserId) { return this.fetch("/api/users/merge", { method: "POST", body: JSON.stringify({ survivorId, loserId }) }); },
+  reactivateUser(id) { return this.fetch(`/api/users/${id}/reactivate`, { method: "PUT" }); },
   createUser(data) { return this.fetch("/api/users", { method: "POST", body: JSON.stringify(data) }); },
   bulkCreateUsers(rows) { return this.fetch("/api/users/bulk", { method: "POST", body: JSON.stringify({ rows }) }); },
   deleteUser(id) { return this.fetch(`/api/users/${id}`, { method: "DELETE" }); },

@@ -94,17 +94,30 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   const jam = String(jamaat || "").trim();
   const jamia = String(jamiaat || "").trim();
   const teamId = dept ? await resolveTeamIdForDepartment(dept) : null;
+  // Match an existing ACTIVE account only — a deactivated (merged) duplicate must
+  // never be re-adopted; its ITS was cleared on merge so the survivor wins the
+  // its_id lookup. Email match also checks secondary_email so a login by the
+  // person's oneAccess address resolves to the account it was merged into.
   let row = null;
-  if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ?", [its]);
+  if (its) row = await queryOne("SELECT * FROM users WHERE its_id = ? AND active = 1", [its]);
   if (!row && matchEmails.length) {
     const ph = matchEmails.map(() => "?").join(",");
-    row = await queryOne(`SELECT * FROM users WHERE LOWER(email) IN (${ph}) ORDER BY created_at ASC LIMIT 1`, matchEmails);
+    row = await queryOne(
+      `SELECT * FROM users WHERE active = 1 AND (LOWER(email) IN (${ph}) OR LOWER(secondary_email) IN (${ph})) ORDER BY created_at ASC LIMIT 1`,
+      [...matchEmails, ...matchEmails]
+    );
   }
   if (row) {
     const role = isAdmin ? "admin" : row.role; // promote oneAccess admins; keep existing role otherwise
+    // Preserve the existing PRIMARY email (e.g. @hqhb.in) as the account identity —
+    // never let a differing oneAccess address (e.g. gmail) displace it. Keep that
+    // address as secondary so a future login by it still resolves to this account.
+    const incoming = String(email || "").trim().toLowerCase();
+    const primary = String(row.email || "").trim().toLowerCase();
+    const secondary = incoming && incoming !== primary && !incoming.endsWith("@oneaccess.local") ? incoming : null;
     await execute(
-      "UPDATE users SET name = ?, email = COALESCE(NULLIF(?, ''), email), its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), role = ?, jamaat = COALESCE(NULLIF(?, ''), jamaat), jamiaat = COALESCE(NULLIF(?, ''), jamiaat), auth_provider = 'oneaccess' WHERE id = ?",
-      [name, email, its, dept, teamId, role, jam, jamia, row.id]
+      "UPDATE users SET name = ?, its_id = COALESCE(NULLIF(?, ''), its_id), department = COALESCE(NULLIF(?, ''), department), team_id = COALESCE(?, team_id), role = ?, jamaat = COALESCE(NULLIF(?, ''), jamaat), jamiaat = COALESCE(NULLIF(?, ''), jamiaat), secondary_email = COALESCE(?, secondary_email), auth_provider = 'oneaccess' WHERE id = ?",
+      [name, its, dept, teamId, role, jam, jamia, secondary, row.id]
     );
     return await queryOne("SELECT * FROM users WHERE id = ?", [row.id]);
   }
@@ -131,6 +144,11 @@ router.post("/login", async (req, res, next) => {
     const row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email.trim()]);
     if (!row || !bcrypt.compareSync(password, row.password_hash)) {
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+    // A deactivated (merged-away) account can't sign in — its identity now lives
+    // on the surviving @hqhb.in account.
+    if (row.active != null && Number(row.active) === 0) {
+      return res.status(403).json({ error: "This account has been merged into your primary account. Please sign in there or via oneAccess." });
     }
 
     const token = signToken(row.id);

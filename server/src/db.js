@@ -319,6 +319,34 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn') NOT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
 
+  // --- oneAccess identity reconciliation ------------------------------------
+  // A person can end up with a local @hqhb.in account AND a separate oneAccess
+  // account (different email). We reconcile by ITS: the @hqhb.in account is the
+  // keeper, the other's data is migrated onto it, then the duplicate is
+  // DEACTIVATED (reversible) — never hard-deleted. active=0 hides it from login
+  // and every picker; merged_into points at the survivor; user_merges records
+  // exactly what moved. secondary_email lets the surviving account still be
+  // found by the person's oneAccess (e.g. gmail) address without that address
+  // displacing their primary work email.
+  await tryExec(`ALTER TABLE users ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`);
+  await tryExec(`ALTER TABLE users ADD COLUMN secondary_email VARCHAR(191) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN merged_into VARCHAR(64) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN deactivated_at BIGINT DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD INDEX idx_users_secondary_email (secondary_email)`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS user_merges (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    survivor_id    VARCHAR(64)  NOT NULL,
+    survivor_email VARCHAR(191) NOT NULL,
+    merged_id      VARCHAR(64)  NOT NULL,
+    merged_email   VARCHAR(191) NOT NULL,
+    its_id         VARCHAR(120) DEFAULT NULL,
+    moved_json     TEXT         NULL,
+    performed_by   VARCHAR(64)  DEFAULT NULL,
+    created_at     BIGINT       NOT NULL,
+    INDEX idx_user_merges_survivor (survivor_id),
+    INDEX idx_user_merges_merged (merged_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 
@@ -393,6 +421,11 @@ export async function hydrateUser(row) {
     department: row.department || null,
     jamaat: row.jamaat || null,
     jamiaat: row.jamiaat || null,
+    itsId: row.its_id || null,
+    secondaryEmail: row.secondary_email || null,
+    authProvider: row.auth_provider || "local",
+    active: row.active == null ? true : !!Number(row.active),
+    mergedInto: row.merged_into || null,
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

@@ -79,7 +79,7 @@ router.get("/search", authRequired, async (req, res, next) => {
     const like = `%${q}%`;
     const rows = await query(
       `SELECT id, name, email, signature_path FROM users
-       WHERE id <> ? AND (name LIKE ? OR email LIKE ?)
+       WHERE id <> ? AND active = 1 AND (name LIKE ? OR email LIKE ?)
        ORDER BY name ASC LIMIT 10`,
       [req.user.id, like, like]
     );
@@ -412,7 +412,7 @@ function nameTokens(name) {
   return String(name || "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(t => t.length > 1 && !HONORIFICS.has(t));
 }
 export async function findDuplicateCandidates() {
-  const users = await query("SELECT id, email, name, role, its_id, auth_provider FROM users");
+  const users = await query("SELECT id, email, name, role, its_id, auth_provider FROM users WHERE active = 1");
   const toks = users.map(u => nameTokens(u.name));
   const pairs = [];
   for (let i = 0; i < users.length; i++) {
@@ -449,15 +449,194 @@ router.get("/duplicates", authRequired, requireRole("admin"), async (req, res, n
 router.get("/oneaccess", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const rows = await query(`
-      SELECT u.id, u.name, u.email, u.its_id, u.role,
+      SELECT u.id, u.name, u.email, u.its_id, u.role, u.active,
         (SELECT COUNT(*) FROM requests r WHERE r.requestor_id = u.id) AS raised,
         (SELECT COUNT(DISTINCT st.request_id) FROM request_step_signers sg
            JOIN request_steps st ON st.id = sg.step_id
            WHERE sg.user_id = u.id AND sg.status = 'signed') AS signed
-      FROM users u WHERE u.auth_provider = 'oneaccess'
+      FROM users u WHERE u.auth_provider = 'oneaccess' AND u.active = 1
       ORDER BY LOWER(u.name)
     `);
-    res.json({ users: rows.map(r => ({ ...r, raised: Number(r.raised), signed: Number(r.signed) })) });
+    res.json({ users: rows.map(r => ({ ...r, raised: Number(r.raised), signed: Number(r.signed), active: r.active == null ? true : !!Number(r.active) })) });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+//   ITS-driven account reconciliation (link + merge duplicates)
+// ============================================================
+// Rule: the @hqhb.in account is the keeper. When two ACTIVE accounts share an
+// ITS, the other account's data is migrated onto the @hqhb.in one and that other
+// account is DEACTIVATED (reversible) — never hard-deleted.
+
+const isHqhb = (email) => /@hqhb\.in\s*$/i.test(String(email || "").trim());
+
+// Document footprint for one account — used to show the admin exactly what a
+// merge would move before they confirm it.
+async function footprint(userId) {
+  const raised = await queryOne("SELECT COUNT(*) AS n FROM requests WHERE requestor_id = ?", [userId]);
+  const approved = await queryOne("SELECT COUNT(*) AS n FROM requests WHERE approver_id = ?", [userId]);
+  const signed = await queryOne(
+    `SELECT COUNT(DISTINCT st.request_id) AS n FROM request_step_signers sg
+       JOIN request_steps st ON st.id = sg.step_id
+      WHERE sg.user_id = ? AND sg.status = 'signed'`, [userId]);
+  return { raised: Number(raised?.n || 0), approved: Number(approved?.n || 0), signed: Number(signed?.n || 0) };
+}
+
+async function accountBrief(u) {
+  return {
+    id: u.id, name: u.name, email: u.email, role: u.role,
+    itsId: u.its_id || null, authProvider: u.auth_provider || "local",
+    isHqhb: isHqhb(u.email), hasSignature: !!u.signature_path,
+    footprint: await footprint(u.id),
+  };
+}
+
+// Preview two accounts that share an ITS: pick the survivor (the @hqhb.in one)
+// and attach each account's footprint. When neither/both are @hqhb.in the
+// survivor is ambiguous and the admin chooses in the UI.
+async function buildMergePreview(a, b) {
+  const [ba, bb] = [await accountBrief(a), await accountBrief(b)];
+  let survivorId = null;
+  if (ba.isHqhb && !bb.isHqhb) survivorId = ba.id;
+  else if (bb.isHqhb && !ba.isHqhb) survivorId = bb.id;
+  return { survivorId, ambiguous: survivorId == null, accounts: [ba, bb] };
+}
+
+// Migrate every reference from `loserId` onto `survivorId`, record the move, then
+// deactivate the loser. Transactional: on any error nothing changes.
+export async function mergeUsers(survivorId, loserId, performedBy = null) {
+  if (survivorId === loserId) throw new Error("Cannot merge an account into itself");
+  const survivor = await queryOne("SELECT * FROM users WHERE id = ?", [survivorId]);
+  const loser = await queryOne("SELECT * FROM users WHERE id = ?", [loserId]);
+  if (!survivor) throw new Error("Keeper account not found");
+  if (!loser) throw new Error("Duplicate account not found");
+  if (loser.active != null && Number(loser.active) === 0) throw new Error("That duplicate is already deactivated");
+
+  const moved = {};
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Requests they raised / approved.
+    let [r] = await conn.execute("UPDATE requests SET requestor_id = ? WHERE requestor_id = ?", [survivorId, loserId]);
+    moved.requestsRaised = r.affectedRows;
+    [r] = await conn.execute("UPDATE requests SET approver_id = ? WHERE approver_id = ?", [survivorId, loserId]);
+    moved.requestsApproved = r.affectedRows;
+
+    // 2. Signing steps they were a signer on.
+    [r] = await conn.execute("UPDATE request_step_signers SET user_id = ? WHERE user_id = ?", [survivorId, loserId]);
+    moved.signerRows = r.affectedRows;
+
+    // 3. Signing authority — PK is (user_id, team_id); drop loser rows that would
+    //    collide with the survivor's grants, then move the remainder.
+    await conn.execute(
+      `DELETE l FROM signing_authority l
+         JOIN signing_authority s ON s.team_id = l.team_id AND s.user_id = ?
+        WHERE l.user_id = ?`, [survivorId, loserId]);
+    [r] = await conn.execute("UPDATE signing_authority SET user_id = ? WHERE user_id = ?", [survivorId, loserId]);
+    moved.signingAuthorities = r.affectedRows;
+
+    // 4. Signature — only fill a gap; never overwrite the keeper's own.
+    moved.signatureCopied = false;
+    if (!survivor.signature_path && loser.signature_path) {
+      try {
+        const ext = path.extname(loser.signature_path) || ".png";
+        const destName = `${survivorId}${ext}`;
+        await fs.copyFile(path.join(SIG_DIR, loser.signature_path), path.join(SIG_DIR, destName));
+        await conn.execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?",
+          [destName, loser.signature_aspect ?? null, survivorId]);
+        moved.signatureCopied = true;
+      } catch { /* source file missing — skip */ }
+    }
+
+    // 5. Carry the identity onto the keeper: keep its ITS, and remember the
+    //    loser's address as secondary so oneAccess-by-email still finds it.
+    const loserEmail = String(loser.email || "").toLowerCase();
+    const survivorEmail = String(survivor.email || "").toLowerCase();
+    const its = survivor.its_id || loser.its_id || null;
+    const secondary = loserEmail && loserEmail !== survivorEmail && !loserEmail.endsWith("@oneaccess.local") ? loserEmail : null;
+    await conn.execute(
+      "UPDATE users SET its_id = COALESCE(its_id, ?), secondary_email = COALESCE(?, secondary_email) WHERE id = ?",
+      [its, secondary, survivorId]);
+
+    // 6. Deactivate the loser (reversible) + clear its ITS so it can never match again.
+    await conn.execute("UPDATE users SET active = 0, merged_into = ?, deactivated_at = ?, its_id = NULL WHERE id = ?",
+      [survivorId, Date.now(), loserId]);
+
+    // 7. Audit.
+    await conn.execute(
+      "INSERT INTO user_merges (survivor_id, survivor_email, merged_id, merged_email, its_id, moved_json, performed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [survivorId, survivor.email, loserId, loser.email, its, JSON.stringify(moved), performedBy, Date.now()]);
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+  return { moved, survivor: await hydrateUser(await queryOne("SELECT * FROM users WHERE id = ?", [survivorId])) };
+}
+
+// ---------- admin: set/clear a user's ITS id ----------
+// PUT /api/users/:id/its-id  body: { its }
+// Sets the ITS; if that ITS already sits on another ACTIVE account, returns a
+// merge preview so the UI can offer to reconcile them (no auto-merge).
+router.put("/:id/its-id", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const its = req.body?.its == null ? "" : String(req.body.its).trim();
+    const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    await execute("UPDATE users SET its_id = ? WHERE id = ?", [its || null, req.params.id]);
+    let collision = null;
+    if (its) {
+      const other = await queryOne(
+        "SELECT * FROM users WHERE its_id = ? AND id <> ? AND active = 1 ORDER BY created_at ASC LIMIT 1",
+        [its, req.params.id]);
+      if (other) collision = await buildMergePreview({ ...target, its_id: its }, other);
+    }
+    res.json({ ok: true, its: its || null, collision });
+  } catch (e) { next(e); }
+});
+
+// ---------- admin: list ITS-collision merge candidates ----------
+// GET /api/users/merge-candidates → active account pairs that share an ITS.
+router.get("/merge-candidates", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const rows = await query("SELECT * FROM users WHERE active = 1 AND its_id IS NOT NULL AND its_id <> '' ORDER BY its_id, created_at ASC");
+    const byIts = new Map();
+    for (const u of rows) { const k = u.its_id; if (!byIts.has(k)) byIts.set(k, []); byIts.get(k).push(u); }
+    const candidates = [];
+    for (const [its, group] of byIts) {
+      if (group.length < 2) continue;
+      for (let i = 1; i < group.length; i++) candidates.push({ its, ...(await buildMergePreview(group[0], group[i])) });
+    }
+    res.json({ candidates });
+  } catch (e) { next(e); }
+});
+
+// ---------- admin: merge a duplicate into the keeper ----------
+// POST /api/users/merge  body: { survivorId, loserId }
+router.post("/merge", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const { survivorId, loserId } = req.body || {};
+    if (!survivorId || !loserId) return res.status(400).json({ error: "survivorId and loserId are required" });
+    if (survivorId === loserId) return res.status(400).json({ error: "Pick two different accounts" });
+    if (loserId === req.user.id) return res.status(400).json({ error: "You can't deactivate your own account in a merge" });
+    const result = await mergeUsers(survivorId, loserId, req.user.id);
+    res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// ---------- admin: reactivate a deactivated account (undo a merge's deactivation) ----------
+// PUT /api/users/:id/reactivate — restores sign-in access; does NOT pull back
+// already-migrated documents (those stay on the keeper).
+router.put("/:id/reactivate", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const u = await queryOne("SELECT id FROM users WHERE id = ?", [req.params.id]);
+    if (!u) return res.status(404).json({ error: "User not found" });
+    await execute("UPDATE users SET active = 1, merged_into = NULL, deactivated_at = NULL WHERE id = ?", [req.params.id]);
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
