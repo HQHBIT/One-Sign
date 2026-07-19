@@ -1,6 +1,6 @@
 import { FileText, FileSpreadsheet, Zap, GitBranch } from "lucide-react";
 import { APPROVAL_WINDOW_MS, requestTypeLabel, requestTypeColor } from "../lib/constants.js";
-import { fmtShort } from "../lib/format.js";
+import { fmt, fmtShort } from "../lib/format.js";
 import { StatusPill } from "./StatusPill.jsx";
 import { Countdown } from "./Countdown.jsx";
 
@@ -45,6 +45,9 @@ export function RequestRow({ r, teams, users, i, actions, subtitle }) {
           <span className="truncate">{team?.name} · {fmtShort(r.createdAt)}</span>
           <span className="hidden sm:inline">· from {requestorName}</span>
           {approverName && !workflowLine && <span className="hidden md:inline">· {r.status === "rejected" ? "rejected" : "approved"} by {approverName}</span>}
+          {r.status === "approved" && r.finalizedAt && (
+            <span className="font-medium" style={{ color: "var(--c-forest)" }}>· Completed {fmt(r.finalizedAt)} IST</span>
+          )}
           {r.status === "approved_pending" && r.approvedAt && !r.instantApproval && <span>· <Countdown until={r.approvedAt + APPROVAL_WINDOW_MS} /></span>}
         </div>
         {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}

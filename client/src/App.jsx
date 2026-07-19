@@ -646,6 +646,11 @@ function PreviewDrawer({ req, onClose, users, teams }) {
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 sm:mt-1 truncate">
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
+            {req.status === "approved" && req.finalizedAt && (
+              <div className="text-[10px] sm:text-xs mt-0.5 font-medium" style={{ color: "var(--c-forest)" }}>
+                Completed {fmt(req.finalizedAt)} IST
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <StatusPill status={req.status} />
