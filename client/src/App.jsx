@@ -284,6 +284,8 @@ export default function App() {
       <StyleTag />
       {!user ? (
         <LoginScreen login={login} />
+      ) : user.needsWorkEmail ? (
+        <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
         <Shell
           user={user}
@@ -312,6 +314,58 @@ export default function App() {
       <ConfirmHost />
     </div>
     </ConfirmContext.Provider>
+  );
+}
+
+// ============================================================
+//   WORK-EMAIL CAPTURE — one-time, blocking prompt shown to a brand-new
+//   oneAccess user so their notifications go to their work address, not
+//   whatever email oneAccess signed them in with.
+// ============================================================
+function WorkEmailCapture({ user, notify, onDone }) {
+  const isPlaceholder = /@oneaccess\.local$/i.test(user.email || "");
+  const [email, setEmail] = useState(isPlaceholder ? "" : (user.email || ""));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const submit = async e => {
+    e.preventDefault();
+    const v = email.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { setErr("Please enter a valid email address"); return; }
+    setBusy(true); setErr(null);
+    try {
+      const { user: updated } = await api.setWorkEmail(v);
+      notify("Work email saved — you'll get all notifications here.", "success");
+      onDone(updated);
+    } catch (e2) {
+      setErr(e2.message || "Could not save your work email");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: "var(--c-cream)" }}>
+      <div className="w-full max-w-md card p-6 sm:p-8 anim-in">
+        <div className="font-display text-2xl sm:text-3xl mb-2">One quick thing, {user.name?.split(" ")[0] || "there"}</div>
+        <div className="text-sm opacity-60 mb-8">
+          Please enter your <strong>work email address</strong>. SignFlow will use it for all your notifications — document requests, approvals and reminders.
+        </div>
+        <form onSubmit={submit}>
+          <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Work email address</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+            className="w-full mb-2" placeholder="you@hqhb.in" required autoFocus disabled={busy} />
+          {!isPlaceholder && (
+            <div className="text-xs opacity-50 mb-5">
+              Signed in via oneAccess as <span className="font-mono">{user.email}</span> — keep this or enter a different work email.
+            </div>
+          )}
+          {isPlaceholder && <div className="mb-5" />}
+          {err && (
+            <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
+          )}
+          <button className="btn-primary w-full justify-center" disabled={busy || !email.trim()}>
+            {busy ? "Saving…" : <>Continue <ArrowRight size={16} /></>}
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }
 

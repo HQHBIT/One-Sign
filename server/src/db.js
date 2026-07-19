@@ -333,6 +333,12 @@ async function runSchema() {
   await tryExec(`ALTER TABLE users ADD COLUMN merged_into VARCHAR(64) DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD COLUMN deactivated_at BIGINT DEFAULT NULL`);
   await tryExec(`ALTER TABLE users ADD INDEX idx_users_secondary_email (secondary_email)`);
+
+  // oneAccess users confirm their WORK email on first sign-in — it becomes the
+  // primary address used for every notification. DEFAULT 1 grandfathers every
+  // existing account at add-time (they're never prompted); only brand-new
+  // oneAccess sign-ins are inserted with 0, which is what triggers the prompt.
+  await tryExec(`ALTER TABLE users ADD COLUMN work_email_set TINYINT(1) NOT NULL DEFAULT 1`);
   await tryExec(`CREATE TABLE IF NOT EXISTS user_merges (
     id             INT AUTO_INCREMENT PRIMARY KEY,
     survivor_id    VARCHAR(64)  NOT NULL,
@@ -447,6 +453,9 @@ export async function hydrateUser(row) {
     authProvider: row.auth_provider || "local",
     active: row.active == null ? true : !!Number(row.active),
     mergedInto: row.merged_into || null,
+    // True only for a brand-new oneAccess account that hasn't confirmed its work
+    // email yet — drives the one-time "enter your work email" prompt.
+    needsWorkEmail: (row.auth_provider === "oneaccess") && Number(row.work_email_set) === 0,
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

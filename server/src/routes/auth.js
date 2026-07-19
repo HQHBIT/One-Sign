@@ -136,7 +136,7 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
   const role = "requestor"; // oneAccess users are never admins — admin access is email/password only
   await execute(
-    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', ?)",
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, work_email_set, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', 0, ?)",
     [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now()]
   );
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
@@ -167,6 +167,34 @@ router.post("/login", async (req, res, next) => {
 
 router.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
+});
+
+// ---------- authenticated: set my work email (oneAccess first-run capture) ----------
+// PUT /api/auth/me/work-email  body: { email }
+// The work email becomes the account's PRIMARY address (used for every
+// notification); the oneAccess sign-in email is kept as a secondary so future
+// SSO logins still resolve here. Marks the account confirmed so the prompt won't
+// show again. Rejects an email already used by a different account.
+router.put("/me/work-email", authRequired, async (req, res, next) => {
+  try {
+    const workEmail = String(req.body?.email || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(workEmail)) return res.status(400).json({ error: "A valid email is required" });
+    const me = await queryOne("SELECT * FROM users WHERE id = ?", [req.user.id]);
+    if (!me) return res.status(404).json({ error: "User not found" });
+    const currentPrimary = String(me.email || "").trim().toLowerCase();
+    if (workEmail !== currentPrimary) {
+      const clash = await queryOne("SELECT id FROM users WHERE LOWER(email) = ? AND id <> ?", [workEmail, me.id]);
+      if (clash) return res.status(409).json({ error: "This email already has an account. Please contact IT to link them." });
+      // Keep the previous (oneAccess) email as secondary for login matching, unless
+      // it's just the synthetic @oneaccess.local placeholder.
+      const secondary = currentPrimary && !currentPrimary.endsWith("@oneaccess.local") ? me.email : (me.secondary_email || null);
+      await execute("UPDATE users SET email = ?, secondary_email = COALESCE(?, secondary_email), work_email_set = 1 WHERE id = ?", [workEmail, secondary, me.id]);
+    } else {
+      await execute("UPDATE users SET work_email_set = 1 WHERE id = ?", [me.id]);
+    }
+    const updated = await queryOne("SELECT * FROM users WHERE id = ?", [me.id]);
+    res.json({ user: await hydrateUser(updated) });
+  } catch (e) { next(e); }
 });
 
 // ---------- authenticated: change my password ----------

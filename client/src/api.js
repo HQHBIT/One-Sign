@@ -59,6 +59,9 @@ export const api = {
     return Promise.resolve();
   },
   me() { return this.fetch("/api/auth/me"); },
+  // First-run capture of a oneAccess user's work email (becomes their primary
+  // address for all notifications). Returns { user }.
+  setWorkEmail(email) { return this.fetch("/api/auth/me/work-email", { method: "PUT", body: JSON.stringify({ email }) }); },
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },
