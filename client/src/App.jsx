@@ -2658,77 +2658,317 @@ function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
   );
 }
 
-function AdminReports({ requests, users, teams, back }) {
-  const byTeam = useMemo(() => teams.map(t => {
-    const rs = requests.filter(r => r.targetTeamId === t.id);
-    return {
-      team: t.name,
-      total: rs.length,
-      pending: rs.filter(r => r.status === "pending").length,
-      approved: rs.filter(r => r.status === "approved").length,
-      pending_finalise: rs.filter(r => r.status === "approved_pending").length,
-      rejected: rs.filter(r => r.status === "rejected").length
-    };
-  }), [requests, teams]);
+// Human duration: "2d 3h" / "5h 12m" / "45m" / "<1m".
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return "—";
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), rm = mins % 60;
+  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
 
-  const exportCsv = async () => {
-    try {
-      const url = await api.downloadReportCsv();
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `signflow-report-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch (e) { alert(e.message); }
+// Build a CSV from a header + rows (arrays of cells) and trigger a download.
+function downloadCsv(filename, header, rows) {
+  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [header, ...rows].map(r => r.map(esc).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+const REPORT_TABS = [
+  { key: "approver", label: "By approver" },
+  { key: "department", label: "By department" },
+  { key: "delays", label: "Approval delays" },
+  { key: "requestor", label: "By requestor" },
+];
+
+function AdminReports({ requests, users, teams, back }) {
+  const [reportType, setReportType] = useState("approver");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [approverId, setApproverId] = useState("");
+  const [deptTeamId, setDeptTeamId] = useState("");
+
+  // Date inputs are interpreted in the viewer's clock (IST for this app).
+  const from = fromDate ? new Date(fromDate + "T00:00:00").getTime() : null;
+  const to = toDate ? new Date(toDate + "T23:59:59.999").getTime() : null;
+  const pass = (ts) => {
+    if (from == null && to == null) return true;
+    if (ts == null) return false;
+    return (from == null || ts >= from) && (to == null || ts <= to);
   };
+  const teamName = (id) => teams.find(t => t.id === id)?.name || "—";
+  const userDept = (uid) => { const u = users.find(x => x.id === uid); return teams.find(t => t.id === u?.team)?.name || u?.department || "—"; };
+
+  // Every approval action — the direct team-approver OR each workflow signature —
+  // as one event per actor per request, with the time taken from raise to approve.
+  const approvalEvents = useMemo(() => {
+    const ev = [];
+    for (const r of requests) {
+      const hasWf = (r.workflow || []).some(s => s.signers.length);
+      if (hasWf) {
+        for (const st of r.workflow) for (const sg of st.signers) if (sg.status === "signed")
+          ev.push({ userId: sg.userId, userName: sg.userName, r, ts: sg.signedAt || null });
+      } else if (r.approverId && (r.status === "approved" || r.status === "approved_pending")) {
+        ev.push({ userId: r.approverId, userName: r.approverName, r, ts: r.approvedAt || r.finalizedAt || null });
+      }
+    }
+    return ev.map(e => ({ ...e, timeMs: (e.ts != null && e.r.createdAt != null) ? e.ts - e.r.createdAt : null }));
+  }, [requests]);
+
+  const approverOptions = useMemo(() => {
+    const seen = new Map();
+    for (const e of approvalEvents) if (e.userId && !seen.has(e.userId))
+      seen.set(e.userId, e.userName || users.find(u => u.id === e.userId)?.name || e.userId);
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [approvalEvents, users]);
+
+  const approverData = useMemo(() =>
+    approverId ? approvalEvents.filter(e => e.userId === approverId && pass(e.ts)).sort((a, b) => (b.ts || 0) - (a.ts || 0)) : [],
+    [approvalEvents, approverId, from, to]);
+  const approverAvg = useMemo(() => {
+    const t = approverData.map(e => e.timeMs).filter(v => v != null);
+    return t.length ? t.reduce((a, b) => a + b, 0) / t.length : null;
+  }, [approverData]);
+
+  const deptData = useMemo(() =>
+    deptTeamId ? requests.filter(r => r.targetTeamId === deptTeamId && pass(r.createdAt)).sort((a, b) => b.createdAt - a.createdAt) : [],
+    [requests, deptTeamId, from, to]);
+  const deptSummary = useMemo(() => ({
+    total: deptData.length,
+    approved: deptData.filter(r => r.status === "approved").length,
+    pending: deptData.filter(r => r.status === "pending" || r.status === "approved_pending").length,
+    rejected: deptData.filter(r => r.status === "rejected").length,
+    withdrawn: deptData.filter(r => r.status === "withdrawn").length,
+  }), [deptData]);
+
+  const delayData = useMemo(() => {
+    const map = new Map();
+    for (const e of approvalEvents) {
+      if (e.timeMs == null || !pass(e.ts)) continue;
+      if (!map.has(e.userId)) map.set(e.userId, { id: e.userId, name: e.userName || users.find(u => u.id === e.userId)?.name || "—", times: [] });
+      map.get(e.userId).times.push(e.timeMs);
+    }
+    return [...map.values()].map(a => {
+      const n = a.times.length, sum = a.times.reduce((x, y) => x + y, 0);
+      return { id: a.id, name: a.name, count: n, avg: sum / n, min: Math.min(...a.times), max: Math.max(...a.times) };
+    }).sort((x, y) => y.avg - x.avg);
+  }, [approvalEvents, users, from, to]);
+
+  const requestorData = useMemo(() => {
+    const map = new Map();
+    for (const r of requests) {
+      if (!pass(r.createdAt)) continue;
+      const id = r.requestorId;
+      if (!map.has(id)) map.set(id, { id, name: r.requestorName || users.find(u => u.id === id)?.name || "—", total: 0, approved: 0, pending: 0, rejected: 0 });
+      const m = map.get(id); m.total++;
+      if (r.status === "approved") m.approved++;
+      else if (r.status === "rejected") m.rejected++;
+      else m.pending++;
+    }
+    return [...map.values()].map(m => ({ ...m, dept: userDept(m.id) })).sort((a, b) => b.total - a.total);
+  }, [requests, users, teams, from, to]);
+
+  const activeData = reportType === "approver" ? approverData : reportType === "department" ? deptData : reportType === "delays" ? delayData : requestorData;
+  const rangeTag = `${fromDate || "start"}_${toDate || "today"}`;
+
+  const doDownload = () => {
+    if (reportType === "approver") {
+      const who = approverOptions.find(a => a.id === approverId)?.name || "approver";
+      downloadCsv(`approver-${who}-${rangeTag}.csv`,
+        ["File", "Requestor", "Approving team", "Type", "Status", "Submitted (IST)", "Approved (IST)", "Time taken"],
+        approverData.map(e => [e.r.fileName, e.r.requestorName || "", teamName(e.r.targetTeamId), requestTypeLabel(e.r.requestType), e.r.status, fmt(e.r.createdAt), e.ts ? fmt(e.ts) : "", fmtDur(e.timeMs)]));
+    } else if (reportType === "department") {
+      downloadCsv(`department-${teamName(deptTeamId)}-${rangeTag}.csv`,
+        ["File", "Requestor", "Type", "Status", "Submitted (IST)", "Completed (IST)"],
+        deptData.map(r => [r.fileName, r.requestorName || "", requestTypeLabel(r.requestType), r.status, fmt(r.createdAt), r.finalizedAt ? fmt(r.finalizedAt) : ""]));
+    } else if (reportType === "delays") {
+      downloadCsv(`approval-delays-${rangeTag}.csv`,
+        ["Approver", "Approved count", "Average time", "Fastest", "Slowest"],
+        delayData.map(a => [a.name, a.count, fmtDur(a.avg), fmtDur(a.min), fmtDur(a.max)]));
+    } else {
+      downloadCsv(`requestor-${rangeTag}.csv`,
+        ["Requestor", "Department", "Total", "Approved", "Pending", "Rejected"],
+        requestorData.map(m => [m.name, m.dept, m.total, m.approved, m.pending, m.rejected]));
+    }
+  };
+
+  const th = "px-3 sm:px-4 py-2 text-left text-[10px] uppercase tracking-wider opacity-50 whitespace-nowrap";
+  const td = "px-3 sm:px-4 py-2 whitespace-nowrap";
 
   return (
     <div>
-      <BackHeader back={back} title="Reports" step="Team-wise" />
-      <div className="flex justify-end mt-6 mb-4">
-        <button className="btn-primary" onClick={exportCsv}><Download size={14} /> Download full CSV</button>
-      </div>
-      <div className="card overflow-hidden">
-        <div className="grid grid-cols-6 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
-          <div className="col-span-2">Team</div>
-          <div>Total</div><div>Pending</div><div>Approved</div><div>Rejected</div>
+      <BackHeader back={back} title="Reports" step={REPORT_TABS.find(t => t.key === reportType)?.label} />
+
+      <div className="card p-4 sm:p-5 mt-6">
+        <div className="flex flex-wrap gap-2 mb-4">
+          {REPORT_TABS.map(t => (
+            <button key={t.key} onClick={() => setReportType(t.key)}
+              className={`text-xs ${reportType === t.key ? "btn-primary" : "btn-ghost"}`}>{t.label}</button>
+          ))}
         </div>
-        {byTeam.map((b, i) => (
-          <div key={i} className="grid grid-cols-6 items-center px-5 py-4 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
-            <div className="col-span-2 font-medium">{b.team}</div>
-            <div className="font-display text-xl">{b.total}</div>
-            <div className="text-sm"><span className="font-mono">{b.pending}</span> <span className="opacity-40 text-xs">({b.pending_finalise} in window)</span></div>
-            <div className="text-sm font-mono" style={{ color: "var(--c-forest)" }}>{b.approved}</div>
-            <div className="text-sm font-mono" style={{ color: "var(--c-rust)" }}>{b.rejected}</div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">From</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="text-sm" style={{ minWidth: 140 }} />
           </div>
-        ))}
+          <div>
+            <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">To</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="text-sm" style={{ minWidth: 140 }} />
+          </div>
+          {(fromDate || toDate) && <button className="btn-ghost text-xs" onClick={() => { setFromDate(""); setToDate(""); }}>Clear</button>}
+          {reportType === "approver" && (
+            <div>
+              <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">Approver</label>
+              <select value={approverId} onChange={e => setApproverId(e.target.value)} className="text-sm" style={{ minWidth: 200 }}>
+                <option value="">Select approver…</option>
+                {approverOptions.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
+          )}
+          {reportType === "department" && (
+            <div>
+              <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">Department (approving team)</label>
+              <select value={deptTeamId} onChange={e => setDeptTeamId(e.target.value)} className="text-sm" style={{ minWidth: 200 }}>
+                <option value="">Select department…</option>
+                {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="flex-1" />
+          <button className="btn-primary text-sm" onClick={doDownload} disabled={activeData.length === 0}>
+            <Download size={14} /> Download CSV
+          </button>
+        </div>
+        <div className="text-[11px] opacity-50 mt-2">
+          {(!fromDate && !toDate) ? "All dates · times shown in IST. Pick a range to narrow." : `${fromDate || "start"} → ${toDate || "today"} · times in IST`}
+        </div>
       </div>
 
-      {/* Top approvers */}
-      <div className="mt-10">
-        <div className="font-display text-2xl mb-4">Top approvers</div>
-        <div className="card overflow-hidden">
-          {users.filter(u => u.role === "approver").map((u, i) => {
-            const n = requests.filter(r => r.approverId === u.id && r.status === "approved").length;
-            const rej = requests.filter(r => r.approverId === u.id && r.status === "rejected").length;
-            return (
-              <div key={u.id} className={`px-5 py-4 flex items-center justify-between ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
-                <div className="flex items-center gap-3">
-                  {u.hasSignature ? <SignatureImage userId={u.id} height={28} maxWidth={80} /> : <PenTool size={14} className="opacity-30" />}
-                  <div>
-                    <div className="font-medium text-sm">{u.name}</div>
-                    <div className="text-xs opacity-60">{(u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ")}</div>
-                  </div>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div><span className="font-display text-lg" style={{ color: "var(--c-forest)" }}>{n}</span> <span className="opacity-60 text-xs">approved</span></div>
-                  <div><span className="font-display text-lg" style={{ color: "var(--c-rust)" }}>{rej}</span> <span className="opacity-60 text-xs">rejected</span></div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* ---- By approver ---- */}
+      {reportType === "approver" && (
+        !approverId ? <Empty icon={BarChart3} text="Select an approver to list everything they've approved." />
+        : approverData.length === 0 ? <Empty icon={BarChart3} text="No approvals for this approver in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">{approverData.length} document{approverData.length === 1 ? "" : "s"} approved{approverAvg != null && <> · average <b>{fmtDur(approverAvg)}</b> to approve</>}</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["File", "Requestor", "Team", "Submitted", "Approved", "Time taken"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {approverData.map((e, i) => (
+                    <tr key={i} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{e.r.fileName}</td>
+                      <td className={`${td} opacity-70`}>{e.r.requestorName || "—"}</td>
+                      <td className={`${td} opacity-70`}>{teamName(e.r.targetTeamId)}</td>
+                      <td className={`${td} opacity-70`}>{fmt(e.r.createdAt)}</td>
+                      <td className={td}>{e.ts ? fmt(e.ts) : "—"}</td>
+                      <td className={`${td} font-medium`}>{fmtDur(e.timeMs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- By department (approving team) ---- */}
+      {reportType === "department" && (
+        !deptTeamId ? <Empty icon={BarChart3} text="Select a department to list the requests routed to it." />
+        : deptData.length === 0 ? <Empty icon={BarChart3} text="No requests for this department in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">
+              {deptSummary.total} request{deptSummary.total === 1 ? "" : "s"} ·
+              <span style={{ color: "var(--c-forest)" }}> {deptSummary.approved} approved</span> ·
+              <span> {deptSummary.pending} pending</span> ·
+              <span style={{ color: "var(--c-rust)" }}> {deptSummary.rejected} rejected</span>
+              {deptSummary.withdrawn > 0 && <span className="opacity-60"> · {deptSummary.withdrawn} withdrawn</span>}
+            </div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["File", "Requestor", "Type", "Status", "Submitted", "Completed"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {deptData.map((r, i) => (
+                    <tr key={i} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{r.fileName}</td>
+                      <td className={`${td} opacity-70`}>{r.requestorName || "—"}</td>
+                      <td className={`${td} opacity-70`}>{requestTypeLabel(r.requestType)}</td>
+                      <td className={td}><StatusPill status={r.status} /></td>
+                      <td className={`${td} opacity-70`}>{fmt(r.createdAt)}</td>
+                      <td className={`${td} opacity-70`}>{r.finalizedAt ? fmt(r.finalizedAt) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- Approval delays ---- */}
+      {reportType === "delays" && (
+        delayData.length === 0 ? <Empty icon={Clock} text="No approvals in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">Ranked slowest → fastest by average time from request to approval.</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["Approver", "Approved", "Average", "Fastest", "Slowest"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {delayData.map((a, i) => (
+                    <tr key={a.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`}>
+                        {a.name}
+                        {delayData.length > 1 && i === 0 && <span className="pill ml-2 text-[9px]" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>slowest</span>}
+                        {delayData.length > 1 && i === delayData.length - 1 && <span className="pill ml-2 text-[9px]" style={{ backgroundColor: "rgba(45,95,47,.10)", color: "var(--c-forest)" }}>fastest</span>}
+                      </td>
+                      <td className={`${td} font-mono`}>{a.count}</td>
+                      <td className={`${td} font-medium`}>{fmtDur(a.avg)}</td>
+                      <td className={td} style={{ color: "var(--c-forest)" }}>{fmtDur(a.min)}</td>
+                      <td className={td} style={{ color: "var(--c-rust)" }}>{fmtDur(a.max)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- By requestor ---- */}
+      {reportType === "requestor" && (
+        requestorData.length === 0 ? <Empty icon={BarChart3} text="No requests submitted in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">{requestorData.length} requestor{requestorData.length === 1 ? "" : "s"} · {requestorData.reduce((n, m) => n + m.total, 0)} request{requestorData.reduce((n, m) => n + m.total, 0) === 1 ? "" : "s"} total.</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["Requestor", "Department", "Total", "Approved", "Pending", "Rejected"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {requestorData.map(m => (
+                    <tr key={m.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`}>{m.name}</td>
+                      <td className={`${td} opacity-70`}>{m.dept}</td>
+                      <td className={`${td} font-mono`}>{m.total}</td>
+                      <td className={`${td} font-mono`} style={{ color: "var(--c-forest)" }}>{m.approved}</td>
+                      <td className={`${td} font-mono`}>{m.pending}</td>
+                      <td className={`${td} font-mono`} style={{ color: "var(--c-rust)" }}>{m.rejected}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
     </div>
   );
 }
