@@ -293,4 +293,71 @@ router.post("/request-reset", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- public: self-service password reset via email OTP ----------
+// The user resets their OWN password with a one-time code emailed to them — no
+// admin approval, and the code is never exposed to IT (redacted in the Email log).
+//
+// POST /api/auth/forgot-password/send-otp  body: { email }
+// Emails a fresh 6-digit code (10-min expiry). Always returns ok — never reveals
+// whether the email belongs to an account (anti-enumeration) — and won't resend
+// within a 45s cooldown to avoid inbox spam.
+router.post("/forgot-password/send-otp", async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
+    const user = await queryOne("SELECT id, name, email, active FROM users WHERE LOWER(email) = ?", [email]);
+    if (user && (user.active == null || Number(user.active) === 1)) {
+      const now = Date.now();
+      const recent = await queryOne("SELECT created_at FROM password_otps WHERE email = ? ORDER BY created_at DESC LIMIT 1", [email]);
+      if (!recent || now - Number(recent.created_at) > 45000) {
+        const code = String(crypto.randomInt(100000, 1000000)); // cryptographically-random 6 digits
+        const hash = bcrypt.hashSync(code, 10);
+        const id = "otp_" + now.toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+        await execute("DELETE FROM password_otps WHERE email = ?", [email]); // one live code per email
+        await execute(
+          "INSERT INTO password_otps (id, email, otp_hash, expires_at, attempts, used, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)",
+          [id, email, hash, now + 10 * 60 * 1000, now]
+        );
+        await sendEmail({ to: user.email, template: "password_otp", ctx: { name: user.name, otp: code, minutes: 10 } });
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// POST /api/auth/forgot-password/verify-otp  body: { email, otp, newPassword }
+// Verifies the code and sets the new password immediately. The self-chosen password
+// is NOT copied into the admin-visible last_temp_password — IT stays out of the loop.
+router.post("/forgot-password/verify-otp", async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const code = String(req.body?.otp || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
+    if (!email || !code) return res.status(400).json({ error: "Email and code are required" });
+    if (newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters" });
+
+    const row = await queryOne("SELECT * FROM password_otps WHERE email = ? AND used = 0 ORDER BY created_at DESC LIMIT 1", [email]);
+    if (!row) return res.status(400).json({ error: "No active reset code. Please request a new one." });
+    if (Date.now() > Number(row.expires_at)) {
+      await execute("DELETE FROM password_otps WHERE id = ?", [row.id]);
+      return res.status(400).json({ error: "This code has expired. Please request a new one." });
+    }
+    if (Number(row.attempts) >= 5) {
+      await execute("DELETE FROM password_otps WHERE id = ?", [row.id]);
+      return res.status(429).json({ error: "Too many incorrect attempts. Please request a new code." });
+    }
+    if (!bcrypt.compareSync(code, row.otp_hash)) {
+      await execute("UPDATE password_otps SET attempts = attempts + 1 WHERE id = ?", [row.id]);
+      return res.status(401).json({ error: "Incorrect code. Please try again." });
+    }
+
+    const user = await queryOne("SELECT id FROM users WHERE LOWER(email) = ?", [email]);
+    if (!user) return res.status(404).json({ error: "Account not found" });
+    const hash = bcrypt.hashSync(newPassword, 10);
+    await execute("UPDATE users SET password_hash = ?, last_temp_password = NULL, last_temp_password_at = NULL WHERE id = ?", [hash, user.id]);
+    await execute("DELETE FROM password_otps WHERE email = ?", [email]); // burn all codes for this email
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 export default router;

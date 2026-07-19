@@ -356,6 +356,18 @@ async function runSchema() {
   try { await pool.query("UPDATE users SET role = 'requestor' WHERE auth_provider = 'oneaccess' AND role = 'admin'"); }
   catch { /* users table shape not ready on a brand-new schema — next boot applies it */ }
 
+  // Self-service password reset via a one-time email code (no admin approval).
+  await tryExec(`CREATE TABLE IF NOT EXISTS password_otps (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    email       VARCHAR(191) NOT NULL,
+    otp_hash    VARCHAR(255) NOT NULL,
+    expires_at  BIGINT       NOT NULL,
+    attempts    INT          NOT NULL DEFAULT 0,
+    used        TINYINT(1)   NOT NULL DEFAULT 0,
+    created_at  BIGINT       NOT NULL,
+    INDEX idx_password_otps_email (email)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 

@@ -62,6 +62,13 @@ export const api = {
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },
+  // Self-service password reset via emailed OTP (no admin approval).
+  sendResetOtp(email) {
+    return this.fetch("/api/auth/forgot-password/send-otp", { method: "POST", body: JSON.stringify({ email }) });
+  },
+  resetWithOtp({ email, otp, newPassword }) {
+    return this.fetch("/api/auth/forgot-password/verify-otp", { method: "POST", body: JSON.stringify({ email, otp, newPassword }) });
+  },
   changePassword(currentPassword, newPassword) {
     return this.fetch("/api/auth/change-password", {
       method: "POST",

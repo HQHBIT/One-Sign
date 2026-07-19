@@ -308,6 +308,33 @@ const templates = {
       ].join("\n"),
     };
   },
+
+  // Self-service password reset: a one-time code the user enters to set a new
+  // password themselves. The code is NEVER put in the subject (subjects are logged
+  // unredacted) and sits on a "Reset code:" line in the text version so redact.js
+  // masks it in the Email log — keeping the reset the user's alone.
+  password_otp: (c) => ({
+    subject: `Your ${BRAND.fromName} password reset code`,
+    html: layout({
+      preheader: "Your one-time password reset code",
+      pillHtml: pill("Password reset", "neutral"),
+      heading: "Your password reset code",
+      contentHtml:
+        greet(c.name) +
+        p(`Use the one-time code below to reset your <strong>${esc(BRAND.fromName)}</strong> password. It's valid for ${esc(String(c.minutes))} minutes.`) +
+        details([{ label: "Reset code", value: c.otp }], { mono: true, accent: true }) +
+        caption("Enter this code on the reset screen, then choose your new password. If you didn't request this, ignore this email — your password won't change."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `You requested a password reset on ${BRAND.fromName}.`, ``,
+      `Reset code: ${c.otp}`,
+      `This code is valid for ${c.minutes} minutes.`, ``,
+      `Enter it on the reset screen, then choose a new password.`,
+      `If you didn't request this, ignore this email — your password won't change.`, ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
 };
 
 // Render a template without sending — used by the preview generator + tests.

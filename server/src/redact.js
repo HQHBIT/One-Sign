@@ -12,5 +12,8 @@ export function redactEmailBody(body) {
   return String(body == null ? "" : body)
     // Mask the value after a "Password:" / "New password:" label at line start,
     // keeping the label + its alignment spaces so the log still reads cleanly.
-    .replace(/^(Password:\s*|New password:\s*).+$/gm, "$1••••••••");
+    .replace(/^(Password:\s*|New password:\s*).+$/gm, "$1••••••••")
+    // Mask one-time reset codes. The reset OTP is a self-service secret — the log
+    // must never expose a live code, or an admin could complete a user's reset.
+    .replace(/^(Reset code:\s*|Code:\s*|OTP:\s*).+$/gm, "$1••••••••");
 }

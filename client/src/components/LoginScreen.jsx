@@ -30,12 +30,15 @@ export function LoginScreen({ login }) {
   });
   const openAdmin = () => { try { window.history.replaceState(null, "", "#superadmin"); } catch {} setAdminMode(true); };
   const closeAdmin = () => { try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch {} setAdminMode(false); };
-  // Forgot-password panel state: idle | open | sending | sent | error
+  // Self-service password reset (email OTP): idle → email → code → done
   const [forgotState, setForgotState] = useState("idle");
+  const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotErr, setForgotErr] = useState(null);
+  const [forgotOtp, setForgotOtp] = useState("");
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotConfirm, setForgotConfirm] = useState("");
+  const [forgotErr, setForgotErr] = useState(null);
+  const [forgotNote, setForgotNote] = useState(null);
 
   // Self-registration removed — users are provisioned through oneAccess.
 
@@ -70,33 +73,42 @@ export function LoginScreen({ login }) {
     await login(email, password); setBusy(false);
   };
 
-  const submitForgot = async e => {
-    e.preventDefault();
-    if (!forgotEmail.trim()) return;
-    if (forgotNewPassword.length < 6) { setForgotErr("New password must be at least 6 characters"); setForgotState("error"); return; }
-    if (forgotNewPassword !== forgotConfirm) { setForgotErr("Passwords don't match"); setForgotState("error"); return; }
-    setForgotState("sending");
-    setForgotErr(null);
-    try {
-      await api.requestReset({ email: forgotEmail.trim(), newPassword: forgotNewPassword });
-      // Server always returns 200 (anti-enumeration). The new password takes
-      // effect only after IT approves the request.
-      setForgotState("sent");
-    } catch (e) {
-      setForgotErr(e.message || "Could not submit reset request");
-      setForgotState("error");
-    }
-  };
-
   const openForgot = () => {
     setForgotEmail(email); // prefill from login form if they typed one
-    setForgotNewPassword(""); setForgotConfirm("");
-    setForgotErr(null);
-    setForgotState("open");
+    setForgotOtp(""); setForgotNewPassword(""); setForgotConfirm("");
+    setForgotErr(null); setForgotNote(null);
+    setForgotState("email");
   };
-  const closeForgot = () => {
-    setForgotState("idle");
-    setForgotErr(null);
+  const closeForgot = () => { setForgotState("idle"); setForgotErr(null); setForgotNote(null); };
+
+  // Step 1 — email a one-time code to the account holder.
+  const sendOtp = async e => {
+    e?.preventDefault?.();
+    const em = forgotEmail.trim();
+    if (!em) return;
+    setForgotBusy(true); setForgotErr(null);
+    try {
+      await api.sendResetOtp(em);
+      setForgotNote(`If an account exists for ${em}, a 6-digit code is on its way — valid for 10 minutes.`);
+      setForgotState("code");
+    } catch (err) {
+      setForgotErr(err.message || "Could not send the code");
+    } finally { setForgotBusy(false); }
+  };
+
+  // Step 2 — verify the code and set the new password (no admin involved).
+  const verifyOtp = async e => {
+    e?.preventDefault?.();
+    if (!forgotOtp.trim()) { setForgotErr("Enter the code from your email"); return; }
+    if (forgotNewPassword.length < 6) { setForgotErr("New password must be at least 6 characters"); return; }
+    if (forgotNewPassword !== forgotConfirm) { setForgotErr("Passwords don't match"); return; }
+    setForgotBusy(true); setForgotErr(null);
+    try {
+      await api.resetWithOtp({ email: forgotEmail.trim(), otp: forgotOtp.trim(), newPassword: forgotNewPassword });
+      setForgotState("done");
+    } catch (err) {
+      setForgotErr(err.message || "Could not reset the password");
+    } finally { setForgotBusy(false); }
   };
 
   return (
@@ -257,66 +269,68 @@ export function LoginScreen({ login }) {
           )}
           */}
 
-          {(forgotState === "open" || forgotState === "sending" || forgotState === "error") && (
-            <form onSubmit={submitForgot}>
+          {/* Step 1 — request a one-time code */}
+          {forgotState === "email" && (
+            <form onSubmit={sendOtp}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Reset password</div>
               <div className="text-sm opacity-60 mb-8">
-                Enter your email and choose a new password. IT will review and approve the request — then you can sign in with it.
+                Enter your email and we'll send you a one-time code to reset your password yourself.
               </div>
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
-              <input type="email"
-                value={forgotEmail}
-                onChange={e => setForgotEmail(e.target.value)}
-                className="w-full mb-4"
-                required
-                autoFocus
-                disabled={forgotState === "sending"} />
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
-              <PasswordInput
-                value={forgotNewPassword}
-                onChange={e => setForgotNewPassword(e.target.value)}
-                className="w-full mb-4"
-                placeholder="At least 6 characters"
-                required
-                disabled={forgotState === "sending"} />
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
-              <PasswordInput
-                value={forgotConfirm}
-                onChange={e => setForgotConfirm(e.target.value)}
-                className="w-full mb-5"
-                required
-                disabled={forgotState === "sending"} />
+              <input type="email" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)}
+                className="w-full mb-5" required autoFocus disabled={forgotBusy} />
               {forgotErr && (
-                <div className="text-xs px-3 py-2 rounded mb-4"
-                  style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-                  {forgotErr}
-                </div>
+                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{forgotErr}</div>
               )}
               <div className="flex gap-2">
-                <button type="button" className="btn-ghost" onClick={closeForgot}>
-                  <ArrowLeft size={14} /> Back
-                </button>
-                <button className="btn-primary flex-1 justify-center" disabled={forgotState === "sending" || !forgotEmail.trim() || forgotNewPassword.length < 6}>
-                  {forgotState === "sending" ? "Submitting…" : <>Request reset <ArrowRight size={14} /></>}
+                <button type="button" className="btn-ghost" onClick={closeForgot}><ArrowLeft size={14} /> Back</button>
+                <button className="btn-primary flex-1 justify-center" disabled={forgotBusy || !forgotEmail.trim()}>
+                  {forgotBusy ? "Sending…" : <>Send code <ArrowRight size={14} /></>}
                 </button>
               </div>
             </form>
           )}
 
-          {forgotState === "sent" && (
+          {/* Step 2 — enter the code + choose a new password */}
+          {forgotState === "code" && (
+            <form onSubmit={verifyOtp}>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Enter your code</div>
+              <div className="text-sm opacity-60 mb-6">{forgotNote || `We sent a code to ${forgotEmail}.`}</div>
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">6-digit code</label>
+              <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                value={forgotOtp} onChange={e => setForgotOtp(e.target.value.replace(/\D/g, ""))}
+                className="w-full mb-4 font-mono text-lg" style={{ letterSpacing: ".4em" }} placeholder="••••••" required autoFocus disabled={forgotBusy} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
+              <PasswordInput value={forgotNewPassword} onChange={e => setForgotNewPassword(e.target.value)}
+                className="w-full mb-4" placeholder="At least 6 characters" required disabled={forgotBusy} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
+              <PasswordInput value={forgotConfirm} onChange={e => setForgotConfirm(e.target.value)}
+                className="w-full mb-4" required disabled={forgotBusy} />
+              {forgotErr && (
+                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{forgotErr}</div>
+              )}
+              <div className="flex gap-2">
+                <button type="button" className="btn-ghost" onClick={() => { setForgotState("email"); setForgotErr(null); }}><ArrowLeft size={14} /> Back</button>
+                <button className="btn-primary flex-1 justify-center" disabled={forgotBusy || forgotOtp.length < 4 || forgotNewPassword.length < 6}>
+                  {forgotBusy ? "Resetting…" : <>Reset password <ArrowRight size={14} /></>}
+                </button>
+              </div>
+              <div className="text-center mt-5">
+                <button type="button" onClick={sendOtp} disabled={forgotBusy} className="text-xs opacity-60 hover:opacity-100 underline">
+                  Didn't get it? Resend code
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Step 3 — done */}
+          {forgotState === "done" && (
             <div className="anim-in">
-              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Password reset ✓</div>
               <div className="text-sm opacity-70 mb-6 leading-relaxed">
-                Your reset request for <span className="font-mono">{forgotEmail}</span> has been sent to IT.
-                Once they approve it, sign in with your new password.
+                Your password for <span className="font-mono">{forgotEmail}</span> has been updated — sign in with it now.
               </div>
-              <div className="card p-3 mb-6 flex items-start gap-3 text-xs" style={{ backgroundColor: "rgba(45,95,47,.06)", borderColor: "rgba(45,95,47,.2)" }}>
-                <Check size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-forest)" }} />
-                <div className="opacity-80">Your current password keeps working until IT approves the change.</div>
-              </div>
-              <button className="btn-primary w-full justify-center" onClick={closeForgot}>
-                <ArrowLeft size={14} /> Back to sign-in
-              </button>
+              <button className="btn-primary w-full justify-center" onClick={closeForgot}><ArrowLeft size={14} /> Back to sign-in</button>
             </div>
           )}
         </div>
