@@ -2070,6 +2070,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const [editingItsId, setEditingItsId] = useState(null);
   const [itsDraft, setItsDraft] = useState("");
   const [mergePreview, setMergePreview] = useState(null);
+  // Inline email editing.
+  const [editingEmailId, setEditingEmailId] = useState(null);
+  const [emailDraft, setEmailDraft] = useState("");
   const confirm = useConfirmation();
 
   // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
@@ -2198,6 +2201,32 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
     </button>
   );
 
+  // Change a user's primary email (sign-in + all notifications).
+  const saveEmail = async (u) => {
+    const val = emailDraft.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val)) { notify("Enter a valid email address", "error"); return; }
+    try {
+      await api.setUserEmail(u.id, val);
+      setEditingEmailId(null);
+      await saveUsers();
+      notify("Email updated", "success");
+    } catch (e) { notify(e.message || "Could not update email", "error"); }
+  };
+  const renderEmail = (u) => editingEmailId === u.id ? (
+    <div className="flex items-center gap-1">
+      <input autoFocus type="email" value={emailDraft} onChange={e => setEmailDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") saveEmail(u); else if (e.key === "Escape") setEditingEmailId(null); }}
+        className="text-xs font-mono px-1.5 py-0.5 rounded border w-full min-w-0" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }} />
+      <button className="opacity-60 hover:opacity-100 shrink-0" onClick={() => saveEmail(u)} title="Save email"><Check size={12} /></button>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setEditingEmailId(null)} title="Cancel"><X size={12} /></button>
+    </div>
+  ) : (
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="font-mono text-xs opacity-70 truncate">{u.email}</span>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => { setEditingEmailId(u.id); setEmailDraft(u.email); }} title="Edit email"><Pencil size={10} /></button>
+    </div>
+  );
+
   return (
     <div>
       <BackHeader back={back} title="Users" step={`${users.length} total · auto-refresh 20s`} />
@@ -2231,7 +2260,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               {u.active === false && <span className="pill text-[9px]" style={{ backgroundColor: "rgba(15,26,46,.08)" }}>merged</span>}
             </div>
             <div className="col-span-3 min-w-0">
-              <div className="font-mono text-xs opacity-70 truncate">{u.email}</div>
+              {renderEmail(u)}
               {renderIts(u)}
             </div>
             <div className="col-span-1"><span className="pill pill-pending">{u.role}</span></div>
@@ -2322,7 +2351,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               </div>
             </div>
             <div className="mb-2">
-              <div className="text-xs font-mono opacity-70 truncate">{u.email}</div>
+              {renderEmail(u)}
               {renderIts(u)}
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">

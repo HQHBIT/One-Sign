@@ -122,6 +122,7 @@ export const api = {
   listDuplicateUsers() { return this.fetch("/api/users/duplicates").then(r => r.pairs); },
   oneAccessUsers() { return this.fetch("/api/users/oneaccess").then(r => r.users); },
   setUserItsId(id, its) { return this.fetch(`/api/users/${id}/its-id`, { method: "PUT", body: JSON.stringify({ its }) }); }, // -> { ok, its, collision }
+  setUserEmail(id, email) { return this.fetch(`/api/users/${id}/email`, { method: "PUT", body: JSON.stringify({ email }) }); },
   mergeCandidates() { return this.fetch("/api/users/merge-candidates").then(r => r.candidates); },
   mergeUsers(survivorId, loserId) { return this.fetch("/api/users/merge", { method: "POST", body: JSON.stringify({ survivorId, loserId }) }); },
   reactivateUser(id) { return this.fetch(`/api/users/${id}/reactivate`, { method: "PUT" }); },

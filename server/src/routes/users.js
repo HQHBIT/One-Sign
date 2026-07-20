@@ -599,6 +599,24 @@ router.put("/:id/its-id", authRequired, requireRole("admin"), async (req, res, n
   } catch (e) { next(e); }
 });
 
+// ---------- admin: change a user's email ----------
+// PUT /api/users/:id/email  body: { email }
+// Updates the account's primary email (used for sign-in + all notifications).
+// Rejects an email already in use by another account.
+router.put("/:id/email", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || "").trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
+    const target = await queryOne("SELECT id FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const clash = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?", [email, req.params.id]);
+    if (clash) return res.status(409).json({ error: "That email is already used by another account." });
+    await execute("UPDATE users SET email = ? WHERE id = ?", [email, req.params.id]);
+    const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    res.json({ user: await hydrateUser(row) });
+  } catch (e) { next(e); }
+});
+
 // ---------- admin: list ITS-collision merge candidates ----------
 // GET /api/users/merge-candidates → active account pairs that share an ITS.
 router.get("/merge-candidates", authRequired, requireRole("admin"), async (req, res, next) => {
