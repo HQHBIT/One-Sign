@@ -374,6 +374,28 @@ async function runSchema() {
     INDEX idx_password_otps_email (email)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // WebAuthn / passkeys — biometric sign-in on a trusted device. We store ONLY a
+  // public key + signature counter per enrolled device; never any biometric data.
+  await tryExec(`CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id      VARCHAR(64)  NOT NULL,
+    cred_id      VARCHAR(255) NOT NULL,
+    public_key   TEXT         NOT NULL,
+    counter      BIGINT       NOT NULL DEFAULT 0,
+    transports   VARCHAR(255) DEFAULT NULL,
+    device_label VARCHAR(120) DEFAULT NULL,
+    created_at   BIGINT       NOT NULL,
+    UNIQUE KEY uq_webauthn_cred (cred_id),
+    INDEX idx_webauthn_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    purpose     VARCHAR(16)  NOT NULL,
+    user_id     VARCHAR(64)  DEFAULT NULL,
+    challenge   VARCHAR(400) NOT NULL,
+    expires_at  BIGINT       NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 

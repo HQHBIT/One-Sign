@@ -8,6 +8,7 @@ import { initDb } from "./db.js";
 import { startScheduler } from "./scheduler.js";
 
 import authRoutes from "./routes/auth.js";
+import webauthnRoutes from "./routes/webauthn.js";
 import usersRoutes from "./routes/users.js";
 import teamsRoutes from "./routes/teams.js";
 import requestsRoutes from "./routes/requests.js";
@@ -40,6 +41,7 @@ async function main() {
   app.get("/api/health", (req, res) => res.json({ ok: true, time: Date.now() }));
 
   app.use("/api/auth", authRoutes);
+  app.use("/api/webauthn", webauthnRoutes);
   app.use("/api/users", usersRoutes);
   app.use("/api/teams", teamsRoutes);
   app.use("/api/requests", requestsRoutes);

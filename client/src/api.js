@@ -33,9 +33,9 @@ export const api = {
       throw Object.assign(new Error("Session expired"), { status: 401 });
     }
     if (!res.ok) {
-      let msg = res.statusText;
-      if (ct.includes("application/json")) { try { msg = (await res.json()).error || msg; } catch {} }
-      throw Object.assign(new Error(msg), { status: res.status });
+      let msg = res.statusText, code = null;
+      if (ct.includes("application/json")) { try { const b = await res.json(); msg = b.error || msg; code = b.code || null; } catch {} }
+      throw Object.assign(new Error(msg), { status: res.status, code });
     }
     if (opts.raw) return res;
     if (ct.includes("application/json")) return res.json();
@@ -62,6 +62,14 @@ export const api = {
   // First-run capture of a oneAccess user's work email (becomes their primary
   // address for all notifications). Returns { user }.
   setWorkEmail(email) { return this.fetch("/api/auth/me/work-email", { method: "PUT", body: JSON.stringify({ email }) }); },
+
+  // -------- WebAuthn / biometric sign-in --------
+  webauthnRegisterOptions() { return this.fetch("/api/webauthn/register/options", { method: "POST" }); },
+  webauthnRegisterVerify(body) { return this.fetch("/api/webauthn/register/verify", { method: "POST", body: JSON.stringify(body) }); },
+  webauthnLoginOptions() { return this.fetch("/api/webauthn/login/options", { method: "POST" }); },
+  webauthnLoginVerify(body) { return this.fetch("/api/webauthn/login/verify", { method: "POST", body: JSON.stringify(body) }); },
+  webauthnCredentials() { return this.fetch("/api/webauthn/credentials").then(r => r.credentials); },
+  webauthnRemoveCredential(id) { return this.fetch(`/api/webauthn/credentials/${id}`, { method: "DELETE" }); },
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },

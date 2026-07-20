@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -32,6 +32,7 @@ import { Row } from "./components/Row.jsx";
 import { Countdown } from "./components/Countdown.jsx";
 import { ModalShell } from "./components/ModalShell.jsx";
 import { TopBar } from "./components/TopBar.jsx";
+import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from "./lib/biometric.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
@@ -221,6 +222,14 @@ export default function App() {
       return false;
     }
   };
+  // Establish a session from an already-issued { token, user } — used by
+  // biometric (WebAuthn) sign-in, which authenticates without a password.
+  const completeSession = async ({ token, user: u }) => {
+    api.setToken(token);
+    setUser(u);
+    await refresh(u);
+    notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
+  };
   const logout = async () => {
     api.setToken(null);
     setUser(null); setTeams([]); setUsers([]); setRequests([]); setEmails([]);
@@ -283,7 +292,7 @@ export default function App() {
     <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}>
       <StyleTag />
       {!user ? (
-        <LoginScreen login={login} />
+        <LoginScreen login={login} onSession={completeSession} />
       ) : user.needsWorkEmail ? (
         <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
@@ -370,6 +379,70 @@ function WorkEmailCapture({ user, notify, onDone }) {
 }
 
 // ============================================================
+//   BIOMETRIC SIGN-IN — enrol / manage this device's Face ID / fingerprint.
+//   The device does the biometric check; SignFlow stores only a public key.
+// ============================================================
+function BiometricModal({ notify, onClose }) {
+  const [avail, setAvail] = useState(null);     // null = checking
+  const [creds, setCreds] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  useEscapeKey(onClose);
+  const load = () => api.webauthnCredentials().then(setCreds).catch(() => setCreds([]));
+  useEffect(() => { biometricAvailableHere().then(setAvail).catch(() => setAvail(false)); load(); }, []);
+
+  const enrol = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await enrolBiometric();
+      notify(`Biometric sign-in enabled on ${r.label || "this device"}.`, "success");
+      await load();
+    } catch (e) { setErr(biometricErrorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const remove = async (id) => {
+    try { await api.webauthnRemoveCredential(id); await load(); notify("Device removed.", "success"); }
+    catch (e) { notify(e.message || "Could not remove device.", "error"); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }} onClick={onClose}>
+      <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+        <div className="font-display text-2xl mb-1">Biometric sign-in</div>
+        <div className="text-sm opacity-60 mb-5">
+          Turn on Face ID / fingerprint sign-in for <b>this device</b>. Your face or fingerprint never leaves it — SignFlow only stores a key.
+        </div>
+        {avail === false && (
+          <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+            This device doesn't offer a built-in biometric. Try a phone, or a laptop with Face ID / Windows Hello.
+          </div>
+        )}
+        {creds && creds.length > 0 && (
+          <div className="mb-4">
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Enabled on</div>
+            <div className="space-y-2">
+              {creds.map(c => (
+                <div key={c.id} className="flex items-center justify-between rounded p-2.5" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                  <div className="text-sm">{c.label} <span className="opacity-40 text-xs">· {fmtShort(c.createdAt)}</span></div>
+                  <button className="text-xs opacity-60 hover:opacity-100" onClick={() => remove(c.id)}>Remove</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {err && <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>}
+        <div className="flex justify-end gap-3">
+          <button className="btn-ghost" onClick={onClose}>Close</button>
+          <button className="btn-primary" onClick={enrol} disabled={busy || avail === false}>
+            <ScanFace size={15} /> {busy ? "Follow your device…" : "Enable on this device"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 //   SHELL (top nav + role router)
 // ============================================================
 function Shell(props) {
@@ -377,6 +450,7 @@ function Shell(props) {
   const [needsSig, setNeedsSig] = useState(false);
   const [editSig, setEditSig] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
+  const [bioOpen, setBioOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
   // so tapping install opens a short instructions sheet instead.
@@ -398,6 +472,7 @@ function Shell(props) {
       <TopBar user={user} logout={logout}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
+        onBiometric={() => setBioOpen(true)}
         onHome={() => setHomeKey(k => k + 1)}
         onInstall={install.supported ? handleInstall : null}
         onHelp={() => setHelpOpen(true)} />
@@ -432,6 +507,7 @@ function Shell(props) {
           onClose={() => setChangingPwd(false)}
           notify={notify} />
       )}
+      {bioOpen && <BiometricModal notify={notify} onClose={() => setBioOpen(false)} />}
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>

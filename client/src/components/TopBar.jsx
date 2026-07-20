@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace } from "lucide-react";
 
-export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome, onHelp, onInstall }) {
+export function TopBar({ user, logout, onEditSignature, onChangePassword, onBiometric, onHome, onHelp, onInstall }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
@@ -96,6 +96,12 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onHome
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
                     onClick={() => { setMenuOpen(false); onChangePassword(); }}>
                     <KeyRound size={15} className="opacity-70 shrink-0" /> Password
+                  </button>
+                )}
+                {onBiometric && (
+                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                    onClick={() => { setMenuOpen(false); onBiometric(); }}>
+                    <ScanFace size={15} className="opacity-70 shrink-0" /> Biometric sign-in
                   </button>
                 )}
                 {onHelp && (

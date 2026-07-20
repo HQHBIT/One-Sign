@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowRight, ArrowLeft, Check } from "lucide-react";
+import { ArrowRight, ArrowLeft, Check, ScanFace } from "lucide-react";
 import { api } from "../api.js";
 import { PasswordInput } from "./PasswordInput.jsx";
+import { loginBiometric, biometricAvailableHere, biometricErrorMessage, deviceHasBiometric, forgetBiometricHere } from "../lib/biometric.js";
 
 // DISABLED: expense feature commented out
 /* Local-time YYYY-MM-DD for the date input's default value.
@@ -11,10 +12,38 @@ function todayStr() {
 }
 */
 
-export function LoginScreen({ login }) {
+export function LoginScreen({ login, onSession }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // Biometric (WebAuthn) sign-in — only surfaced when this device actually has a
+  // platform authenticator (Face ID / Touch ID / Windows Hello).
+  const [bioAvail, setBioAvail] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioErr, setBioErr] = useState(null);
+  // Offer the biometric button only where it'll work: the device supports it AND
+  // it has been enrolled here (otherwise the user hits the "use another device" chooser).
+  useEffect(() => { biometricAvailableHere().then(a => setBioAvail(a && deviceHasBiometric())).catch(() => {}); }, []);
+  const signInBiometric = async () => {
+    setBioBusy(true); setBioErr(null);
+    try {
+      const session = await loginBiometric();
+      onSession?.(session);
+    } catch (e) {
+      // Not registered on the server → this device can't sign in biometrically.
+      // Send them to oneAccess to register / sign in first, and drop the stale hint.
+      if (e?.code === "not_registered") {
+        forgetBiometricHere();
+        setBioAvail(false);
+        if (oneAccessAvailable && authCfg.oneAccessStartUrl) {
+          setBioErr("Please register on oneAccess to sign in!");
+          setTimeout(() => { window.location.href = authCfg.oneAccessStartUrl; }, 1400);
+          return;
+        }
+      }
+      setBioErr(biometricErrorMessage(e));
+    } finally { setBioBusy(false); }
+  };
   // Login options from the server: whether to offer oneAccess SSO and/or the local
   // password form. Defaults keep the local form so a config hiccup never locks out.
   const [authCfg, setAuthCfg] = useState({ oneAccessEnabled: false, localLoginEnabled: true, oneAccessStartUrl: null });
@@ -168,6 +197,17 @@ export function LoginScreen({ login }) {
                     </div>
                   )}
                 </>
+              )}
+
+              {/* Biometric (Face ID / fingerprint) sign-in — shown on this device
+                  once the user has enrolled it from their profile menu. */}
+              {!adminMode && bioAvail && (
+                <div className={oneAccessAvailable ? "mt-3" : ""}>
+                  <button type="button" className="btn-ghost w-full justify-center" onClick={signInBiometric} disabled={bioBusy}>
+                    <ScanFace size={16} /> {bioBusy ? "Waiting for your device…" : "Sign in with Face / fingerprint"}
+                  </button>
+                  {bioErr && <div className="text-xs mt-2 text-center" style={{ color: "var(--c-rust-deep)" }}>{bioErr}</div>}
+                </div>
               )}
 
               {/* Admin email+password form — in admin mode, or as the sole option if
