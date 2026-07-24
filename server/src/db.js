@@ -420,6 +420,10 @@ async function runSchema() {
     CONSTRAINT fk_ea_exec FOREIGN KEY (executive_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_ea_asst FOREIGN KEY (assistant_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // When an assistant approves on behalf of an executive, the request records the
+  // executive as approver (their name/signature is on the document) AND the real
+  // actor here, for the audit trail. Nullable → normal approvals leave it NULL.
+  await tryExec(`ALTER TABLE requests ADD COLUMN acted_by_assistant_id VARCHAR(64) DEFAULT NULL`);
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);

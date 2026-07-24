@@ -15,6 +15,8 @@ import requestsRoutes from "./routes/requests.js";
 import adminRoutes from "./routes/admin.js";
 import registrationsRoutes from "./routes/registrations.js";
 import passwordResetsRoutes from "./routes/password-resets.js";
+import executiveAssistantsRoutes from "./routes/executive-assistants.js";
+import assistRoutes from "./routes/assist.js";
 // import expensesRoutes from "./routes/expenses.js"; // DISABLED: expense feature commented out
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,8 @@ async function main() {
   // app.use("/api/expenses", expensesRoutes); // DISABLED: expense feature commented out
   app.use("/api/registrations", registrationsRoutes);
   app.use("/api/password-resets", passwordResetsRoutes);
+  app.use("/api/executive-assistants", executiveAssistantsRoutes);
+  app.use("/api/assist", assistRoutes);
   app.use("/api", adminRoutes);
 
   // Serve built client assets in production

@@ -309,7 +309,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     for (const s of step.signers) {
       const u = userById[s.userId];
       if (!u) return res.status(400).json({ error: `Unknown signer: ${s.userId}` });
-      if (u.role !== "approver") return res.status(400).json({ error: `${u.name} is not an approver` });
+      if (!isSigner(u.role)) return res.status(400).json({ error: `${u.name} is not an approver` });
       if (!u.signature_path) return res.status(400).json({ error: `${u.name} has no signature on file` });
       const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [s.userId, step.teamId]);
       if (!auth) return res.status(400).json({ error: `${u.name} has no signing authority for ${teamById[step.teamId].name}` });
@@ -539,7 +539,11 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
 // ============================================================
 //   approve  — handles both legacy and workflow paths
 // ============================================================
-router.post("/:id/approve", authRequired, async (req, res, next) => {
+// Exported so the "approve on behalf" (assist) route can reuse the exact same
+// signing logic. It reads the acting signer from req.user / req.userRow, so the
+// assist route calls it with an executive-shaped req (see routes/assist.js) —
+// keeping one single code path for all approvals.
+export async function approveRequestHandler(req, res, next) {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -551,7 +555,7 @@ router.post("/:id/approve", authRequired, async (req, res, next) => {
     if (next) return await approveWorkflowStep({ req, res, row, signer: next });
 
     // Legacy single-marker (team path) — still approver-only + team authority.
-    if (req.user.role !== "approver") return res.status(403).json({ error: "Not authorised to sign this request" });
+    if (!isSigner(req.user.role)) return res.status(403).json({ error: "Not authorised to sign this request" });
     if (!row.target_team_id || !row.marker_json) return res.status(400).json({ error: "Request misconfigured" });
     const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
@@ -604,7 +608,8 @@ router.post("/:id/approve", authRequired, async (req, res, next) => {
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated), approvalWindowMs: row.instant_approval ? 0 : APPROVAL_WINDOW_MS });
   } catch (e) { next(e); }
-});
+}
+router.post("/:id/approve", authRequired, approveRequestHandler);
 
 async function approveWorkflowStep({ req, res, row, signer }) {
   if (signer.user_id !== req.user.id) {
