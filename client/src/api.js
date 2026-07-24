@@ -70,6 +70,18 @@ export const api = {
   webauthnLoginVerify(body) { return this.fetch("/api/webauthn/login/verify", { method: "POST", body: JSON.stringify(body) }); },
   webauthnCredentials() { return this.fetch("/api/webauthn/credentials").then(r => r.credentials); },
   webauthnRemoveCredential(id) { return this.fetch(`/api/webauthn/credentials/${id}`, { method: "DELETE" }); },
+
+  // -------- executive ↔ assistant mapping --------
+  execAssistLinks() { return this.fetch("/api/executive-assistants").then(r => r.links); },
+  assistantCandidates() { return this.fetch("/api/executive-assistants/assistant-candidates").then(r => r.candidates); },
+  executiveCandidates() { return this.fetch("/api/executive-assistants/executive-candidates").then(r => r.candidates); },
+  createExecAssistLink(body) { return this.fetch("/api/executive-assistants", { method: "POST", body: JSON.stringify(body) }).then(r => r.link); },
+  updateExecAssistLink(id, body) { return this.fetch(`/api/executive-assistants/${id}`, { method: "PUT", body: JSON.stringify(body) }).then(r => r.link); },
+  deleteExecAssistLink(id) { return this.fetch(`/api/executive-assistants/${id}`, { method: "DELETE" }); },
+  // -------- assistant acting on behalf --------
+  assistExecutives() { return this.fetch("/api/assist/executives").then(r => r.executives); },
+  assistRequests(executiveId) { return this.fetch(`/api/assist/${executiveId}/requests`).then(r => r.requests); },
+  assistApprove(executiveId, id) { return this.fetch(`/api/assist/${executiveId}/requests/${id}/approve`, { method: "POST" }); },
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },

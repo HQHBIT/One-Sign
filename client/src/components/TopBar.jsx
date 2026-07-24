@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog } from "lucide-react";
 
-export function TopBar({ user, logout, onEditSignature, onChangePassword, onBiometric, onHome, onHelp, onInstall }) {
-  const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver" }[user.role];
+export function TopBar({ user, logout, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
+  const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver", executive: "Executive", executive_assistant: "Executive Assistant" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
   const initials = (user.name || "")
@@ -102,6 +102,12 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onBiom
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
                     onClick={() => { setMenuOpen(false); onBiometric(); }}>
                     <ScanFace size={15} className="opacity-70 shrink-0" /> Biometric sign-in
+                  </button>
+                )}
+                {onDelegation && (
+                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                    onClick={() => { setMenuOpen(false); onDelegation(); }}>
+                    <UserCog size={15} className="opacity-70 shrink-0" /> {user.role === "admin" ? "Assistants" : "My assistant"}
                   </button>
                 )}
                 {onHelp && (

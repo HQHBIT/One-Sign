@@ -34,6 +34,8 @@ import { ModalShell } from "./components/ModalShell.jsx";
 import { TopBar } from "./components/TopBar.jsx";
 import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from "./lib/biometric.js";
 import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
+import { DelegationSettings } from "./components/DelegationSettings.jsx";
+import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate } from "./lib/autoUpdate.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
@@ -475,6 +477,7 @@ function Shell(props) {
   const [changingPwd, setChangingPwd] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [delegationOpen, setDelegationOpen] = useState(false);
   // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
   // so tapping install opens a short instructions sheet instead.
   const install = useInstall();
@@ -486,7 +489,7 @@ function Shell(props) {
 
   // require signature for requestor & approver on first login
   useEffect(() => {
-    if ((user.role === "requestor" || user.role === "approver") && !user.hasSignature) setNeedsSig(true);
+    if ((user.role === "requestor" || user.role === "approver" || user.role === "executive") && !user.hasSignature) setNeedsSig(true);
     else setNeedsSig(false);
   }, [user.id, user.role, user.hasSignature]);
 
@@ -496,13 +499,15 @@ function Shell(props) {
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
         onBiometric={() => setBioOpen(true)}
+        onDelegation={(user.role === "executive" || user.role === "admin") ? () => setDelegationOpen(true) : null}
         onHome={() => setHomeKey(k => k + 1)}
         onInstall={install.supported ? handleInstall : null}
         onHelp={() => setHelpOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
-        {user.role === "approver" && <ApproverView key={homeKey} {...props} />}
+        {(user.role === "approver" || user.role === "executive") && <ApproverView key={homeKey} {...props} />}
+        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} {...props} />}
         {user.role === "admin" && <AdminView key={homeKey} {...props} />}
       </main>
       {needsSig && (
@@ -531,6 +536,7 @@ function Shell(props) {
           notify={notify} />
       )}
       {bioOpen && <BiometricModal notify={notify} onClose={() => setBioOpen(false)} />}
+      {delegationOpen && <DelegationSettings user={user} notify={notify} onClose={() => setDelegationOpen(false)} />}
       <BiometricPrompt notify={notify} hold={needsSig} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
