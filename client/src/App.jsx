@@ -33,6 +33,8 @@ import { Countdown } from "./components/Countdown.jsx";
 import { ModalShell } from "./components/ModalShell.jsx";
 import { TopBar } from "./components/TopBar.jsx";
 import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from "./lib/biometric.js";
+import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
+import { checkForUpdate } from "./lib/autoUpdate.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
@@ -186,6 +188,23 @@ export default function App() {
     })();
   }, [user, notify]);
 
+  // ---- auto-update while signed out ----
+  // When the app is (re)opened or resumed on the login screen, pick up any newly
+  // deployed build before the user signs in — so their next login always lands on
+  // the latest version. We only do this while signed out to avoid reloading over
+  // a user's in-progress work; signed-in clients update on their next login.
+  useEffect(() => {
+    if (user) return;
+    checkForUpdate();
+    const onShow = () => { if (document.visibilityState === "visible") checkForUpdate(); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+    };
+  }, [user]);
+
   // ---- refresh strategy ----
   // The countdown for the approval-window pill needs to tick at least every
   // minute, so we keep a 1-minute tick for clock-driven UI. Data, however, is
@@ -213,6 +232,9 @@ export default function App() {
     try {
       const { token, user: u } = await api.login(email, password);
       api.setToken(token);
+      // If a newer build has shipped, reload now (the token is persisted, so the
+      // user lands signed in on the latest version — including the current logo).
+      await checkForUpdate();
       setUser(u);
       await refresh(u);
       notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
@@ -226,6 +248,7 @@ export default function App() {
   // biometric (WebAuthn) sign-in, which authenticates without a password.
   const completeSession = async ({ token, user: u }) => {
     api.setToken(token);
+    await checkForUpdate();
     setUser(u);
     await refresh(u);
     notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
@@ -508,6 +531,7 @@ function Shell(props) {
           notify={notify} />
       )}
       {bioOpen && <BiometricModal notify={notify} onClose={() => setBioOpen(false)} />}
+      <BiometricPrompt notify={notify} hold={needsSig} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>

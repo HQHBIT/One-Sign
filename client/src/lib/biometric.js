@@ -22,6 +22,13 @@ export const deviceHasBiometric = () => { try { return localStorage.getItem(BIO_
 // is no longer registered, so we stop offering a button that can't work.
 export const forgetBiometricHere = () => { try { localStorage.removeItem(BIO_FLAG); } catch { /* ignore */ } };
 
+// The proactive post-login prompt (BiometricPrompt) offers to turn biometric on.
+// "Not now" sets this flag so we don't nag on every login — the option always
+// stays available under the profile menu.
+const BIO_PROMPT_DISMISSED = "sf_bio_prompt_dismissed";
+export const biometricPromptDismissed = () => { try { return localStorage.getItem(BIO_PROMPT_DISMISSED) === "1"; } catch { return false; } };
+export const dismissBiometricPrompt = () => { try { localStorage.setItem(BIO_PROMPT_DISMISSED, "1"); } catch { /* ignore */ } };
+
 // Enrol the current (logged-in) device. Throws on failure / cancellation.
 export async function enrolBiometric() {
   const { options, challengeId } = await api.webauthnRegisterOptions();
