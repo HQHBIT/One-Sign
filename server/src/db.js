@@ -396,6 +396,31 @@ async function runSchema() {
     expires_at  BIGINT       NOT NULL
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // --- Executive Assistant ---------------------------------------------------
+  // Two new roles: 'executive' (a senior Approver — same signing/routing flow)
+  // and 'executive_assistant' (acts on behalf of one or more executives). The
+  // enum widening is additive: every existing role value stays valid, so a code
+  // revert leaves the column fine. executive_assistants maps an assistant to an
+  // executive and carries that link's delegation settings — can_approve (the
+  // executive's standing on/off switch) and signature_source (whose signature is
+  // stamped when the assistant signs). ON DELETE CASCADE cleans links when either
+  // user is removed.
+  await tryExec(`ALTER TABLE users MODIFY COLUMN role ENUM('admin','requestor','approver','executive','executive_assistant') NOT NULL`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS executive_assistants (
+    id               VARCHAR(64)  NOT NULL PRIMARY KEY,
+    executive_id     VARCHAR(64)  NOT NULL,
+    assistant_id     VARCHAR(64)  NOT NULL,
+    can_approve      TINYINT(1)   NOT NULL DEFAULT 0,
+    signature_source ENUM('executive','assistant') NOT NULL DEFAULT 'executive',
+    created_at       BIGINT       NOT NULL,
+    created_by       VARCHAR(64)  DEFAULT NULL,
+    UNIQUE KEY uq_exec_assistant (executive_id, assistant_id),
+    KEY idx_ea_assistant (assistant_id),
+    KEY idx_ea_executive (executive_id),
+    CONSTRAINT fk_ea_exec FOREIGN KEY (executive_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_asst FOREIGN KEY (assistant_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 

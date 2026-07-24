@@ -5,8 +5,11 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
-import { authRequired, requireRole } from "../auth.js";
+import { authRequired, requireRole, isSigner } from "../auth.js";
 import { sendEmail } from "../email.js";
+
+// Roles an admin may assign when creating users.
+const ASSIGNABLE_ROLES = ["admin", "requestor", "approver", "executive", "executive_assistant"];
 
 // Generate a friendly random password — 10 chars, mixed case + digits, no easily
 // confused glyphs (no 0/O/1/l/I). Used by the invite endpoint so admins never
@@ -92,7 +95,7 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const { email, password, name, role, team, signingAuthorityTeams } = req.body || {};
     if (!email || !password || !name || !role) return res.status(400).json({ error: "email, password, name, role are required" });
-    if (!["admin", "requestor", "approver"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+    if (!ASSIGNABLE_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role" });
 
     const existing = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
     if (existing) return res.status(409).json({ error: "Email already exists" });
@@ -110,7 +113,7 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
       [id, email, hash, name, role, teamId, now, password, now]
     );
 
-    if (role === "approver" && Array.isArray(signingAuthorityTeams)) {
+    if (isSigner(role) && Array.isArray(signingAuthorityTeams)) {
       for (const tid of signingAuthorityTeams) {
         try { await execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
       }
@@ -134,7 +137,7 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
       await conn.beginTransaction();
       for (const r of rows) {
         if (!r.email || !r.name || !r.role || !r.password) continue;
-        if (!["admin", "requestor", "approver"].includes(r.role)) continue;
+        if (!ASSIGNABLE_ROLES.includes(r.role)) continue;
         const [exists] = await conn.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [r.email]);
         if (exists.length) continue;
         const id = uid("u");
@@ -143,7 +146,7 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
           "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now, r.password, now]
         );
-        if (r.role === "approver" && r.teams) {
+        if (isSigner(r.role) && r.teams) {
           const tids = r.teams.split("|").map(s => s.trim()).filter(Boolean);
           for (const tid of tids) {
             try { await conn.execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
@@ -182,7 +185,7 @@ router.post("/:id/invite", authRequired, requireRole("admin"), async (req, res, 
       [target.id]
     );
     const authNames = authRows.map(r => r.name);
-    const isApprover = target.role === "approver";
+    const isApprover = isSigner(target.role);
     if (isApprover && authNames.length > 0) teamName = authNames.join(", ");
 
     const password = genTempPassword();
@@ -227,7 +230,7 @@ router.post("/bulk-invite", authRequired, requireRole("admin"), async (req, res,
           [target.id]
         );
         const authNames = authRows.map(r => r.name);
-        const isApprover = target.role === "approver";
+        const isApprover = isSigner(target.role);
         if (isApprover && authNames.length > 0) teamName = authNames.join(", ");
 
         const password = genTempPassword();

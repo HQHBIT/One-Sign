@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
-import { authRequired, requireRole } from "../auth.js";
+import { authRequired, requireRole, isSigner, SIGNER_ROLES } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
@@ -144,7 +144,7 @@ router.get("/", authRequired, async (req, res, next) => {
 // ============================================================
 //   create — supports legacy single-team OR multi-step workflow
 // ============================================================
-router.post("/", authRequired, requireRole("requestor", "approver"), upload.single("file"), async (req, res, next) => {
+router.post("/", authRequired, requireRole("requestor", ...SIGNER_ROLES), upload.single("file"), async (req, res, next) => {
   try {
     const isDirect = req.body?.direct === "true" || req.body?.direct === true;
     // A direct request only routes a document to someone else to sign — the
@@ -236,7 +236,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
 
     const approvers = await query(`
       SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-      WHERE u.role = 'approver' AND u.active = 1 AND sa.team_id = ?
+      WHERE u.role IN ('approver','executive') AND u.active = 1 AND sa.team_id = ?
     `, [targetTeamId]);
     if (approvers.length === 0) return res.status(400).json({ error: "No approvers configured for this team" });
 
@@ -504,7 +504,7 @@ async function authoriseAccess(user, row) {
     WHERE st.request_id = ? AND sg.user_id = ?
   `, [row.id, user.id]);
   if (sg) return true;
-  if (user.role === "approver" && row.status === "pending" && row.target_team_id) {
+  if (isSigner(user.role) && row.status === "pending" && row.target_team_id) {
     const auth = await queryOne(
       "SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?",
       [user.id, row.target_team_id]
@@ -714,7 +714,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
 // ============================================================
 //   batch approve — one signature, many requests
 // ============================================================
-router.post("/batch-approve", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
@@ -905,7 +905,7 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
 // ============================================================
 //   withdraw (within window — only when not instant)
 // ============================================================
-router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -934,7 +934,7 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
 //   pending (nobody has accepted or rejected it yet). Soft-delete to 'withdrawn'
 //   so it drops out of every actionable list but stays in the admin audit view.
 // ============================================================
-router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
+router.post("/:id/cancel", authRequired, requireRole("requestor", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -957,7 +957,7 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), a
 // ============================================================
 //   reminder
 // ============================================================
-router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
+router.post("/:id/reminder", authRequired, requireRole("requestor", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -984,7 +984,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"),
     } else if (row.target_team_id) {
       const approvers = await query(`
         SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-        WHERE u.role = 'approver' AND u.active = 1 AND sa.team_id = ?
+        WHERE u.role IN ('approver','executive') AND u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
         sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});

@@ -31,3 +31,9 @@ export function requireRole(...roles) {
     next();
   };
 }
+
+// A "signer" is anyone in the approve/sign flow. An Executive is a senior
+// Approver, so it shares every code path that today checks for 'approver'.
+// Use this instead of a bare role === "approver" comparison.
+export const SIGNER_ROLES = ["approver", "executive"];
+export const isSigner = (role) => SIGNER_ROLES.includes(role);
