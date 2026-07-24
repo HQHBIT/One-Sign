@@ -1,0 +1,12 @@
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <rect width="48" height="48" rx="11" fill="#0F1A2E"/>
+  <g transform="translate(5.3 5.3) scale(0.78)">
+    <!-- Document with folded corner -->
+    <path d="M13 6 H29 L36 13 V37 Q36 42 31 42 H13 Q8 42 8 37 V11 Q8 6 13 6 Z" fill="#F5F1E8" stroke="#F5F1E8" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M29 6 V11 Q29 13 31 13 H36" fill="none" stroke="#0F1A2E" stroke-width="1.8" stroke-linejoin="round"/>
+    <!-- Cursive signature (navy) -->
+    <path d="M13 30.5 C 13 24.5, 19.5 21.5, 20.5 25.5 C 21.3 28.7, 17 30, 17 26.8 C 17 22.8, 23 20.5, 30 18" fill="none" stroke="#12274B" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Orange swoosh -->
+    <path d="M16 30.5 C 22 28.3, 27.5 27.3, 32 27" fill="none" stroke="#E8792E" stroke-width="2.4" stroke-linecap="round"/>
+  </g>
+</svg>

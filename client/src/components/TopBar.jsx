@@ -43,10 +43,10 @@ export function TopBar({ user, logout, onEditSignature, onChangePassword, onBiom
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 flex items-center justify-center shrink-0">
             <svg width="34" height="34" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-              <path d="M13 6 H29 L36 13 V37 Q36 42 31 42 H13 Q8 42 8 37 V11 Q8 6 13 6 Z" fill="#ffffff" stroke="#0F1A2E" strokeWidth="2.4" strokeLinejoin="round"/>
-              <path d="M29 6 V11 Q29 13 31 13 H36" fill="none" stroke="#0F1A2E" strokeWidth="2" strokeLinejoin="round"/>
-              <path d="M14 27 C 17 20, 20 21, 22 26 C 23 29, 25 24, 28 20" fill="none" stroke="#12274B" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M14 31 C 19 34, 25 32, 31 26" fill="none" stroke="#E8792E" strokeWidth="2.4" strokeLinecap="round"/>
+              <path d="M13 6 H29 L36 13 V37 Q36 42 31 42 H13 Q8 42 8 37 V11 Q8 6 13 6 Z" fill="#ffffff" stroke="#12233F" strokeWidth="2.4" strokeLinejoin="round"/>
+              <path d="M29 6 V11 Q29 13 31 13 H36" fill="none" stroke="#12233F" strokeWidth="2" strokeLinejoin="round"/>
+              <path d="M13 30.5 C 13 24.5, 19.5 21.5, 20.5 25.5 C 21.3 28.7, 17 30, 17 26.8 C 17 22.8, 23 20.5, 30 18" fill="none" stroke="#12274B" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M16 30.5 C 22 28.3, 27.5 27.3, 32 27" fill="none" stroke="#E8792E" strokeWidth="2.3" strokeLinecap="round"/>
             </svg>
           </div>
           <div className="min-w-0">
