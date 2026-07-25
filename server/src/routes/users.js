@@ -620,6 +620,41 @@ router.put("/:id/email", authRequired, requireRole("admin"), async (req, res, ne
   } catch (e) { next(e); }
 });
 
+// ---------- admin: change an existing user's role ----------
+// Lets an admin promote/convert existing accounts (e.g. approver → executive, or
+// any user → executive_assistant) without recreating them. History (requests,
+// signature, sign-ins) is untouched. Safety rails:
+//   - an admin cannot change their OWN role (prevents locking yourself out);
+//   - leaving a signing role (approver/executive) clears signing authority;
+//   - leaving executive / executive_assistant removes assistant links so no
+//     stale delegation lingers.
+router.put("/:id/role", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const role = String(req.body?.role || "").trim();
+    if (!ASSIGNABLE_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role" });
+    if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't change your own role" });
+    const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    if (target.role === role) return res.json({ user: await hydrateUser(target) });
+
+    await execute("UPDATE users SET role = ? WHERE id = ?", [role, req.params.id]);
+
+    // Cleanup that no longer applies under the new role.
+    if (isSigner(target.role) && !isSigner(role)) {
+      await execute("DELETE FROM signing_authority WHERE user_id = ?", [req.params.id]);
+    }
+    if (target.role === "executive" && role !== "executive") {
+      await execute("DELETE FROM executive_assistants WHERE executive_id = ?", [req.params.id]);
+    }
+    if (target.role === "executive_assistant" && role !== "executive_assistant") {
+      await execute("DELETE FROM executive_assistants WHERE assistant_id = ?", [req.params.id]);
+    }
+
+    const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
+    res.json({ user: await hydrateUser(row) });
+  } catch (e) { next(e); }
+});
+
 // ---------- admin: list ITS-collision merge candidates ----------
 // GET /api/users/merge-candidates → active account pairs that share an ITS.
 router.get("/merge-candidates", authRequired, requireRole("admin"), async (req, res, next) => {

@@ -2103,6 +2103,8 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   // Inline email editing.
   const [editingEmailId, setEditingEmailId] = useState(null);
   const [emailDraft, setEmailDraft] = useState("");
+  // Inline role editing.
+  const [editingRoleId, setEditingRoleId] = useState(null);
   const confirm = useConfirmation();
 
   // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
@@ -2242,6 +2244,43 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       notify("Email updated", "success");
     } catch (e) { notify(e.message || "Could not update email", "error"); }
   };
+  // Change a user's role in place (e.g. approver → executive). Confirms first and
+  // spells out the side effects the server applies (authority / assistant links).
+  const changeRole = async (u, role) => {
+    setEditingRoleId(null);
+    if (!role || role === u.role) return;
+    const notes = [];
+    if ((u.role === "approver" || u.role === "executive") && !(role === "approver" || role === "executive"))
+      notes.push("their signing authority will be cleared");
+    if (u.role === "executive" && role !== "executive") notes.push("their assistant links will be removed");
+    if (u.role === "executive_assistant" && role !== "executive_assistant") notes.push("their executive links will be removed");
+    const ok = await confirm({
+      title: `Make ${u.name} ${ROLE_LABELS[role] || role}?`,
+      message: `Their documents, signature and history stay intact${notes.length ? "; " + notes.join(", ") : ""}.`,
+      confirmLabel: "Change role"
+    });
+    if (!ok) return;
+    try {
+      await api.setUserRole(u.id, role);
+      await saveUsers();
+      notify(`${u.name} is now ${ROLE_LABELS[role] || role}`, "success");
+    } catch (e) { notify(e.message || "Could not change role", "error"); }
+  };
+  const renderRole = (u) => editingRoleId === u.id ? (
+    <select autoFocus className="text-xs px-1 py-0.5 rounded border" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }}
+      defaultValue={u.role}
+      onChange={e => changeRole(u, e.target.value)}
+      onBlur={() => setEditingRoleId(null)}
+      onKeyDown={e => { if (e.key === "Escape") setEditingRoleId(null); }}>
+      {Object.values(ROLES).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+    </select>
+  ) : (
+    <span className="inline-flex items-center gap-1">
+      <span className="pill pill-pending">{u.role}</span>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setEditingRoleId(u.id)} title="Change role"><Pencil size={10} /></button>
+    </span>
+  );
+
   const renderEmail = (u) => editingEmailId === u.id ? (
     <div className="flex items-center gap-1">
       <input autoFocus type="email" value={emailDraft} onChange={e => setEmailDraft(e.target.value)}
@@ -2293,9 +2332,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               {renderEmail(u)}
               {renderIts(u)}
             </div>
-            <div className="col-span-1"><span className="pill pill-pending">{u.role}</span></div>
+            <div className="col-span-1">{renderRole(u)}</div>
             <div className="col-span-2 text-xs opacity-70 truncate">
-              {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
+              {(u.role === "approver" || u.role === "executive") && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
               {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
               {u.role === "admin" && "—"}
             </div>
@@ -2385,9 +2424,9 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               {renderIts(u)}
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <span className="pill pill-pending">{u.role}</span>
+              {renderRole(u)}
               <span className="text-xs opacity-70">
-                {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
+                {(u.role === "approver" || u.role === "executive") && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
                 {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
                 {u.role === "admin" && "—"}
               </span>
