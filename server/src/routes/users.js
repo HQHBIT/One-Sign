@@ -35,7 +35,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 *
 
 // Reads native pixel dimensions from a PNG or JPEG buffer. Returns null if the
 // format isn't recognised — callers should treat that as "aspect unknown".
-function readImageSize(buf) {
+// Exported: the assist route stores an executive's signature the same way.
+export function readImageSize(buf) {
   if (!buf || buf.length < 24) return null;
   // PNG: 89 50 4E 47 0D 0A 1A 0A, then 4-byte length, "IHDR", then W (BE32), H (BE32)
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {

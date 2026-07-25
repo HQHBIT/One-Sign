@@ -424,6 +424,12 @@ async function runSchema() {
   // executive as approver (their name/signature is on the document) AND the real
   // actor here, for the audit trail. Nullable → normal approvals leave it NULL.
   await tryExec(`ALTER TABLE requests ADD COLUMN acted_by_assistant_id VARCHAR(64) DEFAULT NULL`);
+  // Granular per-link rights the executive grants their assistant. Defaults keep
+  // prior behavior: viewing on, everything else opt-in.
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_view TINYINT(1) NOT NULL DEFAULT 1`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_update_signature TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_notify TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_dashboard TINYINT(1) NOT NULL DEFAULT 0`);
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);

@@ -80,8 +80,9 @@ export const api = {
   deleteExecAssistLink(id) { return this.fetch(`/api/executive-assistants/${id}`, { method: "DELETE" }); },
   // -------- assistant acting on behalf --------
   assistExecutives() { return this.fetch("/api/assist/executives").then(r => r.executives); },
-  assistRequests(executiveId) { return this.fetch(`/api/assist/${executiveId}/requests`).then(r => r.requests); },
+  assistRequests(executiveId) { return this.fetch(`/api/assist/${executiveId}/requests`); }, // { requests, scope }
   assistApprove(executiveId, id) { return this.fetch(`/api/assist/${executiveId}/requests/${id}/approve`, { method: "POST" }); },
+  assistSetSignature(executiveId, dataUrl) { return this.fetch(`/api/assist/${executiveId}/signature`, { method: "PUT", body: JSON.stringify({ dataUrl }) }); },
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },

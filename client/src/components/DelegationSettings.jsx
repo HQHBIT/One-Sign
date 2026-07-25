@@ -91,19 +91,27 @@ export function DelegationSettings({ user, notify, onClose }) {
                   <Trash2 size={15} />
                 </button>
               </div>
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input type="checkbox" checked={l.canApprove} onChange={e => patch(l.id, { canApprove: e.target.checked })} />
-                  Can approve on my behalf
-                </label>
-                <label className="flex items-center gap-2 text-xs opacity-80">
-                  Sign with:
-                  <select className="input text-xs" value={l.signatureSource} onChange={e => patch(l.id, { signatureSource: e.target.value })} disabled={!l.canApprove}>
-                    <option value="executive">Executive's signature</option>
-                    <option value="assistant">Assistant's own signature</option>
-                  </select>
-                </label>
+              <div className="grid sm:grid-cols-2 gap-x-4 gap-y-2 mb-2">
+                {[
+                  ["canView", "View the documents", "See and open documents awaiting the executive's signature."],
+                  ["canApprove", "Approve on behalf", "Sign/approve those documents for the executive."],
+                  ["canUpdateSignature", "Update the signature", "Upload or replace the executive's signature image."],
+                  ["canNotify", "Receive notifications", "Gets a copy of every email the executive receives (the executive still gets theirs)."],
+                  ["canDashboard", "View the dashboard", "The executive's entire data — full history and stats, not just pending."],
+                ].map(([key, label, hint]) => (
+                  <label key={key} className="flex items-start gap-2 text-sm cursor-pointer" title={hint}>
+                    <input type="checkbox" className="mt-0.5" checked={!!l[key]} onChange={e => patch(l.id, { [key]: e.target.checked })} />
+                    <span>{label}</span>
+                  </label>
+                ))}
               </div>
+              <label className="flex items-center gap-2 text-xs opacity-80">
+                Sign with:
+                <select className="input text-xs" value={l.signatureSource} onChange={e => patch(l.id, { signatureSource: e.target.value })} disabled={!l.canApprove}>
+                  <option value="executive">Executive's signature</option>
+                  <option value="assistant">Assistant's own signature</option>
+                </select>
+              </label>
             </div>
           ))}
         </div>

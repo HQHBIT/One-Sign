@@ -67,6 +67,10 @@ function shape(r) {
     executiveId: r.executive_id, executiveName: r.executive_name, executiveEmail: r.executive_email,
     assistantId: r.assistant_id, assistantName: r.assistant_name, assistantEmail: r.assistant_email,
     canApprove: !!r.can_approve,
+    canView: r.can_view == null ? true : !!r.can_view,
+    canUpdateSignature: !!r.can_update_signature,
+    canNotify: !!r.can_notify,
+    canDashboard: !!r.can_dashboard,
     signatureSource: r.signature_source,
   };
 }
@@ -112,9 +116,13 @@ router.put("/:id", authRequired, async (req, res, next) => {
     if (!link) return res.status(404).json({ error: "Not found" });
     if (!canManage(req.user, link.executive_id)) return res.status(403).json({ error: "Forbidden" });
 
-    const { canApprove, signatureSource } = req.body || {};
-    if (canApprove !== undefined) {
-      await execute("UPDATE executive_assistants SET can_approve = ? WHERE id = ?", [canApprove ? 1 : 0, link.id]);
+    const { canApprove, canView, canUpdateSignature, canNotify, canDashboard, signatureSource } = req.body || {};
+    const flags = [
+      ["can_approve", canApprove], ["can_view", canView], ["can_update_signature", canUpdateSignature],
+      ["can_notify", canNotify], ["can_dashboard", canDashboard],
+    ];
+    for (const [col, val] of flags) {
+      if (val !== undefined) await execute(`UPDATE executive_assistants SET ${col} = ? WHERE id = ?`, [val ? 1 : 0, link.id]);
     }
     if (signatureSource !== undefined) {
       if (!["executive", "assistant"].includes(signatureSource)) return res.status(400).json({ error: "Invalid signatureSource" });

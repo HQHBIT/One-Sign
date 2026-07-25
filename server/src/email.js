@@ -1,5 +1,5 @@
 import sgMail from "@sendgrid/mail";
-import { execute } from "./db.js";
+import { execute, query } from "./db.js";
 import { redactEmailBody } from "./redact.js";
 
 const apiKey = process.env.SENDGRID_API_KEY;
@@ -196,6 +196,31 @@ const templates = {
     ].join("\n"),
   }),
 
+  // To the EXECUTIVE when their assistant acts on their behalf — names the
+  // assistant and the action so delegation is never invisible to the owner.
+  ea_action: (c) => ({
+    subject: `${c.assistantName} ${c.action} "${c.fileName}" on your behalf`,
+    html: layout({
+      preheader: `${c.assistantName} ${c.action} "${c.fileName}" on your behalf`,
+      pillHtml: pill("On your behalf", "neutral"),
+      heading: "Your assistant acted on your behalf",
+      contentHtml:
+        greet(c.executiveName) +
+        p(`Your assistant <strong>${esc(c.assistantName)}</strong> has <strong>${esc(c.action)}</strong> the document below on your behalf.`) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Action", value: c.action },
+          { label: "Performed by", value: c.assistantName },
+        ]) +
+        button("Review the document", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.executiveName}`, ``,
+      `Your assistant ${c.assistantName} has ${c.action} the document "${c.fileName}" on your behalf.`, ``,
+      `Review it: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   rejected: (c) => ({
     subject: `Rejected: ${c.fileName}`,
     html: layout({
@@ -344,8 +369,24 @@ export function renderTemplate(template, ctx) {
   return t(ctx);
 }
 
-export async function sendEmail({ to, template, ctx }) {
+export async function sendEmail({ to, template, ctx, _isAssistantCopy }) {
   if (!to) return;
+  // Assistants with the "receive notifications" right get a copy of every email
+  // their executive receives (the executive still gets theirs — both receive).
+  // _isAssistantCopy stops a copy from fanning out again.
+  if (!_isAssistantCopy) {
+    try {
+      const eas = await query(`
+        SELECT a.email FROM executive_assistants ea
+        JOIN users e ON e.id = ea.executive_id
+        JOIN users a ON a.id = ea.assistant_id
+        WHERE LOWER(e.email) = LOWER(?) AND ea.can_notify = 1 AND a.active = 1
+      `, [to]);
+      for (const r of eas) {
+        sendEmail({ to: r.email, template, ctx, _isAssistantCopy: true }).catch(() => {});
+      }
+    } catch { /* copies must never block the primary email */ }
+  }
   const { subject, html, text } = renderTemplate(template, ctx);
   // We SEND both `html` (branded) and `text` (fallback). We LOG only the
   // plain-text version, redacted — never the HTML, never a plaintext password.
