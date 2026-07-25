@@ -16,3 +16,17 @@ export const fmt = (ts) =>
 /** IST "Mar 4"-style date, used in dense lists. */
 export const fmtShort = (ts) =>
   new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "Asia/Kolkata" });
+
+/**
+ * Greeting-friendly short name: everything up to and INCLUDING the first
+ * honorific (Bhai / Ben / Bs), since community names carry it as part of how a
+ * person is addressed — "Mulla Mohammed Bhai Dohadwala" → "Mulla Mohammed Bhai",
+ * "Huzaifa Bs Xyz" → "Huzaifa Bs". Falls back to the first word when no
+ * honorific is present.
+ */
+export const greetName = (name) => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "there";
+  const idx = parts.findIndex(p => /^(bhai|ben|bs)[.,]?$/i.test(p));
+  return idx >= 0 ? parts.slice(0, idx + 1).join(" ") : parts[0];
+};

@@ -13,7 +13,7 @@ import {
   APPROVAL_WINDOW_MS, REMINDER_COOLDOWN_MS,
   COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor
 } from "./lib/constants.js";
-import { uid, fmt, fmtShort } from "./lib/format.js";
+import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -257,7 +257,7 @@ export default function App() {
       await checkForUpdate();
       setUser(u);
       await refresh(u);
-      notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
+      notify(`Welcome, ${greetName(u.name)}`, "success");
       return true;
     } catch (e) {
       notify(e.message || "Sign-in failed", "error");
@@ -271,7 +271,7 @@ export default function App() {
     await checkForUpdate();
     setUser(u);
     await refresh(u);
-    notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
+    notify(`Welcome, ${greetName(u.name)}`, "success");
   };
   const logout = async () => {
     api.setToken(null);
@@ -406,7 +406,7 @@ function WorkEmailCapture({ user, notify, onDone }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: "var(--c-cream)" }}>
       <div className="w-full max-w-md card p-6 sm:p-8 anim-in">
-        <div className="font-display text-2xl sm:text-3xl mb-2">One quick thing, {user.name?.split(" ")[0] || "there"}</div>
+        <div className="font-display text-2xl sm:text-3xl mb-2">One quick thing, {greetName(user.name)}</div>
         <div className="text-sm opacity-60 mb-8">
           Please enter your <strong>work email address</strong>. SignFlow will use it for all your notifications — document requests, approvals and reminders.
         </div>
@@ -615,7 +615,7 @@ function RequestorView(props) {
 
   return (
     <div>
-      <Hero title={`Welcome back, ${user.name.split(" ")[0]}`} subtitle="What would you like to do today?" />
+      <Hero title={`Welcome back, ${greetName(user.name)}`} subtitle="What would you like to do today?" />
 
       {/* Quick Actions */}
       <div className="mt-10">
@@ -904,7 +904,7 @@ function ApproverView(props) {
   ];
   return (
     <div>
-      <Hero title={`Good day, ${user.name.split(" ")[0]}`} subtitle="Review documents routed to you — or raise a request of your own." />
+      <Hero title={`Good day, ${greetName(user.name)}`} subtitle="Review documents routed to you — or raise a request of your own." />
 
       {/* Quick Actions — raise your own request for signature */}
       <div className="mt-10">

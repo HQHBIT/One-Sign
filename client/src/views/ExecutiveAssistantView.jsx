@@ -1,6 +1,7 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, Clock, XCircle } from "lucide-react";
 import { api } from "../api.js";
+import { greetName } from "../lib/format.js";
 import { RequestRow } from "../components/RequestRow.jsx";
 import { SignatureModal } from "../components/SignatureModal.jsx";
 
@@ -55,7 +56,7 @@ function SwitchTab({ active, onClick, icon: Icon, label }) {
 function MyAccount({ user, execs }) {
   return (
     <div className="card p-6">
-      <div className="font-display text-2xl mb-1">Welcome, {user.name.split(" ")[0]}</div>
+      <div className="font-display text-2xl mb-1">Welcome, {greetName(user.name)}</div>
       <div className="text-sm opacity-60 mb-4">You're signed in with your own account, supporting {execs.length || "no"} executive{execs.length === 1 ? "" : "s"}.</div>
       {execs.length === 0 ? (
         <div className="text-sm opacity-60">No executives are linked to you yet. Ask an administrator (or the executive) to add you from their “My assistant” menu.</div>
@@ -141,6 +142,24 @@ function ExecutivePanel({ ex, users, teams, notify }) {
           </span>
           {ex.canUpdateSignature && <SigButton onClick={() => setSigOpen(true)} />}
         </div>
+      </div>
+
+      {/* Every right this executive has granted, at a glance */}
+      <div className="flex flex-wrap gap-1.5">
+        {[
+          [ex.canView || ex.canDashboard, "View documents"],
+          [ex.canDashboard, "Full dashboard"],
+          [ex.canApprove, "Approve on behalf"],
+          [ex.canUpdateSignature, "Update signature"],
+          [ex.canNotify, "Receives notifications"],
+        ].map(([on, label]) => (
+          <span key={label} className="text-[10px] px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+            style={on
+              ? { backgroundColor: "rgba(22,120,60,.10)", color: "#16783c" }
+              : { backgroundColor: "rgba(15,26,46,.05)", opacity: .55 }}>
+            {on ? "✓" : "—"} {label}
+          </span>
+        ))}
       </div>
 
       {/* Stats + tabs — only with the dashboard right (the executive's entire data) */}

@@ -105,13 +105,21 @@ export function DelegationSettings({ user, notify, onClose }) {
                   </label>
                 ))}
               </div>
-              <label className="flex items-center gap-2 text-xs opacity-80">
-                Sign with:
-                <select className="input text-xs" value={l.signatureSource} onChange={e => patch(l.id, { signatureSource: e.target.value })} disabled={!l.canApprove}>
-                  <option value="executive">Executive's signature</option>
-                  <option value="assistant">Assistant's own signature</option>
-                </select>
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-xs opacity-80">
+                  Sign with:
+                  <select className="input text-xs" value={l.signatureSource} onChange={e => patch(l.id, { signatureSource: e.target.value })} disabled={!l.canApprove}>
+                    <option value="executive">Executive's signature</option>
+                    <option value="assistant">Assistant's own signature</option>
+                  </select>
+                </label>
+                {!(l.canView && l.canApprove && l.canUpdateSignature && l.canNotify && l.canDashboard) && (
+                  <button className="text-xs underline opacity-70 hover:opacity-100"
+                    onClick={() => patch(l.id, { canView: true, canApprove: true, canUpdateSignature: true, canNotify: true, canDashboard: true })}>
+                    Grant all rights
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
