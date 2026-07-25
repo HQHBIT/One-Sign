@@ -174,10 +174,10 @@ export function LoginScreen({ login, onSession }) {
         <div className="w-full max-w-sm">
           {forgotState === "idle" && (
             <div>
-              <div className="font-display text-2xl sm:text-3xl mb-2">{adminMode ? "Admin sign in" : "Sign in"}</div>
+              <div className="font-display text-2xl sm:text-3xl mb-2">{adminMode ? "Sign in with email & password" : "Sign in"}</div>
               <div className="text-sm opacity-60 mb-8">
                 {adminMode
-                  ? "Administrators sign in with email and password."
+                  ? "For administrators, executives and executive assistants with a SignFlow password."
                   : "Continue with your oneAccess account."}
               </div>
 
@@ -192,7 +192,7 @@ export function LoginScreen({ login, onSession }) {
                     <div className="text-center mt-6">
                       <button type="button" onClick={openAdmin}
                         className="text-xs opacity-60 hover:opacity-100 underline">
-                        Click here to login as an Admin
+                        Click here to login with email &amp; password (Admin / Assistant)
                       </button>
                     </div>
                   )}
