@@ -35,8 +35,9 @@ import { TopBar } from "./components/TopBar.jsx";
 import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from "./lib/biometric.js";
 import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
 import { DelegationSettings } from "./components/DelegationSettings.jsx";
+import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
-import { checkForUpdate } from "./lib/autoUpdate.js";
+import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
@@ -207,6 +208,23 @@ export default function App() {
     };
   }, [user]);
 
+  // While SIGNED IN we never reload over in-progress work. Instead, when a newer
+  // build ships, surface a banner — one tap refreshes to the latest version (the
+  // session token persists, so they land right back where they were, signed in).
+  const [updateReady, setUpdateReady] = useState(false);
+  useEffect(() => {
+    if (!user) { setUpdateReady(false); return; }
+    const check = () => { updateAvailable().then(v => { if (v) setUpdateReady(true); }); };
+    check();
+    const onShow = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+    };
+  }, [user]);
+
   // ---- refresh strategy ----
   // The countdown for the approval-window pill needs to tick at least every
   // minute, so we keep a 1-minute tick for clock-driven UI. Data, however, is
@@ -343,6 +361,17 @@ export default function App() {
               approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
               onClose={() => setDeepLinkReq(null)} notify={notify} />
           : <PreviewDrawer req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
+      )}
+      {user && updateReady && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-full pl-4 pr-2 py-2 shadow-lg text-sm"
+          style={{ backgroundColor: "var(--c-ink)", color: "var(--c-cream)" }}>
+          <span>A new version of SignFlow is ready.</span>
+          <button className="rounded-full px-3 py-1 text-xs font-medium"
+            style={{ backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}
+            onClick={() => window.location.reload()}>
+            Refresh now
+          </button>
+        </div>
       )}
       <ToastStack toasts={toasts} />
       <ConfirmHost />
@@ -2103,9 +2132,8 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   // Inline email editing.
   const [editingEmailId, setEditingEmailId] = useState(null);
   const [emailDraft, setEmailDraft] = useState("");
-  // Inline role editing — pick in the dropdown, then apply with the ✓ button.
-  const [editingRoleId, setEditingRoleId] = useState(null);
-  const [roleDraft, setRoleDraft] = useState("");
+  // Role change — target user for the RoleChangeModal.
+  const [roleTarget, setRoleTarget] = useState(null);
   const confirm = useConfirmation();
 
   // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
@@ -2245,44 +2273,12 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
       notify("Email updated", "success");
     } catch (e) { notify(e.message || "Could not update email", "error"); }
   };
-  // Change a user's role in place (e.g. approver → executive). The editor uses
-  // explicit apply/cancel buttons (same idiom as the email/ITS editors) — an
-  // auto-close-on-blur select is unreliable: opening the native dropdown blurs
-  // the element on several browsers, closing the editor before a choice lands.
-  const changeRole = async (u, role) => {
-    setEditingRoleId(null);
-    if (!role || role === u.role) return;
-    const notes = [];
-    if ((u.role === "approver" || u.role === "executive") && !(role === "approver" || role === "executive"))
-      notes.push("their signing authority will be cleared");
-    if (u.role === "executive" && role !== "executive") notes.push("their assistant links will be removed");
-    if (u.role === "executive_assistant" && role !== "executive_assistant") notes.push("their executive links will be removed");
-    const ok = await confirm({
-      title: `Make ${u.name} ${ROLE_LABELS[role] || role}?`,
-      message: `Their documents, signature and history stay intact${notes.length ? "; " + notes.join(", ") : ""}.`,
-      confirmLabel: "Change role"
-    });
-    if (!ok) return;
-    try {
-      await api.setUserRole(u.id, role);
-      await saveUsers();
-      notify(`${u.name} is now ${ROLE_LABELS[role] || role}`, "success");
-    } catch (e) { notify(e.message || "Could not change role", "error"); }
-  };
-  const renderRole = (u) => editingRoleId === u.id ? (
-    <span className="inline-flex items-center gap-1">
-      <select className="text-xs px-1 py-0.5 rounded border max-w-[9rem]" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }}
-        value={roleDraft} onChange={e => setRoleDraft(e.target.value)}
-        onKeyDown={e => { if (e.key === "Escape") setEditingRoleId(null); if (e.key === "Enter") changeRole(u, roleDraft); }}>
-        {Object.values(ROLES).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-      </select>
-      <button className="opacity-60 hover:opacity-100 shrink-0" onClick={() => changeRole(u, roleDraft)} title="Apply role"><Check size={12} /></button>
-      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setEditingRoleId(null)} title="Cancel"><X size={12} /></button>
-    </span>
-  ) : (
+  // Change a user's role — opens the RoleChangeModal (role cards + spelled-out
+  // side effects). A dialog is reliable everywhere the inline dropdown wasn't.
+  const renderRole = (u) => (
     <span className="inline-flex items-center gap-1">
       <span className="pill pill-pending">{u.role}</span>
-      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => { setEditingRoleId(u.id); setRoleDraft(u.role); }} title="Change role"><Pencil size={10} /></button>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setRoleTarget(u)} title="Change role"><Pencil size={10} /></button>
     </span>
   );
 
@@ -2461,6 +2457,7 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
           onSubmit={submitReset} />
       )}
       {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
+      {roleTarget && <RoleChangeModal target={roleTarget} notify={notify} onClose={() => setRoleTarget(null)} onSaved={saveUsers} />}
       {bulkOpen && <BulkUserModal teams={teams} onClose={() => setBulkOpen(false)} onImport={async rows => {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }
         catch (e) { notify(e.message, "error"); }

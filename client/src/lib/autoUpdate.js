@@ -23,16 +23,32 @@ async function fetchWithTimeout(url, ms) {
   }
 }
 
+// The build id currently live on the server, or "" when unknown/offline.
+async function fetchLatestBuild() {
+  const res = await fetchWithTimeout("/version.json", 3000);
+  if (!res.ok) return "";
+  const data = await res.json();
+  return data && data.build ? String(data.build) : "";
+}
+
+// Non-destructive probe: is a newer build live than the one we're running?
+// Used while SIGNED IN to show a "refresh for the latest version" banner —
+// we never auto-reload over someone's in-progress work.
+export async function updateAvailable() {
+  if (!import.meta.env.PROD || !BUILT) return false;
+  try {
+    const latest = await fetchLatestBuild();
+    return !!latest && latest !== BUILT;
+  } catch { return false; }
+}
+
 // Reload if a newer build is live. Safe to call often — it's a tiny no-store
 // fetch and a no-op when already current. Never runs in dev (no version.json,
 // HMR handles freshness there).
 export async function checkForUpdate() {
   if (!import.meta.env.PROD || !BUILT) return;
   try {
-    const res = await fetchWithTimeout("/version.json", 3000);
-    if (!res.ok) return;
-    const data = await res.json();
-    const latest = data && data.build ? String(data.build) : "";
+    const latest = await fetchLatestBuild();
     if (!latest || latest === BUILT) return;
 
     // A newer build exists. Guard against reload loops: if for any reason the
