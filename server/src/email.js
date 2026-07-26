@@ -91,7 +91,7 @@ function details(rows, { mono = false, accent = false } = {}) {
 
 // A call-to-action button (bulletproof table cell; Outlook shows a solid rect).
 function button(label, url, kind = "gold") {
-  const bg = kind === "navy" ? BRAND.navy : BRAND.gold;
+  const bg = kind === "navy" ? BRAND.navy : kind === "green" ? "#2D8A46" : BRAND.gold;
   return `
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 6px;">
         <tr><td align="center" bgcolor="${bg}" style="border-radius:8px;">
@@ -162,14 +162,20 @@ const templates = {
           { label: "Team", value: c.teamName },
           { label: "Requested by", value: c.requestorName },
         ]) +
-        button("Review & sign", requestUrl(c), "gold") +
-        caption("Sign in to SignFlow to review and sign the document."),
+        (c.approveToken
+          ? button("Approve", `${BRAND.appUrl}/?approveToken=${encodeURIComponent(c.approveToken)}`, "green")
+          : "") +
+        button("View the document", requestUrl(c), "gold") +
+        caption(c.approveToken
+          ? "Approve signs it with your signature on file and notifies the requestor — or open the document to review it first."
+          : "Sign in to SignFlow to review and sign the document."),
     }),
     text: [
       `${BRAND.greeting} ${c.approverName}`, ``,
       `${c.requestorName} has submitted "${c.fileName}" for your approval.`,
       c.teamName ? `Team: ${c.teamName}` : null, ``,
-      `Review & sign: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
+      c.approveToken ? `Approve directly: ${BRAND.appUrl}/?approveToken=${encodeURIComponent(c.approveToken)}` : null,
+      `View the document: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].filter((x) => x !== null).join("\n"),
   }),
 

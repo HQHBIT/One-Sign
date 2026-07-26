@@ -83,6 +83,9 @@ export const api = {
   assistRequests(executiveId) { return this.fetch(`/api/assist/${executiveId}/requests`); }, // { requests, scope }
   assistApprove(executiveId, id) { return this.fetch(`/api/assist/${executiveId}/requests/${id}/approve`, { method: "POST" }); },
   assistSetSignature(executiveId, dataUrl) { return this.fetch(`/api/assist/${executiveId}/signature`, { method: "PUT", body: JSON.stringify({ dataUrl }) }); },
+  // -------- approve directly from the email (token-authenticated) --------
+  emailApprovePreview(token) { return this.fetch("/api/email-approve/preview", { method: "POST", body: JSON.stringify({ token }) }); },
+  emailApprove(token) { return this.fetch("/api/email-approve", { method: "POST", body: JSON.stringify({ token }) }); },
   forgotPassword(email) {
     return this.fetch("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
   },

@@ -36,6 +36,7 @@ import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from ".
 import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
 import { DelegationSettings } from "./components/DelegationSettings.jsx";
 import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
+import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
@@ -87,6 +88,20 @@ function canActOnRequest(r, user) {
 // ============================================================
 //   ROOT APP
 // ============================================================
+// Captured once at module load: the approve-from-email token (?approveToken=…).
+// Stripped from the URL immediately so a refresh or bookmark can't replay it.
+const EMAIL_APPROVE_TOKEN = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("approveToken");
+    if (t) {
+      params.delete("approveToken");
+      window.history.replaceState({}, "", window.location.pathname + (params.toString() ? "?" + params.toString() : ""));
+    }
+    return t;
+  } catch { return null; }
+})();
+
 export default function App() {
   const [booted, setBooted] = useState(false);
   const [user, setUser] = useState(null);
@@ -97,6 +112,11 @@ export default function App() {
   const [toasts, setToasts] = useState([]); // queue — multiple notifications stack
   const [tick, setTick] = useState(0);
   const [deepLinkReq, setDeepLinkReq] = useState(null); // request opened via an email deep link (?request=<id>)
+  // Approve-from-email: the green button carries ?approveToken=… — captured once
+  // at module load (state initializers can run twice under StrictMode, and the
+  // URL-strip makes a second run return null) and rendered as a standalone
+  // confirm screen before any auth.
+  const [emailApproveToken, setEmailApproveToken] = useState(EMAIL_APPROVE_TOKEN);
 
   const notify = useCallback((msg, kind = "info") => {
     const id = uid("t");
@@ -329,6 +349,17 @@ export default function App() {
 
   // ---- render ----
   if (!booted) return <BootScreen />;
+
+  // Approve-from-email takes over the whole screen — the emailed token is the
+  // authentication, so this works signed-in or not.
+  if (emailApproveToken) {
+    return (
+      <>
+        <StyleTag />
+        <EmailApproveScreen token={emailApproveToken} onClose={() => setEmailApproveToken(null)} />
+      </>
+    );
+  }
 
   return (
     <ConfirmContext.Provider value={confirm}>
@@ -865,9 +896,12 @@ function PreviewDrawer({ req, onClose, users, teams }) {
 //   APPROVER VIEW
 // ============================================================
 function ApproverView(props) {
-  const { user, requests, teams } = props;
+  const { user, requests, teams, users, notify, approveRequest, rejectRequest, undoApproval } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null);
+  // "Awaiting your approval" sits first on the home screen; this opens the
+  // review drawer for an item directly from there.
+  const [quickOpenId, setQuickOpenId] = useState(null);
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
@@ -902,9 +936,35 @@ function ApproverView(props) {
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },
     { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length }
   ];
+  const quickOpen = pending.concat(pendingApproved).find(r => r.id === quickOpenId);
   return (
     <div>
-      <Hero title={`Good day, ${greetName(user.name)}`} subtitle="Review documents routed to you — or raise a request of your own." />
+      <Hero title={`Good day, ${greetName(user.name)}`}
+        subtitle={pending.length
+          ? `${pending.length} document${pending.length === 1 ? "" : "s"} awaiting your approval.`
+          : "Review documents routed to you — or raise a request of your own."} />
+
+      {/* Awaiting your approval — FIRST, so what needs action is never buried */}
+      <div className="mt-8">
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="font-display text-2xl">Awaiting your approval</h3>
+          {pending.length > 0 && (
+            <button className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 underline" onClick={() => setTab("pending")}>
+              See all {pending.length + pendingApproved.length}
+            </button>
+          )}
+        </div>
+        {pending.length === 0 ? (
+          <div className="card p-5 text-sm opacity-50 flex items-center gap-2"><CheckCircle size={15} /> Nothing waiting — you're all caught up.</div>
+        ) : (
+          <div className="card overflow-hidden">
+            {pending.slice(0, 5).map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
+                actions={<button className="btn-primary text-xs" onClick={() => setQuickOpenId(r.id)}>Review &amp; sign <ArrowRight size={12} /></button>} />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Quick Actions — raise your own request for signature */}
       <div className="mt-10">
@@ -927,6 +987,10 @@ function ApproverView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
       </div>
+
+      {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setQuickOpenId(null)} notify={notify} />}
     </div>
   );
 }

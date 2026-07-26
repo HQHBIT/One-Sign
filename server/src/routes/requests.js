@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
-import { authRequired, requireRole, isSigner, SIGNER_ROLES } from "../auth.js";
+import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
@@ -272,7 +272,10 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     for (const a of approvers) {
       sendEmail({
         to: a.email, template: "new_request",
-        ctx: { approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id }
+        ctx: {
+          approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id,
+          approveToken: signActionToken("email-approve", { req: id, uid: a.id }),
+        }
       }).catch(e => console.error("email fail", e));
     }
 
@@ -476,7 +479,10 @@ async function notifyNextSigner(requestId, fileName, requestorName) {
   if (!u) return;
   sendEmail({
     to: u.email, template: "new_request",
-    ctx: { approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId }
+    ctx: {
+      approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId,
+      approveToken: signActionToken("email-approve", { req: requestId, uid: u.id }),
+    }
   }).catch(e => console.error("email fail", e));
 }
 
