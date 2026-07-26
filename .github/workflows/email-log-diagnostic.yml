@@ -19,11 +19,10 @@ jobs:
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
           script: |
-            set -e
             export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
-            cd /home/ubuntu/OneSign/server
+            cd /home/ubuntu/OneSign/server || exit 1
             echo "SENDGRID_API_KEY present in .env: $(grep -qE '^SENDGRID_API_KEY=.+' .env && echo YES || echo NO)"
             echo "SENDGRID_FROM_EMAIL: $(grep -E '^SENDGRID_FROM_EMAIL=' .env | cut -d= -f2-)"
             node -e '
