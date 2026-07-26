@@ -1,7 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, Clock, XCircle } from "lucide-react";
 import { api } from "../api.js";
-import { greetName } from "../lib/format.js";
 import { RequestRow } from "../components/RequestRow.jsx";
 import { SignatureModal } from "../components/SignatureModal.jsx";
 
@@ -9,12 +8,16 @@ import { SignatureModal } from "../components/SignatureModal.jsx";
 const DocPreview = lazy(() => import("../viewer.jsx").then(m => ({ default: m.DocPreview })));
 
 // The assistant's workspace. They sign in with their OWN credentials, then use
-// the switcher to move between "My account" and each executive they support.
-// What each executive panel shows follows exactly the rights that executive
-// granted (also enforced server-side): dashboard = the executive's entire data;
-// view = pending queue; approve / update-signature add their buttons.
+// the switcher to move between "My account" — their full personal dashboard,
+// identical to any other user's (raise requests, track pending / approved /
+// rejected) — and each executive they support. What each executive panel shows
+// follows exactly the rights that executive granted (also enforced server-side):
+// dashboard = the executive's entire data; view = pending queue; approve /
+// update-signature add their buttons. PersonalView is injected from App.jsx (the
+// standard requestor dashboard) so both experiences stay identical by
+// construction rather than by copy.
 export function ExecutiveAssistantView(props) {
-  const { user, users, teams, notify } = props;
+  const { user, users, teams, notify, PersonalView } = props;
   const [execs, setExecs] = useState(null);
   const [active, setActive] = useState("me"); // "me" | executiveId
 
@@ -33,10 +36,14 @@ export function ExecutiveAssistantView(props) {
         {execs.map(ex => (
           <SwitchTab key={ex.id} active={active === ex.id} onClick={() => setActive(ex.id)} icon={Briefcase} label={ex.name} />
         ))}
+        {execs.length === 0 && (
+          <span className="text-xs opacity-50">No executives linked yet — an administrator (or the executive) can add you from their “My assistant” menu.</span>
+        )}
       </div>
 
-      {active === "me" ? <MyAccount user={user} execs={execs} /> :
-        current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
+      {active === "me"
+        ? (PersonalView ? <PersonalView {...props} /> : null)
+        : current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
     </div>
   );
 }
@@ -52,40 +59,6 @@ function SwitchTab({ active, onClick, icon: Icon, label }) {
     </button>
   );
 }
-
-function MyAccount({ user, execs }) {
-  return (
-    <div className="card p-6">
-      <div className="font-display text-2xl mb-1">Welcome, {greetName(user.name)}</div>
-      <div className="text-sm opacity-60 mb-4">You're signed in with your own account, supporting {execs.length || "no"} executive{execs.length === 1 ? "" : "s"}.</div>
-      {execs.length === 0 ? (
-        <div className="text-sm opacity-60">No executives are linked to you yet. Ask an administrator (or the executive) to add you from their “My assistant” menu.</div>
-      ) : (
-        <div className="space-y-2">
-          {execs.map(ex => (
-            <div key={ex.id} className="rounded-lg p-3 flex items-center justify-between gap-3" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">{ex.name}</div>
-                <div className="text-xs opacity-50 truncate">{ex.email}</div>
-              </div>
-              <div className="flex flex-wrap gap-1 justify-end">
-                {ex.canDashboard && <RightPill label="Dashboard" />}
-                {ex.canView && !ex.canDashboard && <RightPill label="View" />}
-                {ex.canApprove && <RightPill label="Approve" />}
-                {ex.canUpdateSignature && <RightPill label="Signature" />}
-                {ex.canNotify && <RightPill label="Notified" />}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const RightPill = ({ label }) => (
-  <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(184,137,74,.15)", color: "var(--c-gold-deep, #8a6a34)" }}>{label}</span>
-);
 
 // One executive's workspace, scoped by the rights they granted.
 function ExecutivePanel({ ex, users, teams, notify }) {

@@ -144,7 +144,7 @@ router.get("/", authRequired, async (req, res, next) => {
 // ============================================================
 //   create — supports legacy single-team OR multi-step workflow
 // ============================================================
-router.post("/", authRequired, requireRole("requestor", ...SIGNER_ROLES), upload.single("file"), async (req, res, next) => {
+router.post("/", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), upload.single("file"), async (req, res, next) => {
   try {
     const isDirect = req.body?.direct === "true" || req.body?.direct === true;
     // A direct request only routes a document to someone else to sign — the
@@ -939,7 +939,7 @@ router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (
 //   pending (nobody has accepted or rejected it yet). Soft-delete to 'withdrawn'
 //   so it drops out of every actionable list but stays in the admin audit view.
 // ============================================================
-router.post("/:id/cancel", authRequired, requireRole("requestor", ...SIGNER_ROLES), async (req, res, next) => {
+router.post("/:id/cancel", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -962,7 +962,7 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", ...SIGNER_ROLE
 // ============================================================
 //   reminder
 // ============================================================
-router.post("/:id/reminder", authRequired, requireRole("requestor", ...SIGNER_ROLES), async (req, res, next) => {
+router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });

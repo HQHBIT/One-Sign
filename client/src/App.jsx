@@ -536,7 +536,7 @@ function Shell(props) {
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
         {(user.role === "approver" || user.role === "executive") && <ApproverView key={homeKey} {...props} />}
-        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} {...props} />}
+        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} PersonalView={RequestorView} {...props} />}
         {user.role === "admin" && <AdminView key={homeKey} {...props} />}
       </main>
       {needsSig && (
