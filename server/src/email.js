@@ -165,7 +165,7 @@ const templates = {
         (c.approveToken
           ? button("Approve", `${BRAND.appUrl}/?approveToken=${encodeURIComponent(c.approveToken)}`, "green")
           : "") +
-        button("View the document", requestUrl(c), "gold") +
+        button(c.approveToken ? "View the document" : "Review & sign", requestUrl(c), "gold") +
         caption(c.approveToken
           ? "Approve signs it with your signature on file and notifies the requestor — or open the document to review it first."
           : "Sign in to SignFlow to review and sign the document."),

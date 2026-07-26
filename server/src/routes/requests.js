@@ -274,7 +274,11 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
         to: a.email, template: "new_request",
         ctx: {
           approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id,
-          approveToken: signActionToken("email-approve", { req: id, uid: a.id }),
+          // approveToken intentionally withheld until hqhb.in has SPF/DKIM
+          // (SendGrid domain authentication): an "Approve" button + token link
+          // from an unauthenticated sender trips Gmail's phishing filters and
+          // sank delivery. Re-enable by passing:
+          //   approveToken: signActionToken("email-approve", { req: id, uid: a.id }),
         }
       }).catch(e => console.error("email fail", e));
     }
@@ -481,7 +485,8 @@ async function notifyNextSigner(requestId, fileName, requestorName) {
     to: u.email, template: "new_request",
     ctx: {
       approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId,
-      approveToken: signActionToken("email-approve", { req: requestId, uid: u.id }),
+      // approveToken withheld until domain authentication is live — see the
+      // matching note in the team-request send above.
     }
   }).catch(e => console.error("email fail", e));
 }
