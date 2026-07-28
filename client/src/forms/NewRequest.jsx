@@ -544,13 +544,22 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="grid sm:grid-cols-3 gap-3">
                 {teams.map(t => {
                   const active = targetTeam === t.id;
+                  const nApprovers = (t.approvers || []).length;
+                  const dead = nApprovers === 0; // no signing authority — selecting it would only fail at submit
                   return (
-                    <button key={t.id} onClick={() => setTargetTeam(t.id)}
-                      className={`card p-4 text-left tile-hover ${active ? "ring-2" : ""}`}
-                      style={{ borderColor: active ? "#B8894A" : undefined, backgroundColor: active ? "rgba(184,137,74,.08)" : undefined }}>
+                    <button key={t.id} onClick={() => !dead && setTargetTeam(t.id)} disabled={dead}
+                      title={dead ? "No approvers hold signing authority for this team yet — ask the administrator" : ""}
+                      className={`card p-4 text-left ${dead ? "" : "tile-hover"} ${active ? "ring-2" : ""}`}
+                      style={{
+                        borderColor: active ? "#B8894A" : undefined,
+                        backgroundColor: active ? "rgba(184,137,74,.08)" : undefined,
+                        opacity: dead ? 0.45 : 1, cursor: dead ? "not-allowed" : "pointer"
+                      }}>
                       <Building2 size={18} className="mb-3 opacity-70" />
                       <div className="font-medium">{t.name}</div>
-                      <div className="text-xs opacity-60 mt-1">{(t.approvers || []).length} approver(s)</div>
+                      <div className="text-xs mt-1" style={dead ? { color: "var(--c-rust-deep)" } : { opacity: 0.6 }}>
+                        {dead ? "No signing authority yet" : `${nApprovers} approver(s)`}
+                      </div>
                     </button>
                   );
                 })}
@@ -707,7 +716,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                               <span className="font-mono text-[10px] opacity-50">Step {si + 1}</span>
                               <select value={step.teamId} onChange={e => setStepTeam(si, e.target.value)} className="text-xs">
                                 <option value="">— team —</option>
-                                {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                {teams.map(t => {
+                                  const n = (t.approvers || []).length;
+                                  return <option key={t.id} value={t.id} disabled={n === 0}>{t.name}{n === 0 ? " — no approvers" : ""}</option>;
+                                })}
                               </select>
                             </div>
                             <button className="btn-ghost text-[10px]" onClick={() => removeStep(si)}><Trash2 size={10} /></button>
@@ -782,7 +794,15 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
 function AddSignerControl({ team, existing, onAdd }) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const available = (team.approvers || []).filter(a => !existing.includes(a.id));
+  const all = team.approvers || [];
+  const available = all.filter(a => !existing.includes(a.id));
+  // A team with NO approvers at all is a dead end — say so clearly instead of
+  // the misleading "already added" (which blocked adding signatures entirely).
+  if (all.length === 0) return (
+    <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+      No approvers hold signing authority for <b>{team.name}</b> yet — pick a different team, or ask the administrator to grant authority under <b>Teams &amp; authority</b>.
+    </div>
+  );
   if (available.length === 0) return <div className="text-xs opacity-50 italic px-3">All team approvers already added.</div>;
   return (
     <div className="relative">

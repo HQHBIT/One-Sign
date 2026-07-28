@@ -13,7 +13,7 @@ router.get("/", authRequired, async (req, res, next) => {
       SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.signature_path, u.signature_aspect
       FROM signing_authority sa
       JOIN users u ON u.id = sa.user_id
-      WHERE u.role IN ('approver','executive')
+      WHERE u.role IN ('approver','executive') AND u.active = 1
       ORDER BY u.name
     `);
     const byTeam = {};
