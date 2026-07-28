@@ -9,6 +9,7 @@ import { startScheduler } from "./scheduler.js";
 
 import authRoutes from "./routes/auth.js";
 import webauthnRoutes from "./routes/webauthn.js";
+import notificationsRoutes from "./routes/notifications.js";
 import usersRoutes from "./routes/users.js";
 import teamsRoutes from "./routes/teams.js";
 import requestsRoutes from "./routes/requests.js";
@@ -45,6 +46,7 @@ async function main() {
 
   app.use("/api/auth", authRoutes);
   app.use("/api/webauthn", webauthnRoutes);
+  app.use("/api/notifications", notificationsRoutes);
   app.use("/api/users", usersRoutes);
   app.use("/api/teams", teamsRoutes);
   app.use("/api/requests", requestsRoutes);

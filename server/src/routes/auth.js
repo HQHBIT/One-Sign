@@ -169,6 +169,19 @@ router.get("/me", authRequired, (req, res) => {
   res.json({ user: req.user });
 });
 
+// ---------- authenticated: email-notifications toggle ----------
+// PUT /api/auth/me/email-notifications  body: { enabled }
+// Off = no workflow emails (new request / approved / rejected / reminder); the
+// in-app notifications still arrive. Credential emails always send regardless.
+router.put("/me/email-notifications", authRequired, async (req, res, next) => {
+  try {
+    const enabled = req.body?.enabled === true || req.body?.enabled === "true";
+    await execute("UPDATE users SET email_notifications = ? WHERE id = ?", [enabled ? 1 : 0, req.user.id]);
+    const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.user.id]);
+    res.json({ user: await hydrateUser(row) });
+  } catch (e) { next(e); }
+});
+
 // ---------- authenticated: set my work email (oneAccess first-run capture) ----------
 // PUT /api/auth/me/work-email  body: { email }
 // The work email becomes the account's PRIMARY address (used for every

@@ -110,6 +110,8 @@ export default function App() {
   const [requests, setRequests] = useState([]);
   const [emails, setEmails] = useState([]);
   const [toasts, setToasts] = useState([]); // queue — multiple notifications stack
+  // In-app notification centre (bell in the top bar).
+  const [notifs, setNotifs] = useState({ unread: 0, notifications: [] });
   const [tick, setTick] = useState(0);
   const [deepLinkReq, setDeepLinkReq] = useState(null); // request opened via an email deep link (?request=<id>)
   // Approve-from-email: the green button carries ?approveToken=… — captured once
@@ -131,6 +133,7 @@ export default function App() {
       const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
       setTeams(t || []);
       setRequests(r || []);
+      api.listNotifications().then(n => setNotifs(n)).catch(() => {});
       if (forUser.role === "admin") {
         const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
         setUsers(u || []);
@@ -179,6 +182,7 @@ export default function App() {
           setUser(me.user);
           const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
           setTeams(t || []); setRequests(r || []);
+          api.listNotifications().then(n => setNotifs(n)).catch(() => {});
           if (me.user.role === "admin") {
             const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
             setUsers(u || []); setEmails(e || []);
@@ -320,6 +324,34 @@ export default function App() {
     }
     catch (e) { notify(e.message, "error"); }
   };
+  // ---- in-app notifications ----
+  const openNotification = async (n) => {
+    if (!n.read) {
+      api.markNotificationsRead([n.id]).catch(() => {});
+      setNotifs(prev => ({ unread: Math.max(0, prev.unread - 1), notifications: prev.notifications.map(x => x.id === n.id ? { ...x, read: true } : x) }));
+    }
+    if (!n.requestId) return;
+    let r = requests.find(x => x.id === n.requestId);
+    if (!r) {
+      try { const list = await api.listRequests(); setRequests(list || []); r = (list || []).find(x => x.id === n.requestId); } catch { /* ignore */ }
+    }
+    if (r) setDeepLinkReq(r);
+    else notify("That document isn't available on your account.", "info");
+  };
+  const markAllNotifsRead = () => {
+    api.markNotificationsRead().catch(() => {});
+    setNotifs(prev => ({ unread: 0, notifications: prev.notifications.map(x => ({ ...x, read: true })) }));
+  };
+  const toggleEmailNotifications = async () => {
+    try {
+      const { user: updated } = await api.setEmailNotifications(!user.emailNotifications);
+      setUser(updated);
+      notify(updated.emailNotifications
+        ? "Email notifications turned ON."
+        : "Email notifications turned OFF — you'll still get in-app notifications here.", "success");
+    } catch (e) { notify(e.message || "Could not update the setting", "error"); }
+  };
+
   const rejectRequest = async (id, reason, voice) => {
     try { await api.rejectRequest(id, reason, voice); notify("Request rejected", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
@@ -377,6 +409,8 @@ export default function App() {
         <Shell
           user={user}
           users={users} teams={teams} requests={requests} emails={emails}
+          notifs={notifs} onOpenNotification={openNotification}
+          onMarkAllNotifsRead={markAllNotifsRead} onToggleEmailNotifs={toggleEmailNotifications}
           logout={logout}
           setSignature={setMySignature}
           saveUsers={saveUsers} saveTeams={saveTeams}
@@ -561,6 +595,8 @@ function Shell(props) {
   return (
     <>
       <TopBar user={user} logout={logout}
+        notifs={props.notifs} onOpenNotification={props.onOpenNotification}
+        onMarkAllNotifsRead={props.onMarkAllNotifsRead} onToggleEmailNotifs={props.onToggleEmailNotifs}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
         onBiometric={() => setBioOpen(true)}

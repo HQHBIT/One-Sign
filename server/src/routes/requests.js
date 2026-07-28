@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
+import { notifyUser } from "../notify.js";
 import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 
@@ -278,8 +279,8 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null]);
 
     for (const a of approvers) {
-      sendEmail({
-        to: a.email, template: "new_request",
+      notifyUser({
+        user: a, requestId: id, template: "new_request",
         ctx: {
           approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id,
           // approveToken intentionally withheld until hqhb.in has SPF/DKIM
@@ -498,8 +499,8 @@ async function notifyNextSigner(requestId, fileName, requestorName) {
   if (!next) return;
   const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
   if (!u) return;
-  sendEmail({
-    to: u.email, template: "new_request",
+  notifyUser({
+    user: u, requestId, template: "new_request",
     ctx: {
       approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId,
       // approveToken withheld until domain authentication is live — see the
@@ -634,8 +635,8 @@ export async function approveRequestHandler(req, res, next) {
       // Instant → notify the requestor now. Window → the scheduler emails when
       // the hour lapses; a rejection inside the window sends the reject email.
       const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-      sendEmail({
-        to: requestor?.email, template: "approved",
+      notifyUser({
+        user: requestor, requestId: row.id, template: "approved",
         ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
       }).catch(() => {});
     } else {
@@ -749,8 +750,8 @@ async function approveWorkflowStep({ req, res, row, signer }) {
         // Instant → tell the requestor now. Window → the scheduler emails when the
         // hour lapses (or the reject email goes out if the approver rejects first).
         const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-        sendEmail({
-          to: requestor?.email, template: "approved",
+        notifyUser({
+          user: requestor, requestId: row.id, template: "approved",
           ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
       } else {
@@ -836,8 +837,8 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
             await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
             const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-            sendEmail({
-              to: requestor?.email, template: "approved",
+            notifyUser({
+              user: requestor, requestId: row.id, template: "approved",
               ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
             }).catch(() => {});
           } else {
@@ -921,8 +922,8 @@ async function approveWorkflowStepInline({ req, row, signer }) {
           [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
         // Instant → notify now; window → the scheduler emails at finalisation.
         const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-        sendEmail({
-          to: requestor?.email, template: "approved",
+        notifyUser({
+          user: requestor, requestId: row.id, template: "approved",
           ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
       } else {
@@ -978,8 +979,8 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
     await execute("UPDATE request_steps SET status = 'rejected' WHERE request_id = ? AND status = 'active'", [row.id]);
 
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-    sendEmail({
-      to: requestor?.email, template: "rejected",
+    notifyUser({
+      user: requestor, requestId: row.id, template: "rejected",
       ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: reason || (voicePath ? "A voice note was attached — listen in SignFlow." : ""), requestId: row.id }
     }).catch(() => {});
 
@@ -1018,8 +1019,8 @@ router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (
     );
 
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-    sendEmail({
-      to: requestor?.email, template: "rejected",
+    notifyUser({
+      user: requestor, requestId: row.id, template: "rejected",
       ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: "Withdrawn within 1h window", requestId: row.id }
     }).catch(() => {});
 
@@ -1077,7 +1078,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_a
     if (next) {
       const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
       if (u) {
-        sendEmail({ to: u.email, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
+        notifyUser({ user: u, requestId: row.id, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
         count = 1;
       }
     } else if (row.target_team_id) {
@@ -1086,7 +1087,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_a
         WHERE u.role IN ('approver','executive') AND u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
-        sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
+        notifyUser({ user: a, requestId: row.id, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
       }
       count = approvers.length;
     }
@@ -1104,8 +1105,8 @@ router.post("/:id/force-finalize", authRequired, requireRole("admin"), async (re
     await execute("UPDATE requests SET status = 'approved', finalized_at = ? WHERE id = ?", [Date.now(), row.id]);
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     const approver  = await queryOne("SELECT * FROM users WHERE id = ?", [row.approver_id]);
-    sendEmail({
-      to: requestor?.email, template: "approved",
+    notifyUser({
+      user: requestor, requestId: row.id, template: "approved",
       ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: approver?.name, requestId: row.id }
     }).catch(() => {});
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);

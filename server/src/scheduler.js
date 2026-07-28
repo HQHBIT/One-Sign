@@ -1,5 +1,5 @@
 import { query, execute, queryOne } from "./db.js";
-import { sendEmail } from "./email.js";
+import { notifyUser } from "./notify.js";
 
 const WINDOW_MS = parseInt(process.env.APPROVAL_WINDOW_MS || "3600000", 10);
 
@@ -17,8 +17,9 @@ async function tick() {
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [r.requestor_id]);
     const approver  = await queryOne("SELECT * FROM users WHERE id = ?", [r.approver_id]);
     try {
-      await sendEmail({
-        to: requestor?.email,
+      await notifyUser({
+        user: requestor,
+        requestId: r.id,
         template: "approved",
         ctx: {
           requestorName: requestor?.name,

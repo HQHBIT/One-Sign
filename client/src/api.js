@@ -227,6 +227,15 @@ export const api = {
   remindRequest(id) { return this.fetch(`/api/requests/${id}/reminder`, { method: "POST" }); },
   forceFinalizeRequest(id) { return this.fetch(`/api/requests/${id}/force-finalize`, { method: "POST" }); },
 
+  // -------- in-app notifications + email toggle --------
+  listNotifications() { return this.fetch("/api/notifications"); }, // { unread, notifications }
+  markNotificationsRead(ids) {
+    return this.fetch("/api/notifications/read", { method: "POST", body: JSON.stringify(ids && ids.length ? { ids } : {}) });
+  },
+  setEmailNotifications(enabled) {
+    return this.fetch("/api/auth/me/email-notifications", { method: "PUT", body: JSON.stringify({ enabled }) });
+  },
+
   // -------- admin / reports --------
   listEmails() { return this.fetch("/api/emails").then(r => r.emails); },
   downloadReportCsv() {

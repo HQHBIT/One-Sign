@@ -322,6 +322,23 @@ async function runSchema() {
   // Optional voice note recorded by the approver when rejecting.
   await tryExec(`ALTER TABLE requests ADD COLUMN reject_voice_path VARCHAR(255) DEFAULT NULL`);
 
+  // Per-user toggle: receive workflow emails or not (in-app always arrives).
+  await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
+
+  // In-app notification centre — one row per workflow event per recipient.
+  await tryExec(`CREATE TABLE IF NOT EXISTS notifications (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id     VARCHAR(64)  NOT NULL,
+    type        VARCHAR(32)  NOT NULL,
+    title       VARCHAR(255) NOT NULL,
+    body        VARCHAR(500) DEFAULT NULL,
+    request_id  VARCHAR(64)  DEFAULT NULL,
+    created_at  BIGINT       NOT NULL,
+    read_at     BIGINT       DEFAULT NULL,
+    INDEX idx_notifications_user (user_id, read_at),
+    INDEX idx_notifications_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the
@@ -516,6 +533,7 @@ export async function hydrateUser(row) {
     // True only for a brand-new oneAccess account that hasn't confirmed its work
     // email yet — drives the one-time "enter your work email" prompt.
     needsWorkEmail: (row.auth_provider === "oneaccess") && Number(row.work_email_set) === 0,
+    emailNotifications: row.email_notifications == null ? true : !!Number(row.email_notifications),
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),
