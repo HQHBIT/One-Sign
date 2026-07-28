@@ -1154,7 +1154,9 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
                 {!myTurn && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
                 <div className="flex-1 min-w-0">
                   <RequestRow r={r} teams={teams} users={users} i={0}
-                    actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review <ArrowRight size={12} /></button>} />
+                    actions={r.status === "approved_pending" && r.approverId === user.id
+                      ? <button className="btn-danger text-xs" onClick={() => setOpenId(r.id)} title="Still inside your 1-hour window"><XCircle size={12} /> Reject / Withdraw</button>
+                      : <button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review <ArrowRight size={12} /></button>} />
                 </div>
               </div>
             );
@@ -1469,8 +1471,13 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   );
 }
 
-function ApproverApproved({ items, back, users, teams }) {
+function ApproverApproved({ items, back, users, teams, user, approveRequest, rejectRequest, undoApproval, notify }) {
   const [open, setOpen] = useState(null);
+  // Items still inside MY 1-hour rejection window open the action drawer (with
+  // Reject / Withdraw) — not the read-only preview — so the option is never lost.
+  const [actId, setActId] = useState(null);
+  const act = items.find(r => r.id === actId);
+  const inMyWindow = r => r.status === "approved_pending" && r.approverId === user.id && !r.instantApproval;
   return (
     <div>
       <BackHeader back={back} title="Approved requests" step={`${items.length} signed`} />
@@ -1480,7 +1487,14 @@ function ApproverApproved({ items, back, users, teams }) {
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
-                  <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
+                  {inMyWindow(r) ? (
+                    <button className="btn-danger text-xs" onClick={() => setActId(r.id)}
+                      title="Still inside your 1-hour window — reject or withdraw">
+                      <XCircle size={12} /> Reject / Withdraw
+                    </button>
+                  ) : (
+                    <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
+                  )}
                   <DownloadBtn req={r} />
                   <PrintBtn req={r} />
                 </div>
@@ -1489,6 +1503,9 @@ function ApproverApproved({ items, back, users, teams }) {
         </div>
       )}
       {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {act && <ApproveDrawer req={act} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setActId(null)} notify={notify} />}
     </div>
   );
 }

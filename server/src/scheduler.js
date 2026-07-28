@@ -23,7 +23,8 @@ async function tick() {
         ctx: {
           requestorName: requestor?.name,
           fileName: r.file_name,
-          approverName: approver?.name
+          approverName: approver?.name,
+          requestId: r.id
         }
       });
     } catch (e) { console.error("[scheduler] email failure", e); }

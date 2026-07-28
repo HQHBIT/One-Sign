@@ -631,6 +631,13 @@ export async function approveRequestHandler(req, res, next) {
           applied_signature_path = ?, signed_file_path = ?
         WHERE id = ?
       `, [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+      // Instant → notify the requestor now. Window → the scheduler emails when
+      // the hour lapses; a rejection inside the window sends the reject email.
+      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+      sendEmail({
+        to: requestor?.email, template: "approved",
+        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+      }).catch(() => {});
     } else {
       await execute(`
         UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -739,6 +746,13 @@ async function approveWorkflowStep({ req, res, row, signer }) {
             applied_signature_path = ?, signed_file_path = ?
           WHERE id = ?
         `, [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+        // Instant → tell the requestor now. Window → the scheduler emails when the
+        // hour lapses (or the reject email goes out if the approver rejects first).
+        const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+        sendEmail({
+          to: requestor?.email, template: "approved",
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+        }).catch(() => {});
       } else {
         await execute(`
           UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -746,12 +760,6 @@ async function approveWorkflowStep({ req, res, row, signer }) {
           WHERE id = ?
         `, [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
       }
-      // Notify requestor
-      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-      sendEmail({
-        to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
-      }).catch(() => {});
     }
   }
 
@@ -827,6 +835,11 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
           if (wantsInstant(req) || row.instant_approval) {
             await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+            const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+            sendEmail({
+              to: requestor?.email, template: "approved",
+              ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+            }).catch(() => {});
           } else {
             await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
@@ -906,15 +919,16 @@ async function approveWorkflowStepInline({ req, row, signer }) {
       if (wantsInstant(req) || row.instant_approval) {
         await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+        // Instant → notify now; window → the scheduler emails at finalisation.
+        const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+        sendEmail({
+          to: requestor?.email, template: "approved",
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+        }).catch(() => {});
       } else {
         await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
       }
-      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-      sendEmail({
-        to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
-      }).catch(() => {});
     }
   }
   return {};
