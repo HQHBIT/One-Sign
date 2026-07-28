@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
 const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
 const SIGNED_DIR = path.join(__dirname, "..", "..", "uploads", "signed");
+const VOICE_DIR = path.join(__dirname, "..", "..", "uploads", "voicenotes");
 
 const router = Router();
 const uid = (p = "req") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -620,7 +621,11 @@ export async function approveRequestHandler(req, res, next) {
       return res.status(500).json({ error: "Failed to stamp signature" });
     }
 
-    if (row.instant_approval) {
+    // The APPROVER decides at approval time: instant (finalise now) or the
+    // 1-hour rejection window. Legacy requests created with instant_approval
+    // keep behaving as before.
+    const instant = wantsInstant(req) || !!row.instant_approval;
+    if (instant) {
       await execute(`
         UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?,
           applied_signature_path = ?, signed_file_path = ?
@@ -635,10 +640,17 @@ export async function approveRequestHandler(req, res, next) {
     }
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
-    res.json({ request: await hydrateRequest(updated), approvalWindowMs: row.instant_approval ? 0 : APPROVAL_WINDOW_MS });
+    res.json({ request: await hydrateRequest(updated), approvalWindowMs: instant ? 0 : APPROVAL_WINDOW_MS });
   } catch (e) { next(e); }
 }
 router.post("/:id/approve", authRequired, approveRequestHandler);
+
+// Approver's choice, sent with the approve action: { instant: true } finalises
+// immediately; anything else keeps the 1-hour rejection window.
+function wantsInstant(req) {
+  const v = req.body?.instant;
+  return v === true || v === "true" || v === 1 || v === "1";
+}
 
 async function approveWorkflowStep({ req, res, row, signer }) {
   if (signer.user_id !== req.user.id) {
@@ -718,8 +730,10 @@ async function approveWorkflowStep({ req, res, row, signer }) {
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
       await notifyNextSigner(row.id, row.file_name, "");
     } else {
-      // All steps done — finalize (instant) or enter cooling window
-      if (row.instant_approval) {
+      // All steps done — the signer completing the workflow chooses: finalize
+      // instantly or enter the 1-hour rejection window.
+      const instant = wantsInstant(req) || !!row.instant_approval;
+      if (instant) {
         await execute(`
           UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?,
             applied_signature_path = ?, signed_file_path = ?
@@ -742,7 +756,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
   }
 
   const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
-  res.json({ request: await hydrateRequest(updated), approvalWindowMs: row.instant_approval ? 0 : APPROVAL_WINDOW_MS });
+  res.json({ request: await hydrateRequest(updated), approvalWindowMs: (wantsInstant(req) || row.instant_approval) ? 0 : APPROVAL_WINDOW_MS });
 }
 
 // ============================================================
@@ -810,7 +824,7 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
             results.failed.push({ id, error: "Stamp failed" });
             continue;
           }
-          if (row.instant_approval) {
+          if (wantsInstant(req) || row.instant_approval) {
             await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
           } else {
@@ -889,7 +903,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
       await notifyNextSigner(row.id, row.file_name, "");
     } else {
-      if (row.instant_approval) {
+      if (wantsInstant(req) || row.instant_approval) {
         await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
       } else {
@@ -909,7 +923,10 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 // ============================================================
 //   reject  — any signer or admin/team-authority can reject
 // ============================================================
-router.post("/:id/reject", authRequired, async (req, res, next) => {
+// Accepts plain JSON ({ reason }) or multipart with an optional recorded voice
+// note (field "voice") alongside the typed reason — the approver can explain a
+// rejection by speaking, typing, or both.
+router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -927,9 +944,21 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
     if (!allowed) return res.status(403).json({ error: "No authority to reject" });
 
     const reason = req.body?.reason || "";
+
+    // Optional voice note — store the recording, extension from the mime type.
+    let voicePath = null;
+    if (req.file?.buffer?.length) {
+      const mt = String(req.file.mimetype || "").toLowerCase();
+      const ext = mt.includes("mp4") || mt.includes("m4a") || mt.includes("aac") ? "m4a"
+        : mt.includes("ogg") ? "ogg" : "webm";
+      voicePath = `${row.id}.${ext}`;
+      await fs.mkdir(VOICE_DIR, { recursive: true });
+      await fs.writeFile(path.join(VOICE_DIR, voicePath), req.file.buffer);
+    }
+
     await execute(
-      "UPDATE requests SET status = 'rejected', approver_id = ?, rejected_at = ?, reject_reason = ?, applied_signature_path = NULL, signed_file_path = NULL WHERE id = ?",
-      [req.user.id, Date.now(), reason, row.id]
+      "UPDATE requests SET status = 'rejected', approver_id = ?, rejected_at = ?, reject_reason = ?, reject_voice_path = ?, applied_signature_path = NULL, signed_file_path = NULL WHERE id = ?",
+      [req.user.id, Date.now(), reason, voicePath, row.id]
     );
     // Mark current step rejected
     await execute("UPDATE request_steps SET status = 'rejected' WHERE request_id = ? AND status = 'active'", [row.id]);
@@ -937,11 +966,24 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     sendEmail({
       to: requestor?.email, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason, requestId: row.id }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: reason || (voicePath ? "A voice note was attached — listen in SignFlow." : ""), requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });
+  } catch (e) { next(e); }
+});
+
+// Play back the rejection voice note (authenticated; requestor, signers, admin
+// all reach this through the app UI).
+router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT reject_voice_path FROM requests WHERE id = ?", [req.params.id]);
+    if (!row?.reject_voice_path) return res.status(404).end();
+    const type = row.reject_voice_path.endsWith(".m4a") ? "audio/mp4"
+      : row.reject_voice_path.endsWith(".ogg") ? "audio/ogg" : "audio/webm";
+    res.setHeader("Content-Type", type);
+    res.sendFile(path.join(VOICE_DIR, row.reject_voice_path));
   } catch (e) { next(e); }
 });
 

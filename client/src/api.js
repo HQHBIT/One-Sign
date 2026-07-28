@@ -198,11 +198,29 @@ export const api = {
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
-  approveRequest(id) { return this.fetch(`/api/requests/${id}/approve`, { method: "POST" }); },
-  batchApproveRequests(ids) {
-    return this.fetch("/api/requests/batch-approve", { method: "POST", body: JSON.stringify({ ids }) });
+  // instant: true finalises immediately; false/omitted keeps the 1-hour
+  // rejection window. The approver chooses at approval time.
+  approveRequest(id, instant) {
+    return this.fetch(`/api/requests/${id}/approve`, { method: "POST", body: JSON.stringify({ instant: !!instant }) });
   },
-  rejectRequest(id, reason) { return this.fetch(`/api/requests/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }); },
+  batchApproveRequests(ids, instant) {
+    return this.fetch("/api/requests/batch-approve", { method: "POST", body: JSON.stringify({ ids, instant: !!instant }) });
+  },
+  // voice: optional Blob with the approver's recorded note — sent as multipart.
+  rejectRequest(id, reason, voice) {
+    if (voice) {
+      const fd = new FormData();
+      fd.append("reason", reason || "");
+      fd.append("voice", voice, "voice-note");
+      return this.fetch(`/api/requests/${id}/reject`, { method: "POST", body: fd });
+    }
+    return this.fetch(`/api/requests/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+  async getRejectVoiceBlob(id) {
+    const res = await this.fetch(`/api/requests/${id}/reject-voice`, { raw: true });
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
   withdrawRequest(id) { return this.fetch(`/api/requests/${id}/withdraw`, { method: "POST" }); },
   // Requestor withdraws their OWN still-pending request.
   cancelRequest(id) { return this.fetch(`/api/requests/${id}/cancel`, { method: "POST" }); },

@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -312,12 +312,16 @@ export default function App() {
     try { await api.remindRequest(id); notify("Reminder sent", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
-  const approveRequest = async id => {
-    try { await api.approveRequest(id); notify("Approved — 1 hour reject window active", "success"); await refresh(user); }
+  const approveRequest = async (id, instant) => {
+    try {
+      await api.approveRequest(id, instant);
+      notify(instant ? "Approved!" : "Approved! You have 1 hour to change your mind.", "success");
+      await refresh(user);
+    }
     catch (e) { notify(e.message, "error"); }
   };
-  const rejectRequest = async (id, reason) => {
-    try { await api.rejectRequest(id, reason); notify("Request rejected", "success"); await refresh(user); }
+  const rejectRequest = async (id, reason, voice) => {
+    try { await api.rejectRequest(id, reason, voice); notify("Request rejected", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
   const undoApproval = async id => {
@@ -786,7 +790,12 @@ function RejectedList({ items, teams, users, back }) {
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 </div>
               )}
-              subtitle={r.rejectReason && `Reason: ${r.rejectReason}`} />
+              subtitle={(r.rejectReason || r.hasRejectVoice) && (
+                <>
+                  {r.rejectReason && <div>Reason: {r.rejectReason}</div>}
+                  {r.hasRejectVoice && <VoiceNote requestId={r.id} />}
+                </>
+              )} />
           ))}
         </div>
       )}
@@ -891,6 +900,13 @@ function PreviewDrawer({ req, onClose, users, teams }) {
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
+          {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
+            <div className="mt-4 card p-4 text-sm" style={{ borderLeft: "3px solid var(--c-rust)" }}>
+              <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Rejection</div>
+              {req.rejectReason && <div>{req.rejectReason}</div>}
+              {req.hasRejectVoice && <VoiceNote requestId={req.id} />}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1152,11 +1168,90 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
   );
 }
 
+// Record a short voice note with the device microphone (MediaRecorder). The
+// browser picks a supported container (webm on desktop/Android, mp4 on iOS).
+function VoiceRecorder({ value, onChange }) {
+  const [recording, setRecording] = useState(false);
+  const [err, setErr] = useState(null);
+  const [url, setUrl] = useState(null);
+  const recRef = useRef(null);
+  const chunksRef = useRef([]);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+
+  const start = async () => {
+    setErr(null);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        setErr("Voice recording isn't supported in this browser."); return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(m => MediaRecorder.isTypeSupported(m)) || "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        stream.getTracks().forEach(t => t.stop());
+        onChange(blob);
+        setUrl(u => { if (u) URL.revokeObjectURL(u); return URL.createObjectURL(blob); });
+      };
+      recRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch {
+      setErr("Microphone unavailable — allow microphone access and try again.");
+    }
+  };
+  const stop = () => { try { recRef.current?.stop(); } catch { /* ignore */ } setRecording(false); };
+  const clear = () => { onChange(null); setUrl(u => { if (u) URL.revokeObjectURL(u); return null; }); };
+
+  return (
+    <div className="mb-4">
+      <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Voice note (optional)</div>
+      {!value && !recording && (
+        <button type="button" className="btn-ghost text-xs" onClick={start}>
+          <Mic size={13} /> Record a voice note
+        </button>
+      )}
+      {recording && (
+        <button type="button" className="btn-danger text-xs" onClick={stop}>
+          <Square size={12} /> Stop recording
+          <span className="inline-block w-2 h-2 rounded-full ml-1 anim-pulse" style={{ backgroundColor: "#fff" }} />
+        </button>
+      )}
+      {value && url && !recording && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <audio controls src={url} style={{ height: 32, maxWidth: 230 }} />
+          <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={clear}>Remove</button>
+          <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={() => { clear(); start(); }}>Re-record</button>
+        </div>
+      )}
+      {err && <div className="text-xs mt-1" style={{ color: "var(--c-rust-deep)" }}>{err}</div>}
+    </div>
+  );
+}
+
+// Plays a rejection's recorded voice note (fetched with auth → blob URL).
+function VoiceNote({ requestId }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let u = null, dead = false;
+    api.getRejectVoiceBlob(requestId)
+      .then(x => { if (dead) { URL.revokeObjectURL(x); return; } u = x; setUrl(x); })
+      .catch(() => {});
+    return () => { dead = true; if (u) URL.revokeObjectURL(u); };
+  }, [requestId]);
+  if (!url) return null;
+  return <audio controls src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" onClick={e => e.stopPropagation()} />;
+}
+
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
   const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [voiceBlob, setVoiceBlob] = useState(null);
+  const [rejBusy, setRejBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
@@ -1291,20 +1386,28 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <>
                 <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
                   <Eye size={13} />
-                  <span className="hidden sm:inline">Review how your signature will appear on the document.</span>
-                  <span className="sm:hidden">Preview your signature</span>
+                  <span className="hidden sm:inline">How should this be approved?</span>
+                  <span className="sm:hidden">Choose how to approve</span>
                 </div>
-                <div className="flex gap-2 sm:gap-3 shrink-0">
+                <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> <span className="hidden sm:inline">Confirm </span>approval</button>
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true); onClose(); }}
+                    title="Sign and finalise the document immediately">
+                    <Zap size={14} /> Instant Approval
+                  </button>
+                  <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
+                    onClick={async () => { await approveRequest(req.id, false); onClose(); }}
+                    title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
+                    <Clock size={14} /> Enable 1hr Rejection Window
+                  </button>
                 </div>
               </>
             ) : (
               <>
                 <div className="text-xs opacity-60 hidden sm:block">
                   {isWorkflow
-                    ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
-                    : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
+                    ? "Your signature will be stamped at the highlighted position."
+                    : "Your signature will be stamped at the marked position."}
                 </div>
                 <div className="flex gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
@@ -1338,14 +1441,26 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
       </div>
 
       {rejectOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}>
-          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }}>
+        // stopPropagation is load-bearing: this modal lives inside the drawer's
+        // click-outside-to-close root, so without it every tap on the textarea
+        // bubbled up and closed the whole drawer (the "comments not working" bug).
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}
+          onClick={e => e.stopPropagation()}>
+          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
             <div className="font-display text-2xl mb-2">Reject request</div>
-            <div className="text-sm opacity-60 mb-4">Let the requestor know why.</div>
-            <textarea rows={4} value={reason} onChange={e => setReason(e.target.value)} className="w-full mb-4" placeholder="Reason (optional)" />
+            <div className="text-sm opacity-60 mb-4">Let the requestor know why — type it, record it, or both.</div>
+            <textarea rows={4} value={reason} onChange={e => setReason(e.target.value)} className="w-full mb-4" placeholder="Reason (optional)" autoFocus />
+            <VoiceRecorder value={voiceBlob} onChange={setVoiceBlob} />
             <div className="flex justify-end gap-3">
-              <button className="btn-ghost" onClick={() => setRejectOpen(false)}>Cancel</button>
-              <button className="btn-danger" onClick={async () => { await rejectRequest(req.id, reason); setRejectOpen(false); onClose(); }}>Reject</button>
+              <button className="btn-ghost" onClick={() => setRejectOpen(false)} disabled={rejBusy}>Cancel</button>
+              <button className="btn-danger" disabled={rejBusy}
+                onClick={async () => {
+                  setRejBusy(true);
+                  try { await rejectRequest(req.id, reason, voiceBlob); setRejectOpen(false); onClose(); }
+                  finally { setRejBusy(false); }
+                }}>
+                {rejBusy ? "Rejecting…" : "Reject"}
+              </button>
             </div>
           </div>
         </div>
@@ -1388,7 +1503,12 @@ function ApproverRejected({ items, back, users, teams }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={<button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>}
-              subtitle={r.rejectReason && `Reason: ${r.rejectReason}`} />
+              subtitle={(r.rejectReason || r.hasRejectVoice) && (
+                <>
+                  {r.rejectReason && <div>Reason: {r.rejectReason}</div>}
+                  {r.hasRejectVoice && <VoiceNote requestId={r.id} />}
+                </>
+              )} />
           ))}
         </div>
       )}

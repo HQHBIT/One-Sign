@@ -319,6 +319,9 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn') NOT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
 
+  // Optional voice note recorded by the approver when rejecting.
+  await tryExec(`ALTER TABLE requests ADD COLUMN reject_voice_path VARCHAR(255) DEFAULT NULL`);
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the
@@ -607,6 +610,7 @@ export async function hydrateRequest(row) {
     finalizedAt: row.finalized_at ? Number(row.finalized_at) : null,
     rejectedAt: row.rejected_at ? Number(row.rejected_at) : null,
     rejectReason: row.reject_reason,
+    hasRejectVoice: !!row.reject_voice_path,
     hasSignedFile: !!row.signed_file_path,
     reminders: rems.map(r => Number(r.sent_at)),
     requestType: row.request_type || "general",

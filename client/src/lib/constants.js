@@ -29,8 +29,8 @@ export const STATUS = Object.freeze({
 });
 export const STATUS_LABELS = Object.freeze({
   [STATUS.PENDING]: "Pending",
-  [STATUS.APPROVED]: "Approved",
-  [STATUS.APPROVED_PENDING]: "Approved · 1h window",
+  [STATUS.APPROVED]: "Approved!",
+  [STATUS.APPROVED_PENDING]: "Approved! · 1h window",
   [STATUS.REJECTED]: "Rejected"
 });
 

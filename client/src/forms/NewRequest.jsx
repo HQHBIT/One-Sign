@@ -21,7 +21,6 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const [file, setFile] = useState(null);
   const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
   const [mode, setMode] = useState("single"); // "single" | "workflow"
-  const [instantApproval, setInstantApproval] = useState(false);
   const [requestType, setRequestType] = useState(defaultType || "general");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -403,10 +402,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       const sdArg = signerDateFields.length > 0 ? signerDateFields : undefined;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: markers, selfMarks: selfArg, signerDateFields: sdArg, instantApproval, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: markers, selfMarks: selfArg, signerDateFields: sdArg, note, requestType, rotation: docRotation });
       } else if (mode === "direct") {
         if (!canSubmitDirect) { notify("Add at least one person and place each of their signature boxes", "error"); return; }
-        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, boxes: s.boxes || [], dateFields: s.dateFields || [] })), selfMarks: selfArg, instantApproval, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, boxes: s.boxes || [], dateFields: s.dateFields || [] })), selfMarks: selfArg, note, requestType, rotation: docRotation });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
         // Legacy x/y/w/h carries the first box for back-compat; boxes[] is the full list.
@@ -417,7 +416,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             return { userId: s.userId, page: b0.page || 1, x: b0.x, y: b0.y, w: b0.w, h: b0.h, boxes: s.boxes, dateFields: s.dateFields || [] };
           })
         }));
-        await addRequest({ file: submitFile, workflow: wfPayload, selfMarks: selfArg, instantApproval, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, workflow: wfPayload, selfMarks: selfArg, note, requestType, rotation: docRotation });
       }
       notify("Request submitted", "success");
       onDone();
@@ -506,13 +505,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   <div className="text-xs opacity-60 mt-1">Search one or more people and request their signatures directly.</div>
                 </button>
               </div>
-              <label className="flex items-start gap-3 mt-5 cursor-pointer">
-                <input type="checkbox" checked={instantApproval} onChange={e => setInstantApproval(e.target.checked)} className="mt-1" />
-                <div>
-                  <div className="font-medium text-sm flex items-center gap-2"><Zap size={13} style={{ color: "var(--c-gold)" }} /> Instant approval</div>
-                  <div className="text-xs opacity-60">Skip the 1-hour cooling window. Once all signatures are collected, the document is finalised immediately.</div>
-                </div>
-              </label>
+              {/* Instant vs 1-hour window is the APPROVER's choice at signing time,
+                  not the requestor's — the old checkbox lived here. */}
             </Section>
           )}
 
