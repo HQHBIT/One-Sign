@@ -807,7 +807,12 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
   if (!req.workflow || req.workflow.length === 0) {
     const out = [];
-    if (req.marker) out.push({ ...req.marker, page: req.marker.page || 1, label: "SIGN HERE" });
+    // marker_json may hold one box (legacy) or an array (multi-sign approver)
+    const markerList = Array.isArray(req.marker) ? req.marker : (req.marker ? [req.marker] : []);
+    markerList.forEach((m, i) => out.push({
+      ...m, id: `approver-${i}`, page: m.page || 1,
+      label: markerList.length > 1 ? `SIGN HERE #${i + 1}` : "SIGN HERE"
+    }));
     (req.signerDateFields || []).forEach((d, i) => out.push(dateMark(d, `s-${i}`, req.approvedAt)));
     return out;
   }

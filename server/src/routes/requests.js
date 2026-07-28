@@ -229,7 +229,11 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     if (!targetTeamId || !marker) return res.status(400).json({ error: "Provide either workflow or targetTeamId+marker" });
     let markerObj;
     try { markerObj = JSON.parse(marker); } catch { return res.status(400).json({ error: "marker must be valid JSON" }); }
-    if (markerObj && "rotation" in markerObj) delete markerObj.rotation;
+    // One box (legacy object) or several (array) — the approver signs in each.
+    const markerList = (Array.isArray(markerObj) ? markerObj : [markerObj])
+      .filter(m => m && typeof m.x === "number" && typeof m.y === "number" && typeof m.w === "number" && typeof m.h === "number");
+    if (markerList.length === 0) return res.status(400).json({ error: "Place at least one signature box" });
+    for (const m of markerList) if ("rotation" in m) delete m.rotation;
 
     const team = await queryOne("SELECT * FROM teams WHERE id = ?", [targetTeamId]);
     if (!team) return res.status(400).json({ error: "Unknown team" });
@@ -250,7 +254,10 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
       console.error("[create] bake failed", e);
       return res.status(400).json({ error: "Could not process PDF orientation" });
     }
-    const bakedMarker = transformMarkerForBake(markerObj, pageRotations);
+    // Bake each box; store a single object when there's one (legacy shape) or the
+    // full array for multi-sign requests. Readers normalise either shape.
+    const bakedList = markerList.map(m => transformMarkerForBake(m, pageRotations));
+    const bakedMarker = bakedList.length === 1 ? bakedList[0] : bakedList;
 
     // Optional: date field(s) for the team approver, filled when they sign.
     let signerDateFields = [];
@@ -297,8 +304,17 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     }
     for (const [j, s] of step.signers.entries()) {
       if (!s.userId) return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: userId required` });
-      if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.w !== "number" || typeof s.h !== "number") {
-        return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: marker x/y/w/h required` });
+      // Accept a boxes[] array (one signer, several signature spots) or the
+      // legacy single x/y/w/h shape.
+      if (!Array.isArray(s.boxes) || s.boxes.length === 0) {
+        if (typeof s.x === "number" && typeof s.y === "number" && typeof s.w === "number" && typeof s.h === "number") {
+          s.boxes = [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+        } else {
+          return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: signature box not placed` });
+        }
+      }
+      if (s.boxes.some(b => typeof b.x !== "number" || typeof b.y !== "number" || typeof b.w !== "number" || typeof b.h !== "number")) {
+        return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: invalid signature box` });
       }
     }
   }
@@ -335,11 +351,10 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   }
   for (const step of workflow) {
     for (const s of step.signers) {
-      const baked = transformMarkerForBake(
-        { x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 },
-        pageRotations
-      );
-      s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+      s.boxes = s.boxes.map(b => {
+        const baked = transformMarkerForBake({ x: b.x, y: b.y, w: b.w, h: b.h, page: b.page || 1 }, pageRotations);
+        return { page: b.page || 1, x: baked.x, y: baked.y, w: baked.w, h: baked.h };
+      });
       s.dateFields = bakeDateFields(s.dateFields, pageRotations);
       delete s.rotation;
     }
@@ -369,10 +384,11 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
       );
       for (let j = 0; j < step.signers.length; j++) {
         const s = step.signers[j];
+        const first = s.boxes[0];
         await conn.execute(
-          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, (s.dateFields && s.dateFields.length) ? JSON.stringify(s.dateFields) : null]
+          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json, boxes_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          [uid("sg"), stepId, j + 1, s.userId, first.page || 1, first.x, first.y, first.w, first.h, 0, (s.dateFields && s.dateFields.length) ? JSON.stringify(s.dateFields) : null, s.boxes.length > 1 ? JSON.stringify(s.boxes) : null]
         );
       }
     }
@@ -572,28 +588,30 @@ export async function approveRequestHandler(req, res, next) {
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
 
     const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
-    const marker = JSON.parse(row.marker_json);
-    marker.signerName = req.user.name;
-    marker.signedAt = Date.now();
+    // marker_json holds one box (legacy) or an array — the approver signs in each.
+    const parsedMarker = JSON.parse(row.marker_json);
+    const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
+    const signedAt = Date.now();
 
     let signedPath = null;
     try {
       if (row.file_type === "pdf") {
         const outName = `${row.id}.signed.pdf`;
-        // signature box + any date fields the requestor placed for the approver,
-        // all showing this approval's date.
+        // every signature box + any date fields the requestor placed for the
+        // approver, all showing this approval's date.
         await stampPdfMulti({
           srcPath: path.join(DOC_DIR, row.file_path),
           stamps: [
-            { signaturePath: sigPathFull, page: marker.page || 1, x: marker.x, y: marker.y, w: marker.w, h: marker.h, signerName: marker.signerName, signedAt: marker.signedAt },
-            ...dateStampsFor(row.signer_date_fields_json, marker.signedAt)
+            ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+            ...dateStampsFor(row.signer_date_fields_json, signedAt)
           ],
           outName
         });
         signedPath = outName;
       } else {
         const manifest = await writeXlsxSignatureManifest({
-          srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName: row.id
+          srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull,
+          marker: { ...markerList[0], signerName: req.user.name, signedAt }, outName: row.id
         });
         signedPath = path.basename(manifest);
       }
@@ -764,18 +782,27 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
           const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
           if (!auth) { results.failed.push({ id, error: "No authority" }); continue; }
           const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
-          const marker = JSON.parse(row.marker_json);
-    marker.signerName = req.user.name;
-    marker.signedAt = Date.now();
+          // one box (legacy) or an array — stamp every box, same as single approve.
+          const parsedMarker = JSON.parse(row.marker_json);
+          const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
+          const signedAt = Date.now();
           let signedPath;
           try {
             if (row.file_type === "pdf") {
               const outName = `${row.id}.signed.pdf`;
-              await stampPdf({ srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName });
+              await stampPdfMulti({
+                srcPath: path.join(DOC_DIR, row.file_path),
+                stamps: [
+                  ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+                  ...dateStampsFor(row.signer_date_fields_json, signedAt)
+                ],
+                outName
+              });
               signedPath = outName;
             } else {
               const manifest = await writeXlsxSignatureManifest({
-                srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName: row.id
+                srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull,
+                marker: { ...markerList[0], signerName: req.user.name, signedAt }, outName: row.id
               });
               signedPath = path.basename(manifest);
             }
