@@ -32,7 +32,7 @@ import { Row } from "./components/Row.jsx";
 import { Countdown } from "./components/Countdown.jsx";
 import { ModalShell } from "./components/ModalShell.jsx";
 import { TopBar } from "./components/TopBar.jsx";
-import { enrolBiometric, biometricAvailableHere, biometricErrorMessage } from "./lib/biometric.js";
+import { enrolBiometric, biometricAvailableHere, biometricErrorMessage, rememberBiometricEmail } from "./lib/biometric.js";
 import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
 import { DelegationSettings } from "./components/DelegationSettings.jsx";
 import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
@@ -467,7 +467,7 @@ function WorkEmailCapture({ user, notify, onDone }) {
 //   BIOMETRIC SIGN-IN — enrol / manage this device's Face ID / fingerprint.
 //   The device does the biometric check; SignFlow stores only a public key.
 // ============================================================
-function BiometricModal({ notify, onClose }) {
+function BiometricModal({ user, notify, onClose }) {
   const [avail, setAvail] = useState(null);     // null = checking
   const [creds, setCreds] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -480,6 +480,7 @@ function BiometricModal({ notify, onClose }) {
     setBusy(true); setErr(null);
     try {
       const r = await enrolBiometric();
+      rememberBiometricEmail(user?.email); // one-tap next time on this device
       notify(`Biometric sign-in enabled on ${r.label || "this device"}.`, "success");
       await load();
     } catch (e) { setErr(biometricErrorMessage(e)); }
@@ -595,7 +596,7 @@ function Shell(props) {
           onClose={() => setChangingPwd(false)}
           notify={notify} />
       )}
-      {bioOpen && <BiometricModal notify={notify} onClose={() => setBioOpen(false)} />}
+      {bioOpen && <BiometricModal user={user} notify={notify} onClose={() => setBioOpen(false)} />}
       {delegationOpen && <DelegationSettings user={user} notify={notify} onClose={() => setDelegationOpen(false)} />}
       <BiometricPrompt notify={notify} hold={needsSig} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}

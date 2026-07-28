@@ -107,12 +107,45 @@ router.post("/register/verify", authRequired, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ---------- sign in with biometric (public, usernameless) ----------
+// ---------- sign in with biometric (public) ----------
+// Two modes:
+//  - no email  → usernameless: the device offers whatever discoverable passkey
+//    it holds for this site (works on an enrolled device).
+//  - email     → that account's registered credentials are offered, which also
+//    enables ecosystem-synced passkeys and the cross-device (QR-to-phone)
+//    hand-off — so one enrolled phone can sign the user in on any device.
 router.post("/login/options", async (req, res, next) => {
   try {
     const { rpID } = rpFromReq(req);
-    const options = await generateAuthenticationOptions({ rpID, userVerification: "preferred", allowCredentials: [] });
-    const challengeId = await saveChallenge("auth", null, options.challenge);
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    let allow = [];
+    let userId = null;
+    if (email) {
+      const u = await queryOne(
+        "SELECT id, active FROM users WHERE LOWER(email) = ? OR LOWER(secondary_email) = ?", [email, email]);
+      if (u && (u.active == null || Number(u.active) === 1)) {
+        const creds = await query("SELECT cred_id, transports FROM webauthn_credentials WHERE user_id = ?", [u.id]);
+        if (creds.length) {
+          userId = u.id;
+          // "hybrid" is appended as a transport hint so a device that doesn't
+          // hold the passkey itself can offer the QR → phone hand-off.
+          allow = creds.map(c => ({
+            id: c.cred_id,
+            transports: c.transports ? [...new Set([...c.transports.split(","), "hybrid"])] : undefined,
+          }));
+        }
+      }
+      // Identical response for unknown email and no-passkey account — reveals
+      // nothing about whether the email has an account (anti-enumeration).
+      if (!allow.length) {
+        return res.status(404).json({
+          error: "No biometric sign-in is set up for this email yet. Sign in with oneAccess, then enable it from your profile menu.",
+          code: "no_biometric",
+        });
+      }
+    }
+    const options = await generateAuthenticationOptions({ rpID, userVerification: "preferred", allowCredentials: allow });
+    const challengeId = await saveChallenge("auth", userId, options.challenge);
     res.json({ options, challengeId });
   } catch (e) { next(e); }
 });
@@ -125,6 +158,11 @@ router.post("/login/verify", async (req, res, next) => {
     if (!ch) return res.status(400).json({ error: "Sign-in window expired. Please try again." });
     const cred = await queryOne("SELECT * FROM webauthn_credentials WHERE cred_id = ?", [response?.id]);
     if (!cred) return res.status(401).json({ error: "Please register on oneAccess to sign in!", code: "not_registered" });
+    // Email-first flow pinned the challenge to an account — the presented
+    // credential must belong to that same account.
+    if (ch.user_id && ch.user_id !== cred.user_id) {
+      return res.status(401).json({ error: "This passkey doesn't belong to that email address." });
+    }
     const user = await queryOne("SELECT * FROM users WHERE id = ?", [cred.user_id]);
     if (!user || (user.active != null && Number(user.active) === 0)) return res.status(401).json({ error: "That account isn't available." });
     const verification = await verifyAuthenticationResponse({

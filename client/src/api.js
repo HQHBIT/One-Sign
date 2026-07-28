@@ -66,7 +66,7 @@ export const api = {
   // -------- WebAuthn / biometric sign-in --------
   webauthnRegisterOptions() { return this.fetch("/api/webauthn/register/options", { method: "POST" }); },
   webauthnRegisterVerify(body) { return this.fetch("/api/webauthn/register/verify", { method: "POST", body: JSON.stringify(body) }); },
-  webauthnLoginOptions() { return this.fetch("/api/webauthn/login/options", { method: "POST" }); },
+  webauthnLoginOptions(email) { return this.fetch("/api/webauthn/login/options", { method: "POST", body: JSON.stringify(email ? { email } : {}) }); },
   webauthnLoginVerify(body) { return this.fetch("/api/webauthn/login/verify", { method: "POST", body: JSON.stringify(body) }); },
   webauthnCredentials() { return this.fetch("/api/webauthn/credentials").then(r => r.credentials); },
   webauthnRemoveCredential(id) { return this.fetch(`/api/webauthn/credentials/${id}`, { method: "DELETE" }); },

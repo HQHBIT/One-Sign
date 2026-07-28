@@ -38,12 +38,23 @@ export async function enrolBiometric() {
   return result;
 }
 
-// Sign in with the device biometric (usernameless). Returns { token, user }.
-export async function loginBiometric() {
-  const { options, challengeId } = await api.webauthnLoginOptions();
+// Sign in with the device biometric. With an email, the server offers that
+// account's passkeys — enabling synced passkeys and the QR → phone hand-off on
+// devices that never enrolled. Without one, the device's own discoverable
+// passkey is used. Returns { token, user }.
+export async function loginBiometric(email) {
+  const { options, challengeId } = await api.webauthnLoginOptions(email);
   const response = await startAuthentication({ optionsJSON: options });
-  return api.webauthnLoginVerify({ response, challengeId });
+  const session = await api.webauthnLoginVerify({ response, challengeId });
+  if (session?.user?.email) rememberBiometricEmail(session.user.email);
+  return session;
 }
+
+// The email last used for biometric sign-in on this browser — prefills the
+// "saved email + biometrics" flow so returning users are one tap from in.
+const BIO_EMAIL = "sf_bio_email";
+export const savedBiometricEmail = () => { try { return localStorage.getItem(BIO_EMAIL) || ""; } catch { return ""; } };
+export const rememberBiometricEmail = (e) => { try { if (e) localStorage.setItem(BIO_EMAIL, e); } catch { /* ignore */ } };
 
 // The WebAuthn browser API throws a DOMException on user cancel / no-credential;
 // turn those into friendly copy for the UI.

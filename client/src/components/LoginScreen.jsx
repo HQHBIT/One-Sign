@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { ArrowRight, ArrowLeft, Check, ScanFace } from "lucide-react";
 import { api } from "../api.js";
 import { PasswordInput } from "./PasswordInput.jsx";
-import { loginBiometric, biometricAvailableHere, biometricErrorMessage, deviceHasBiometric, forgetBiometricHere } from "../lib/biometric.js";
+import { loginBiometric, biometricSupported, biometricErrorMessage, forgetBiometricHere, savedBiometricEmail } from "../lib/biometric.js";
 
 // DISABLED: expense feature commented out
 /* Local-time YYYY-MM-DD for the date input's default value.
@@ -16,32 +16,33 @@ export function LoginScreen({ login, onSession }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  // Biometric (WebAuthn) sign-in — only surfaced when this device actually has a
-  // platform authenticator (Face ID / Touch ID / Windows Hello).
-  const [bioAvail, setBioAvail] = useState(false);
+  // Biometric (WebAuthn) sign-in — offered wherever the browser supports it.
+  // With a saved/entered email the server offers that account's passkeys, so a
+  // synced passkey or the QR → phone hand-off works even on a fresh device.
+  const bioSupported = biometricSupported();
   const [bioBusy, setBioBusy] = useState(false);
   const [bioErr, setBioErr] = useState(null);
-  // Offer the biometric button only where it'll work: the device supports it AND
-  // it has been enrolled here (otherwise the user hits the "use another device" chooser).
-  useEffect(() => { biometricAvailableHere().then(a => setBioAvail(a && deviceHasBiometric())).catch(() => {}); }, []);
-  const signInBiometric = async () => {
+  const [bioEmail, setBioEmail] = useState(() => savedBiometricEmail());
+  const [bioEmailOpen, setBioEmailOpen] = useState(false);
+  const signInBiometric = async (em) => {
     setBioBusy(true); setBioErr(null);
     try {
-      const session = await loginBiometric();
+      const session = await loginBiometric((em || "").trim() || undefined);
       onSession?.(session);
     } catch (e) {
-      // Not registered on the server → this device can't sign in biometrically.
-      // Send them to oneAccess to register / sign in first, and drop the stale hint.
-      if (e?.code === "not_registered") {
+      if (e?.code === "no_biometric") {
+        // Known shape: no passkey for that email — guide, keep the field open.
+        setBioErr(e.message);
+        setBioEmailOpen(true);
+      } else if (e?.code === "not_registered") {
         forgetBiometricHere();
-        setBioAvail(false);
+        setBioErr("Please register on oneAccess to sign in!");
         if (oneAccessAvailable && authCfg.oneAccessStartUrl) {
-          setBioErr("Please register on oneAccess to sign in!");
           setTimeout(() => { window.location.href = authCfg.oneAccessStartUrl; }, 1400);
-          return;
         }
+      } else {
+        setBioErr(biometricErrorMessage(e));
       }
-      setBioErr(biometricErrorMessage(e));
     } finally { setBioBusy(false); }
   };
   // Login options from the server: whether to offer oneAccess SSO and/or the local
@@ -199,13 +200,41 @@ export function LoginScreen({ login, onSession }) {
                 </>
               )}
 
-              {/* Biometric (Face ID / fingerprint) sign-in — shown on this device
-                  once the user has enrolled it from their profile menu. */}
-              {!adminMode && bioAvail && (
+              {/* Biometric (Face ID / fingerprint / Windows Hello) sign-in — any
+                  device. Saved email = one tap; otherwise ask for the email so
+                  the account's passkeys (incl. phone via QR) can be offered. */}
+              {!adminMode && bioSupported && (
                 <div className={oneAccessAvailable ? "mt-3" : ""}>
-                  <button type="button" className="btn-ghost w-full justify-center" onClick={signInBiometric} disabled={bioBusy}>
-                    <ScanFace size={16} /> {bioBusy ? "Waiting for your device…" : "Sign in with Face / fingerprint"}
-                  </button>
+                  {!bioEmailOpen ? (
+                    <>
+                      <button type="button" className="btn-ghost w-full justify-center"
+                        onClick={() => { if (bioEmail.trim()) signInBiometric(bioEmail); else setBioEmailOpen(true); }}
+                        disabled={bioBusy}>
+                        <ScanFace size={16} /> {bioBusy ? "Waiting for your device…" : "Sign in with Face / fingerprint"}
+                      </button>
+                      {bioEmail.trim() && (
+                        <div className="text-[11px] mt-1.5 text-center opacity-60">
+                          as <span className="font-mono">{bioEmail.trim()}</span> ·{" "}
+                          <button type="button" className="underline hover:opacity-100"
+                            onClick={() => setBioEmailOpen(true)}>use a different email</button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <form onSubmit={e => { e.preventDefault(); signInBiometric(bioEmail); }}>
+                      <label className="block text-xs tracking-wider uppercase opacity-70 mb-2 mt-2">Your email</label>
+                      <input type="email" value={bioEmail} onChange={e => setBioEmail(e.target.value)}
+                        className="w-full mb-3" placeholder="you@hqhb.in" required autoFocus disabled={bioBusy} />
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-ghost" onClick={() => { setBioEmailOpen(false); setBioErr(null); }} disabled={bioBusy}>
+                          <ArrowLeft size={13} />
+                        </button>
+                        <button className="btn-ghost flex-1 justify-center" disabled={bioBusy || !bioEmail.trim()}>
+                          <ScanFace size={15} /> {bioBusy ? "Waiting for your device…" : "Continue with biometrics"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
                   {bioErr && <div className="text-xs mt-2 text-center" style={{ color: "var(--c-rust-deep)" }}>{bioErr}</div>}
                 </div>
               )}
