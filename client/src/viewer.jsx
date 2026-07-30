@@ -23,14 +23,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fill = false, rotation = 0, onRotate }) {
+export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fixedBox = null, fill = false, rotation = 0, onRotate }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} fill={fill} rotation={rotation} onRotate={onRotate} />;
+      onPages={onPages} lockedAspect={lockedAspect} fixedBox={fixedBox} fill={fill} rotation={rotation} onRotate={onRotate} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
 }
@@ -55,7 +55,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fill = false, rotation = 0, onRotate }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fixedBox = null, fill = false, rotation = 0, onRotate }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
   // Page 1's native aspect — used so placeholders for unrendered pages reserve
@@ -150,6 +150,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             armed={armed}
             onPlaced={() => setArmed(false)}
             lockedAspect={lockedAspect}
+            fixedBox={fixedBox}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
@@ -258,7 +259,7 @@ const LONGPRESS_MS = 420;
 // If the finger travels more than this (px) the gesture is a scroll, not a press.
 const MOVE_CANCEL_PX = 12;
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, onRendered, armed = false, onPlaced }) {
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, fixedBox = null, onRendered, armed = false, onPlaced }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
@@ -339,14 +340,21 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   };
 
   // Commit a signature box from a start point + current point (viewport %).
-  // A negligible drag drops a compact standard-sized box centred on the start;
-  // a real drag uses the dragged rectangle. Shared by mouse-drag, armed tap,
-  // and touch long-press so all three behave identically.
+  // With fixedBox set (the default from the request builder), every placement
+  // drops the SAME standard-sized box centred on the tap / drag midpoint —
+  // uniform, industry-style fields; the handles still allow manual resizing.
+  // Without it: a negligible drag drops a compact default, a real drag uses the
+  // dragged rectangle. Shared by mouse-drag, armed tap, and touch long-press.
   const commitBox = (sx, sy, cx, cy) => {
     const dragW = Math.abs(cx - sx);
     const dragH = Math.abs(cy - sy);
     let vx, vy, vw, vh;
-    if (dragW < 4 && dragH < 2) {
+    if (fixedBox) {
+      vw = fixedBox.w; vh = fixedBox.h;
+      const midX = (sx + cx) / 2, midY = (sy + cy) / 2;
+      vx = midX - vw / 2;
+      vy = midY - vh / 2;
+    } else if (dragW < 4 && dragH < 2) {
       vw = 15; vh = 5;
       vx = sx - vw / 2;
       vy = sy - vh / 2;
@@ -412,9 +420,14 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   };
   const onCancel = () => { clearLongPress(); setDrawing(null); };
 
-  // Live drag preview, locked to aspect if applicable
+  // Live drag preview — with fixedBox the ghost is the standard-sized box
+  // following the cursor; otherwise the dragged rectangle (aspect-locked if set).
   const previewRect = (() => {
     if (!drawing) return null;
+    if (fixedBox) {
+      const midX = (drawing.sx + drawing.x) / 2, midY = (drawing.sy + drawing.y) / 2;
+      return { vx: midX - fixedBox.w / 2, vy: midY - fixedBox.h / 2, vw: fixedBox.w, vh: fixedBox.h };
+    }
     const vx = Math.min(drawing.sx, drawing.x);
     const vy = Math.min(drawing.sy, drawing.y);
     let vw = Math.abs(drawing.x - drawing.sx);
@@ -532,6 +545,7 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
 
   return (
     <div data-sig-jump={m.highlight !== false ? "true" : undefined}
+      title={m.label || undefined}
       style={{
       position: "absolute",
       left: `${m.x}%`, top: `${m.y}%`,
@@ -543,13 +557,16 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
       pointerEvents: interactive ? "auto" : "none",
       cursor: interactive ? "move" : "default",
       touchAction: interactive ? "none" : undefined,
-      boxShadow: highlight ? "0 0 0 2px rgba(184,137,74,.35)" : "none"
+      boxShadow: highlight ? "0 0 0 2px rgba(184,137,74,.35)" : "none",
+      overflow: "hidden"
     }}
       onPointerDown={interactive ? (e) => startDrag(e, "move") : undefined}>
       {isSigned ? (
         <img src={m.signedDataUrl} alt="signature" style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
       ) : (
-        <span style={{ padding: "2px 4px", backgroundColor: "rgba(255,255,255,.85)", borderRadius: 3, lineHeight: 1.1, textAlign: "center", pointerEvents: "none" }}>
+        // Clipped cleanly when the name is longer than the standard box —
+        // hovering the box shows the full label via the title tooltip.
+        <span style={{ padding: "2px 4px", backgroundColor: "rgba(255,255,255,.85)", borderRadius: 3, lineHeight: 1.1, textAlign: "center", pointerEvents: "none", maxWidth: "96%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {m.label || "SIGN HERE"}
         </span>
       )}
@@ -699,18 +716,11 @@ export function XlsxViewer({ file, markers, editable, onAddMarker, onPages, appl
   // Commit a signature box from a start + current point (sheet %). Shared by
   // mouse-drag, armed tap, and touch long-press.
   const commitBox = (sx, sy, cx, cy) => {
-    const dragW = Math.abs(cx - sx);
-    const dragH = Math.abs(cy - sy);
-    let x, y, w, h;
-    if (dragW < 4 && dragH < 2) {
-      w = 22; h = 6;
-      x = sx - w / 2;
-      y = sy - h / 2;
-    } else {
-      x = Math.min(sx, cx);
-      y = Math.min(sy, cy);
-      w = dragW; h = dragH;
-    }
+    // Always the standard medium field — uniform with the PDF path; the box
+    // remains resizable afterwards.
+    const w = 22, h = 6;
+    let x = (sx + cx) / 2 - w / 2;
+    let y = (sy + cy) / 2 - h / 2;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     onAddMarker(1, x, y, w, h);

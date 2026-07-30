@@ -124,6 +124,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     return (a && a > 0 && isFinite(a)) ? a : null;
   }, [mode, placingSlot, workflow, teams]);
 
+  // ---------- standard field size ----------
+  // Every placement drops the SAME industry-style box (resizable afterwards):
+  // signatures 22% x 6% of the page, date fields 12% x 4.5%. Which one applies
+  // follows what's currently being placed.
+  const placingDates = selfPlacing === "date" || signerDatePlacing || placingSlot?.kind === "date";
+  const fixedBox = placingDates ? { w: 12, h: 4.5 } : { w: 22, h: 6 };
+
   // ---------- markers shown on the doc ----------
   // The signer box(es) for the approver(s) AND the requestor's own self-signature /
   // date marks share ONE overlay so everything is placed on the same document view.
@@ -522,7 +529,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable
+                    <DocPreview file={file} markers={allMarkers} editable fixedBox={fixedBox}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
@@ -693,7 +700,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect}
+                    <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect} fixedBox={fixedBox}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
