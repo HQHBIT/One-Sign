@@ -1400,13 +1400,48 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
 
 // Record a short voice note with the device microphone (MediaRecorder). The
 // browser picks a supported container (webm on desktop/Android, mp4 on iOS).
+// mm:ss for short recordings.
+const fmtClock = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// <audio> that self-heals bogus durations. MediaRecorder's WebM has no duration
+// metadata, so browsers show garbage (a 3s note reading as 14min). New notes are
+// patched at record time; this covers notes saved before the fix: when the
+// reported duration is Infinity/absurd, seeking to a huge time forces the
+// browser to resolve the real one.
+function FixedAudio({ src, style, className }) {
+  const ref = useRef(null);
+  const fixedRef = useRef(false);
+  useEffect(() => { fixedRef.current = false; }, [src]);
+  return (
+    <audio ref={ref} controls src={src} style={style} className={className}
+      onClick={e => e.stopPropagation()}
+      onLoadedMetadata={() => {
+        const a = ref.current;
+        if (!a || fixedRef.current) return;
+        if (!isFinite(a.duration) || a.duration > 6 * 3600) {
+          fixedRef.current = true;
+          const onTU = () => { a.removeEventListener("timeupdate", onTU); a.currentTime = 0; };
+          a.addEventListener("timeupdate", onTU);
+          a.currentTime = 1e7;
+        }
+      }} />
+  );
+}
+
 function VoiceRecorder({ value, onChange }) {
   const [recording, setRecording] = useState(false);
   const [err, setErr] = useState(null);
   const [url, setUrl] = useState(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(null);
   const recRef = useRef(null);
   const chunksRef = useRef([]);
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  const startedAtRef = useRef(0);
+  const tickRef = useRef(null);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); if (tickRef.current) clearInterval(tickRef.current); }, [url]);
 
   const start = async () => {
     setErr(null);
@@ -1419,21 +1454,39 @@ function VoiceRecorder({ value, onChange }) {
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       chunksRef.current = [];
       rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
-      rec.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+      rec.onstop = async () => {
+        const durMs = Date.now() - startedAtRef.current;
+        let blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
         stream.getTracks().forEach(t => t.stop());
+        // Embed the real duration into the WebM header — without it, players
+        // show nonsense lengths for MediaRecorder output.
+        if ((blob.type || "").includes("webm")) {
+          try {
+            const { default: fixWebmDuration } = await import("fix-webm-duration");
+            blob = await new Promise(res => { try { fixWebmDuration(blob, durMs, b => res(b || blob)); } catch { res(blob); } });
+          } catch { /* patching is best-effort — the FixedAudio fallback still covers playback */ }
+        }
+        setDurationMs(durMs);
         onChange(blob);
         setUrl(u => { if (u) URL.revokeObjectURL(u); return URL.createObjectURL(blob); });
       };
       recRef.current = rec;
+      startedAtRef.current = Date.now();
+      setElapsedMs(0);
+      if (tickRef.current) clearInterval(tickRef.current);
+      tickRef.current = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 500);
       rec.start();
       setRecording(true);
     } catch {
       setErr("Microphone unavailable — allow microphone access and try again.");
     }
   };
-  const stop = () => { try { recRef.current?.stop(); } catch { /* ignore */ } setRecording(false); };
-  const clear = () => { onChange(null); setUrl(u => { if (u) URL.revokeObjectURL(u); return null; }); };
+  const stop = () => {
+    try { recRef.current?.stop(); } catch { /* ignore */ }
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    setRecording(false);
+  };
+  const clear = () => { onChange(null); setDurationMs(null); setUrl(u => { if (u) URL.revokeObjectURL(u); return null; }); };
 
   return (
     <div className="mb-4">
@@ -1445,13 +1498,14 @@ function VoiceRecorder({ value, onChange }) {
       )}
       {recording && (
         <button type="button" className="btn-danger text-xs" onClick={stop}>
-          <Square size={12} /> Stop recording
+          <Square size={12} /> Stop recording · <span className="font-mono">{fmtClock(elapsedMs)}</span>
           <span className="inline-block w-2 h-2 rounded-full ml-1 anim-pulse" style={{ backgroundColor: "#fff" }} />
         </button>
       )}
       {value && url && !recording && (
         <div className="flex items-center gap-2 flex-wrap">
-          <audio controls src={url} style={{ height: 32, maxWidth: 230 }} />
+          <FixedAudio src={url} style={{ height: 32, maxWidth: 230 }} />
+          {durationMs != null && <span className="text-xs font-mono opacity-60">{fmtClock(durationMs)}</span>}
           <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={clear}>Remove</button>
           <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={() => { clear(); start(); }}>Re-record</button>
         </div>
@@ -1472,7 +1526,7 @@ function VoiceNote({ requestId }) {
     return () => { dead = true; if (u) URL.revokeObjectURL(u); };
   }, [requestId]);
   if (!url) return null;
-  return <audio controls src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" onClick={e => e.stopPropagation()} />;
+  return <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" />;
 }
 
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
