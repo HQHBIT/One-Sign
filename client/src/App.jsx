@@ -838,53 +838,82 @@ function RequestorView(props) {
   if (tab === "signed") return <ApprovedList {...props} back={() => setTab("home")} items={mySigned} title="My signed documents" />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
+  const inWindow = my.filter(r => r.status === "approved_pending").length;
+  const rejectedCount = my.filter(r => r.status === "rejected").length;
   const tiles = [
-    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
+    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
+    { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
-    { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
+    { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + inWindow },
     { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
     { key: "signed", icon: PenTool, title: "My signed documents", desc: "Documents sent to you that you have signed.", badge: mySigned.length }
   ];
 
   return (
     <div>
-      <Hero title={`Welcome back, ${greetName(user.name)}`} subtitle="What would you like to do today?" />
+      <Hero title={`Welcome back, ${greetName(user.name)}`}
+        subtitle={awaitingMySig.length
+          ? `${awaitingMySig.length} document${awaitingMySig.length === 1 ? "" : "s"} waiting for your signature.`
+          : pending.length
+            ? `${pending.length} of your request${pending.length === 1 ? " is" : "s are"} out for signature.`
+            : "What would you like to do today?"} />
 
-      {/* Quick Actions */}
-      <div className="mt-10">
-        <div className="flex items-baseline justify-between mb-4">
-          <h3 className="font-display text-2xl">Quick Actions</h3>
-          <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
+      <StatStrip stats={[
+        { label: "Awaiting me", value: awaitingMySig.length, onClick: () => setTab("awaiting-sig"), color: "var(--c-gold)" },
+        { label: "Pending", value: pending.length, onClick: () => setTab("pending") },
+        { label: "In 1h window", value: inWindow, onClick: () => setTab("pending"), color: "#8B4A14" },
+        { label: "Approved", value: myApproved.length, onClick: () => setTab("approved"), color: "var(--c-forest)" },
+        { label: "Rejected", value: rejectedCount, onClick: () => setTab("rejected"), color: "var(--c-rust)" },
+      ]} />
+
+      {/* Action-first: documents waiting for MY signature come before everything */}
+      {awaitingMySig.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-baseline justify-between mb-4">
+            <h3 className="font-display text-2xl">Awaiting your signature</h3>
+            {awaitingMySig.length > 3 && (
+              <button className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 underline" onClick={() => setTab("awaiting-sig")}>
+                See all {awaitingMySig.length}
+              </button>
+            )}
+          </div>
+          <div className="card overflow-hidden">
+            {awaitingMySig.slice(0, 3).map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={props.teams} users={props.users} i={i}
+                actions={<button className="btn-primary text-xs" onClick={() => setTab("awaiting-sig")}>Review &amp; sign <ArrowRight size={12} /></button>} />
+            ))}
+          </div>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
-          {REQUEST_TYPES.map(t => (
-            <button key={t.key} onClick={() => openNew(t.key)}
-              className="card p-4 text-left tile-hover"
-              style={{ borderLeft: `4px solid ${t.color}` }}>
-              <div className="text-sm font-medium">{t.label}</div>
-              <div className="text-xs opacity-60 mt-1">{t.desc}</div>
-            </button>
-          ))}
-          <button onClick={() => setTab("workflows")}
-            className="card p-4 text-left tile-hover"
-            style={{ borderLeft: "4px solid var(--c-gold)" }}>
-            <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={13} style={{ color: "var(--c-gold)" }} /> My Workflows</div>
-            <div className="text-xs opacity-60 mt-1">Save your signing routes once — reuse with any document.</div>
-          </button>
-        </div>
-      </div>
+      )}
 
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
-      {my.filter(r => r.status === "rejected").length > 0 && (
+      {rejectedCount > 0 && (
         <div className="mt-8">
           <button className="btn-ghost text-sm" onClick={() => setTab("rejected")}>
-            View rejected requests ({my.filter(r => r.status === "rejected").length})
+            View rejected requests ({rejectedCount})
           </button>
         </div>
       )}
       <RecentActivity my={my} teams={props.teams} />
+    </div>
+  );
+}
+
+// Compact glance-strip: one chip per status, tappable. Zero-value chips stay
+// visible but muted so the layout is stable day to day.
+function StatStrip({ stats }) {
+  return (
+    <div className="flex flex-wrap gap-2 sm:gap-3 mt-6">
+      {stats.map((s, i) => (
+        <button key={i} onClick={s.onClick}
+          className="card px-3 sm:px-4 py-2 flex items-baseline gap-2 tile-hover"
+          style={{ opacity: s.value ? 1 : 0.5 }}>
+          <span className="font-display text-xl sm:text-2xl" style={{ color: s.value ? (s.color || "var(--c-ink)") : undefined }}>{s.value}</span>
+          <span className="text-[10px] sm:text-xs tracking-wider uppercase opacity-60">{s.label}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -1160,6 +1189,8 @@ function ApproverView(props) {
 
   const tiles = [
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
+    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
+    { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },
@@ -1172,6 +1203,14 @@ function ApproverView(props) {
         subtitle={pending.length
           ? `${pending.length} document${pending.length === 1 ? "" : "s"} awaiting your approval.`
           : "Review documents routed to you — or raise a request of your own."} />
+
+      <StatStrip stats={[
+        { label: "Awaiting me", value: pending.length, onClick: () => setTab("pending"), color: "var(--c-gold)" },
+        { label: "In 1h window", value: pendingApproved.length, onClick: () => setTab("pending"), color: "#8B4A14" },
+        { label: "Approved", value: approved.length, onClick: () => setTab("approved"), color: "var(--c-forest)" },
+        { label: "Rejected", value: rejected.length, onClick: () => setTab("rejected"), color: "var(--c-rust)" },
+        { label: "My requests", value: myOpen, onClick: () => setTab("my-requests") },
+      ]} />
 
       {/* Awaiting your approval — FIRST, so what needs action is never buried */}
       <div className="mt-8">
@@ -1195,32 +1234,8 @@ function ApproverView(props) {
         )}
       </div>
 
-      {/* Quick Actions — raise your own request for signature */}
-      <div className="mt-10">
-        <div className="flex items-baseline justify-between mb-4">
-          <h3 className="font-display text-2xl">Quick Actions</h3>
-          <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
-        </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
-          {REQUEST_TYPES.map(t => (
-            <button key={t.key} onClick={() => openNew(t.key)}
-              className="card p-4 text-left tile-hover"
-              style={{ borderLeft: `4px solid ${t.color}` }}>
-              <div className="text-sm font-medium">{t.label}</div>
-              <div className="text-xs opacity-60 mt-1">{t.desc}</div>
-            </button>
-          ))}
-          <button onClick={() => setTab("workflows")}
-            className="card p-4 text-left tile-hover"
-            style={{ borderLeft: "4px solid var(--c-gold)" }}>
-            <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={13} style={{ color: "var(--c-gold)" }} /> My Workflows</div>
-            <div className="text-xs opacity-60 mt-1">Save your signing routes once — reuse with any document.</div>
-          </button>
-        </div>
-      </div>
-
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
-        {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
+        {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
 
       {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
