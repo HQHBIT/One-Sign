@@ -325,6 +325,19 @@ async function runSchema() {
   // Per-user toggle: receive workflow emails or not (in-app always arrives).
   await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
 
+  // Saved workflow templates: a requestor's reusable routing (steps + signers).
+  // Box placements are per-document, so only the ROUTE is stored; the requestor
+  // attaches a document and places boxes each time they use it.
+  await tryExec(`CREATE TABLE IF NOT EXISTS workflow_templates (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    owner_id    VARCHAR(64)  NOT NULL,
+    name        VARCHAR(120) NOT NULL,
+    steps_json  TEXT         NOT NULL,
+    created_at  BIGINT       NOT NULL,
+    updated_at  BIGINT       NOT NULL,
+    INDEX idx_wft_owner (owner_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // In-app notification centre — one row per workflow event per recipient.
   await tryExec(`CREATE TABLE IF NOT EXISTS notifications (
     id          VARCHAR(64)  NOT NULL PRIMARY KEY,

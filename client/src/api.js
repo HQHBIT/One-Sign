@@ -227,6 +227,16 @@ export const api = {
   remindRequest(id) { return this.fetch(`/api/requests/${id}/reminder`, { method: "POST" }); },
   forceFinalizeRequest(id) { return this.fetch(`/api/requests/${id}/force-finalize`, { method: "POST" }); },
 
+  // -------- saved workflow templates (My Workflows) --------
+  listWorkflowTemplates() { return this.fetch("/api/workflow-templates").then(r => r.templates); },
+  createWorkflowTemplate({ name, steps }) {
+    return this.fetch("/api/workflow-templates", { method: "POST", body: JSON.stringify({ name, steps }) });
+  },
+  updateWorkflowTemplate(id, { name, steps }) {
+    return this.fetch(`/api/workflow-templates/${id}`, { method: "PUT", body: JSON.stringify({ name, steps }) });
+  },
+  deleteWorkflowTemplate(id) { return this.fetch(`/api/workflow-templates/${id}`, { method: "DELETE" }); },
+
   // -------- in-app notifications + email toggle --------
   listNotifications() { return this.fetch("/api/notifications"); }, // { unread, notifications }
   markNotificationsRead(ids) {

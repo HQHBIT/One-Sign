@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useMemo, Suspense, lazy } from "react";
 import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
-  Building2, Trash2, Plus, Send, Calendar
+  Building2, Trash2, Plus, Send, Calendar, Save
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
 import { BackHeader } from "../components/BackHeader.jsx";
@@ -17,10 +17,10 @@ const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview 
 const ViewerFallback = () =>
   <div className="card p-10 text-sm opacity-50 text-center">Loading viewer…</div>;
 
-export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType }) {
+export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType, presetWorkflow }) {
   const [file, setFile] = useState(null);
   const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
-  const [mode, setMode] = useState("single"); // "single" | "workflow"
+  const [mode, setMode] = useState(presetWorkflow ? "workflow" : "single"); // "single" | "workflow" | "direct"
   const [requestType, setRequestType] = useState(defaultType || "general");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,8 +31,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const [markers, setMarkers] = useState([]);
   const [targetTeam, setTargetTeam] = useState("");
 
-  // workflow mode: [{teamId, signers: [{userId, page, x, y, w, h}]}]
-  const [workflow, setWorkflow] = useState([]);
+  // workflow mode: [{teamId, signers: [{userId, boxes: [], dateFields: []}]}]
+  // A saved template ("My Workflows") pre-fills the route; the requestor only
+  // places each signer's boxes on the freshly attached document.
+  const presetSteps = () => (presetWorkflow?.steps || []).map(st => ({
+    teamId: st.teamId,
+    signers: (st.signers || []).map(g => ({ userId: g.userId || g, boxes: [], dateFields: [] })),
+  }));
+  const [workflow, setWorkflow] = useState(() => presetWorkflow ? presetSteps() : []);
   const [placingSlot, setPlacingSlot] = useState(null); // {stepIdx, signerIdx}
 
   // direct mode: search the directory + pick ONE person, place ONE marker
@@ -88,7 +94,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       setFile({ name: f.name, base64: reader.result, type: f.type, ext, blob: f });
       setDocRotation(0);
       setMarkers([]);
-      setWorkflow([]);
+      setWorkflow(presetWorkflow ? presetSteps() : []); // keep the saved route across file (re)loads
       setPlacingSlot(null);
       setDirectSigners([]);
       setSelfMarks([]); setSelfPlacing(null);
@@ -692,6 +698,12 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   </Suspense>
                 </div>
                 <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
+                  {presetWorkflow && (
+                    <div className="text-xs px-3 py-2 rounded flex items-center gap-2" style={{ backgroundColor: "rgba(45,95,47,.14)", color: "var(--c-sand)" }}>
+                      <GitBranch size={12} className="shrink-0" />
+                      <span>Using saved workflow <b>{presetWorkflow.name}</b> — tap each signer and place their boxes on the document.</span>
+                    </div>
+                  )}
                   {placingSlot && (
                     <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
                       {placingSlot.kind === "date"
@@ -769,6 +781,20 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                       );
                     })}
                     <button className="btn-ghost w-full justify-center text-xs" onClick={addStep}><Plus size={11} /> Add step</button>
+                    {workflow.length > 0 && workflow.every(st => st.teamId && st.signers.length > 0) && (
+                      <button className="btn-ghost w-full justify-center text-xs" style={{ color: "var(--c-forest)" }}
+                        title="Save these steps and signers as a reusable workflow (boxes are placed per document)"
+                        onClick={async () => {
+                          const name = window.prompt("Name this workflow (e.g. \"PO approval — 5 steps\"):", presetWorkflow?.name || "");
+                          if (!name || !name.trim()) return;
+                          try {
+                            await api.createWorkflowTemplate({ name: name.trim(), steps: workflow.map(st => ({ teamId: st.teamId, signers: st.signers.map(s => s.userId) })) });
+                            notify(`"${name.trim()}" saved to My Workflows`, "success");
+                          } catch (e) { notify(e.message || "Could not save the workflow", "error"); }
+                        }}>
+                        <Save size={11} /> Save as My Workflow
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

@@ -646,12 +646,170 @@ function Shell(props) {
 }
 
 // ============================================================
+//   MY WORKFLOWS — saved, reusable signing routes. A template stores the steps
+//   and signers only; each use attaches a fresh document and places the boxes.
+// ============================================================
+function MyWorkflows({ teams, notify, back, onUse }) {
+  const [templates, setTemplates] = useState(null);
+  const [editing, setEditing] = useState(null); // { id?, name, steps: [{teamId, signers: [userId]}] }
+  const [busy, setBusy] = useState(false);
+  const confirm = useConfirmation();
+  const load = () => api.listWorkflowTemplates().then(setTemplates).catch(e => notify(e.message || "Could not load workflows", "error"));
+  useEffect(() => { load(); }, []);
+
+  const remove = async (t) => {
+    const ok = await confirm({
+      title: `Delete "${t.name}"?`,
+      message: "Only the saved workflow is removed — requests already raised with it are untouched.",
+      confirmLabel: "Delete workflow", destructive: true
+    });
+    if (!ok) return;
+    try { await api.deleteWorkflowTemplate(t.id); notify("Workflow deleted", "success"); load(); }
+    catch (e) { notify(e.message, "error"); }
+  };
+  const startNew = () => setEditing({ name: "", steps: [{ teamId: "", signers: [] }] });
+  const startEdit = (t) => setEditing({ id: t.id, name: t.name, steps: t.steps.map(s => ({ teamId: s.teamId, signers: s.signers.map(g => g.userId) })) });
+  const save = async () => {
+    if (!editing.name.trim()) { notify("Give the workflow a name", "error"); return; }
+    if (!editing.steps.length || editing.steps.some(s => !s.teamId || s.signers.length === 0)) {
+      notify("Every step needs a team and at least one signer", "error"); return;
+    }
+    setBusy(true);
+    try {
+      if (editing.id) await api.updateWorkflowTemplate(editing.id, { name: editing.name.trim(), steps: editing.steps });
+      else await api.createWorkflowTemplate({ name: editing.name.trim(), steps: editing.steps });
+      notify(`"${editing.name.trim()}" saved`, "success");
+      setEditing(null); load();
+    } catch (e) { notify(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+  const patchStep = (i, patch) => setEditing(ed => ({ ...ed, steps: ed.steps.map((s, j) => j === i ? { ...s, ...patch } : s) }));
+
+  // ---- builder ----
+  if (editing) {
+    return (
+      <div>
+        <BackHeader back={() => setEditing(null)} title={editing.id ? "Edit workflow" : "New workflow"} step={`${editing.steps.length} step${editing.steps.length === 1 ? "" : "s"}`} />
+        <div className="max-w-2xl mt-6 space-y-4">
+          <div className="card p-4">
+            <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Workflow name</label>
+            <input type="text" value={editing.name} onChange={e => setEditing(ed => ({ ...ed, name: e.target.value }))}
+              className="w-full" maxLength={120} placeholder='e.g. "PO approval — Finance then Director"' autoFocus />
+          </div>
+          {editing.steps.map((st, si) => {
+            const team = teams.find(t => t.id === st.teamId);
+            const pool = (team?.approvers || []).filter(a => !st.signers.includes(a.id));
+            return (
+              <div key={si} className="card p-4" style={{ borderLeft: `3px solid ${STEP_COLORS[si % STEP_COLORS.length]}` }}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] opacity-50">Step {si + 1}</span>
+                    <select value={st.teamId} onChange={e => patchStep(si, { teamId: e.target.value, signers: [] })} className="text-xs">
+                      <option value="">— team —</option>
+                      {teams.map(t => {
+                        const n = (t.approvers || []).length;
+                        return <option key={t.id} value={t.id} disabled={n === 0}>{t.name}{n === 0 ? " — no approvers" : ""}</option>;
+                      })}
+                    </select>
+                  </div>
+                  <button className="btn-ghost text-[10px]" onClick={() => setEditing(ed => ({ ...ed, steps: ed.steps.filter((_, j) => j !== si) }))}><Trash2 size={10} /></button>
+                </div>
+                {team && (
+                  <>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {st.signers.map((uid2, gi) => {
+                        const u = (team.approvers || []).find(a => a.id === uid2);
+                        return (
+                          <span key={gi} className="pill inline-flex items-center gap-1.5" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
+                            <span className="font-mono text-[9px] opacity-50">{si + 1}.{gi + 1}</span> {u?.name || "(removed)"}
+                            <button className="opacity-50 hover:opacity-100" onClick={() => patchStep(si, { signers: st.signers.filter((_, k) => k !== gi) })}><X size={9} /></button>
+                          </span>
+                        );
+                      })}
+                      {st.signers.length === 0 && <span className="text-xs opacity-50 italic">No signers yet</span>}
+                    </div>
+                    {pool.length > 0 ? (
+                      <select value="" onChange={e => { if (e.target.value) patchStep(si, { signers: [...st.signers, e.target.value] }); }} className="text-xs">
+                        <option value="">+ Add signer…</option>
+                        {pool.map(a => <option key={a.id} value={a.id}>{a.name}{a.hasSignature ? "" : " (no signature yet)"}</option>)}
+                      </select>
+                    ) : <div className="text-[11px] opacity-50">All of this team's approvers are added.</div>}
+                  </>
+                )}
+              </div>
+            );
+          })}
+          <button className="btn-ghost w-full justify-center text-xs" onClick={() => setEditing(ed => ({ ...ed, steps: [...ed.steps, { teamId: "", signers: [] }] }))}><Plus size={11} /> Add step</button>
+          <div className="flex justify-end gap-3">
+            <button className="btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn-primary" onClick={save} disabled={busy}><Check size={14} /> {busy ? "Saving…" : "Save workflow"}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- list ----
+  return (
+    <div>
+      <BackHeader back={back} title="My Workflows" step={templates ? `${templates.length} saved` : "…"} />
+      <p className="text-sm opacity-60 mt-3 max-w-2xl">
+        Save a signing route once — the steps and the signers in order. To use it, attach a document and place each signer's boxes; everything else is already set.
+      </p>
+      <div className="flex justify-end mt-4 mb-4">
+        <button className="btn-primary" onClick={startNew}><Plus size={14} /> New workflow</button>
+      </div>
+      {!templates ? <div className="card p-8 text-sm opacity-50 text-center">Loading…</div>
+        : templates.length === 0 ? <Empty icon={GitBranch} text="No saved workflows yet — create your first, or save one while raising a request." />
+        : (
+          <div className="space-y-3">
+            {templates.map(t => {
+              const totalSigners = t.steps.reduce((n, s) => n + s.signers.length, 0);
+              return (
+                <div key={t.id} className="card p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{t.name}</div>
+                      <div className="text-xs opacity-60">{t.steps.length} step{t.steps.length === 1 ? "" : "s"} · {totalSigners} signer{totalSigners === 1 ? "" : "s"}</div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button className="btn-primary text-xs" disabled={!t.valid}
+                        title={t.valid ? "Attach a document to this workflow" : "Contains removed or unauthorised entries — edit it first"}
+                        onClick={() => onUse(t)}>
+                        <FilePlus size={12} /> Use with a document
+                      </button>
+                      <button className="btn-ghost text-xs" onClick={() => startEdit(t)}><Pencil size={12} /> Edit</button>
+                      <button className="btn-ghost text-xs" style={{ color: "var(--c-rust-deep)" }} onClick={() => remove(t)}><Trash2 size={12} /></button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    {t.steps.map((s, i) => (
+                      <span key={i} className="inline-flex items-center gap-1">
+                        {i > 0 && <ArrowRight size={10} className="opacity-40" />}
+                        <span className="pill" style={{ backgroundColor: `${STEP_COLORS[i % STEP_COLORS.length]}1A`, color: STEP_COLORS[i % STEP_COLORS.length] }}>
+                          {s.teamName}: {s.signers.map(g => g.name.split(" ")[0]).join(", ")}
+                        </span>
+                        {(!s.teamValid || s.signers.some(g => !g.valid)) && <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>needs attention</span>}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+// ============================================================
 //   REQUESTOR VIEW
 // ============================================================
 function RequestorView(props) {
   const { user, requests } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null); // pre-selected request type when opening NewRequest
+  const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
   const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
   // Two separate lists: requests I RAISED that are approved, and documents I was
@@ -668,9 +826,12 @@ function RequestorView(props) {
   });
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
-  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
+  useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
 
-  if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+  if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
+    onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
   if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={myApproved} title="My approved requests" />;
@@ -695,7 +856,7 @@ function RequestorView(props) {
           <h3 className="font-display text-2xl">Quick Actions</h3>
           <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
           {REQUEST_TYPES.map(t => (
             <button key={t.key} onClick={() => openNew(t.key)}
               className="card p-4 text-left tile-hover"
@@ -704,6 +865,12 @@ function RequestorView(props) {
               <div className="text-xs opacity-60 mt-1">{t.desc}</div>
             </button>
           ))}
+          <button onClick={() => setTab("workflows")}
+            className="card p-4 text-left tile-hover"
+            style={{ borderLeft: "4px solid var(--c-gold)" }}>
+            <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={13} style={{ color: "var(--c-gold)" }} /> My Workflows</div>
+            <div className="text-xs opacity-60 mt-1">Save your signing routes once — reuse with any document.</div>
+          </button>
         </div>
       </div>
 
@@ -957,11 +1124,12 @@ function ApproverView(props) {
   const { user, requests, teams, users, notify, approveRequest, rejectRequest, undoApproval } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null);
+  const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
   // "Awaiting your approval" sits first on the home screen; this opens the
   // review drawer for an item directly from there.
   const [quickOpenId, setQuickOpenId] = useState(null);
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
-  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
+  useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSignedInWorkflow = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id && s.status === "signed"));
   // Requests routed to me to SIGN — never my own (I don't approve what I raised).
@@ -980,7 +1148,10 @@ function ApproverView(props) {
   const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSignedInWorkflow(r)));
   const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSignedInWorkflow(r)));
 
-  if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+  if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
+    onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
   if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
@@ -1030,7 +1201,7 @@ function ApproverView(props) {
           <h3 className="font-display text-2xl">Quick Actions</h3>
           <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
           {REQUEST_TYPES.map(t => (
             <button key={t.key} onClick={() => openNew(t.key)}
               className="card p-4 text-left tile-hover"
@@ -1039,6 +1210,12 @@ function ApproverView(props) {
               <div className="text-xs opacity-60 mt-1">{t.desc}</div>
             </button>
           ))}
+          <button onClick={() => setTab("workflows")}
+            className="card p-4 text-left tile-hover"
+            style={{ borderLeft: "4px solid var(--c-gold)" }}>
+            <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={13} style={{ color: "var(--c-gold)" }} /> My Workflows</div>
+            <div className="text-xs opacity-60 mt-1">Save your signing routes once — reuse with any document.</div>
+          </button>
         </div>
       </div>
 
