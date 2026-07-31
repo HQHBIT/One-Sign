@@ -4,6 +4,17 @@ import { api } from "../api.js";
 
 export function DownloadBtn({ req }) {
   const [busy, setBusy] = useState(false);
+  // Inside the 1-hour rejection window the document isn't final — the approver
+  // can still reject or withdraw — so the file can't be taken out yet.
+  if (req.status === "approved_pending") {
+    return (
+      <button className="btn-ghost text-xs" disabled aria-disabled="true"
+        title="Available once the 1-hour rejection window completes"
+        style={{ opacity: 0.35, cursor: "not-allowed" }}>
+        <Download size={12} /> Download
+      </button>
+    );
+  }
   const download = async () => {
     setBusy(true);
     try {
