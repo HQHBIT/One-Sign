@@ -730,10 +730,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                       const stepColor = STEP_COLORS[si % STEP_COLORS.length];
                       return (
                         <div key={si} className="card p-3" style={{ borderLeft: `3px solid ${stepColor}` }}>
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-[10px] opacity-50">Step {si + 1}</span>
-                              <select value={step.teamId} onChange={e => setStepTeam(si, e.target.value)} className="text-xs">
+                          <div className="flex items-center justify-between gap-2 mb-2 min-w-0">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="font-mono text-[10px] opacity-50 shrink-0">Step {si + 1}</span>
+                              {/* w-full + min-w-0 lets the select SHRINK inside the narrow side
+                                  panel — its intrinsic width (longest team name) otherwise
+                                  bursts the card and forces a horizontal scrollbar. */}
+                              <select value={step.teamId} onChange={e => setStepTeam(si, e.target.value)}
+                                className="text-xs w-full min-w-0" style={{ maxWidth: "100%" }}>
                                 <option value="">— team —</option>
                                 {teams.map(t => {
                                   const n = (t.approvers || []).length;
@@ -741,7 +745,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                                 })}
                               </select>
                             </div>
-                            <button className="btn-ghost text-[10px]" onClick={() => removeStep(si)}><Trash2 size={10} /></button>
+                            <button className="btn-ghost text-[10px] shrink-0" onClick={() => removeStep(si)}><Trash2 size={10} /></button>
                           </div>
 
                           {team && (
@@ -845,10 +849,10 @@ function AddSignerControl({ team, existing, onAdd }) {
       {pickerOpen && (
         <div className="absolute left-0 right-0 mt-1 z-10 card p-2 shadow-lg" style={{ backgroundColor: "var(--c-paper)" }}>
           {available.map(a => (
-            <button key={a.id} className="w-full text-left px-3 py-2 hover:opacity-70 text-sm flex items-center justify-between"
+            <button key={a.id} className="w-full text-left px-3 py-2 hover:opacity-70 text-sm flex items-center justify-between gap-2 min-w-0"
               onClick={() => { onAdd(a.id); setPickerOpen(false); }}>
-              <span>{a.name}</span>
-              {!a.hasSignature && <span className="pill pill-rejected text-[10px]">no signature</span>}
+              <span className="truncate min-w-0" title={a.name}>{a.name}</span>
+              {!a.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no signature</span>}
             </button>
           ))}
         </div>

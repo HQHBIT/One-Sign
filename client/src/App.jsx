@@ -823,10 +823,11 @@ function MyWorkflows({ teams, notify, back, onUse }) {
             const pool = (team?.approvers || []).filter(a => !st.signers.includes(a.id));
             return (
               <div key={si} className="card p-4" style={{ borderLeft: `3px solid ${STEP_COLORS[si % STEP_COLORS.length]}` }}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] opacity-50">Step {si + 1}</span>
-                    <select value={st.teamId} onChange={e => patchStep(si, { teamId: e.target.value, signers: [] })} className="text-xs">
+                <div className="flex items-center justify-between gap-2 mb-3 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <span className="font-mono text-[10px] opacity-50 shrink-0">Step {si + 1}</span>
+                    <select value={st.teamId} onChange={e => patchStep(si, { teamId: e.target.value, signers: [] })}
+                      className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
                       <option value="">— team —</option>
                       {teams.map(t => {
                         const n = (t.approvers || []).length;
@@ -834,7 +835,7 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                       })}
                     </select>
                   </div>
-                  <button className="btn-ghost text-[10px]" onClick={() => setEditing(ed => ({ ...ed, steps: ed.steps.filter((_, j) => j !== si) }))}><Trash2 size={10} /></button>
+                  <button className="btn-ghost text-[10px] shrink-0" onClick={() => setEditing(ed => ({ ...ed, steps: ed.steps.filter((_, j) => j !== si) }))}><Trash2 size={10} /></button>
                 </div>
                 {team && (
                   <>
@@ -851,7 +852,8 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                       {st.signers.length === 0 && <span className="text-xs opacity-50 italic">No signers yet</span>}
                     </div>
                     {pool.length > 0 ? (
-                      <select value="" onChange={e => { if (e.target.value) patchStep(si, { signers: [...st.signers, e.target.value] }); }} className="text-xs">
+                      <select value="" onChange={e => { if (e.target.value) patchStep(si, { signers: [...st.signers, e.target.value] }); }}
+                        className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
                         <option value="">+ Add signer…</option>
                         {pool.map(a => <option key={a.id} value={a.id}>{a.name}{a.hasSignature ? "" : " (no signature yet)"}</option>)}
                       </select>
