@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -646,6 +646,128 @@ function Shell(props) {
 }
 
 // ============================================================
+//   SIGN YOUR DOCUMENTS — personal signing utility. Upload a PDF, place your
+//   own signature / date marks, download the signed copy. Stateless: nothing
+//   is stored and no request or approval is created.
+// ============================================================
+function SelfSignDoc({ user, notify, back }) {
+  const [file, setFile] = useState(null);        // { name, base64, blob, ext }
+  const [marks, setMarks] = useState([]);        // [{ type: 'signature'|'date', page, x, y, w, h }]
+  const [tool, setTool] = useState("signature"); // what the next click-drag places
+  const [rotation, setRotation] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [mySigUrl, setMySigUrl] = useState(null);
+  const todayDdMmYy = (() => { const d = new Date(); const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`; })();
+
+  // Live preview of the user's actual signature inside the placed boxes.
+  useEffect(() => {
+    if (!user.hasSignature || !file) { setMySigUrl(null); return; }
+    let url = null, dead = false;
+    api.getSignatureBlob(user.id).then(u => { if (dead) { if (u) URL.revokeObjectURL(u); return; } url = u; setMySigUrl(u); }).catch(() => {});
+    return () => { dead = true; if (url) URL.revokeObjectURL(url); };
+  }, [file, user.hasSignature, user.id]);
+
+  const handleFile = e => {
+    const f = e.target.files?.[0]; if (!f) return;
+    if (!/\.pdf$/i.test(f.name)) { notify("Sign your documents supports PDF files only", "error"); return; }
+    if (f.size > 14 * 1024 * 1024) { notify("File must be under 14 MB", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = () => { setFile({ name: f.name, base64: reader.result, blob: f, ext: "pdf" }); setMarks([]); setRotation(0); setTool(user.hasSignature ? "signature" : "date"); };
+    reader.readAsDataURL(f);
+  };
+
+  const markers = marks.map((m, i) => ({
+    id: `self-${i}`, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h,
+    color: "#3E8E5A",
+    label: m.type === "date" ? todayDdMmYy : "Your signature",
+    ...(m.type === "signature" && mySigUrl ? { signedDataUrl: mySigUrl } : {}),
+  }));
+  const onAddMarker = (page, x, y, w, h) => {
+    if (tool === "signature" && !user.hasSignature) { notify("Register a signature first (top-right menu)", "error"); return; }
+    setMarks(ms => [...ms, { type: tool, page, x, y, w, h }]);
+  };
+  const markIdx = (id) => { const m = /^self-(\d+)$/.exec(id || ""); return m ? Number(m[1]) : -1; };
+  const onUpdateMarker = (id, patch) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.map((m, k) => k === i ? { ...m, ...patch } : m)); };
+  const onDeleteMarker = (id) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.filter((_, k) => k !== i)); };
+  const fixedBox = tool === "date" ? { w: 12, h: 4.5 } : { w: 22, h: 6 };
+
+  const download = async () => {
+    setBusy(true);
+    try {
+      const url = await api.selfSignDocument({ file: file.blob, marks, rotation });
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${file.name.replace(/\.pdf$/i, "")}.signed.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      notify("Signed PDF downloaded", "success");
+    } catch (e) { notify(e.message || "Could not sign the document", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const sigCount = marks.filter(m => m.type === "signature").length;
+  const dateCount = marks.filter(m => m.type === "date").length;
+
+  return (
+    <div>
+      <BackHeader back={back} title="Sign your documents" step={file ? file.name : "Upload a PDF"} />
+      <p className="text-sm opacity-60 mt-3 max-w-2xl">
+        Upload a PDF, place your signature (and today's date if you like), and download the signed copy — no approvals, nothing stored.
+      </p>
+
+      {!file ? (
+        <label className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
+          <Upload size={22} className="opacity-50" />
+          <div className="text-sm font-medium">Click to upload a PDF</div>
+          <div className="text-xs opacity-50">Up to 14 MB</div>
+          <input type="file" accept=".pdf,application/pdf" className="hidden" onChange={handleFile} />
+        </label>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2 mt-5 mb-3 text-xs">
+            <span className="font-medium opacity-80 flex items-center gap-1"><Stamp size={13} style={{ color: "#3E8E5A" }} /> Place on the document:</span>
+            <button type="button" disabled={!user.hasSignature}
+              className={`text-xs ${tool === "signature" ? "btn-gold" : "btn-ghost"}`}
+              title={user.hasSignature ? "Every click-drag adds your signature" : "Register a signature first (top-right menu)"}
+              onClick={() => setTool("signature")}>
+              <PenTool size={12} /> My signature
+            </button>
+            <button type="button"
+              className={`text-xs ${tool === "date" ? "btn-gold" : "btn-ghost"}`}
+              onClick={() => setTool("date")}>
+              <Calendar size={12} /> Date ({todayDdMmYy})
+            </button>
+            {marks.length > 0 && (
+              <span className="opacity-60">· {sigCount} signature{sigCount === 1 ? "" : "s"} + {dateCount} date{dateCount === 1 ? "" : "s"} placed
+                <button type="button" className="underline ml-2" onClick={() => setMarks([])}>clear all</button>
+              </span>
+            )}
+            <span className="flex-1" />
+            <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarks([]); }}>Change file</button>
+          </div>
+          {!user.hasSignature && (
+            <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+              No registered signature yet — you can still place dates. To sign, add your signature from the top-right menu first.
+            </div>
+          )}
+          <Suspense fallback={<ViewerFallback />}>
+            <DocPreview file={file} markers={markers} editable fixedBox={fixedBox}
+              onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
+              rotation={rotation} onRotate={() => setRotation(r => (r + 90) % 360)} />
+          </Suspense>
+          <div className="flex justify-end mt-4">
+            <button className="btn-primary" onClick={download} disabled={busy || marks.length === 0}
+              title={marks.length === 0 ? "Place your signature or a date first" : ""}>
+              <Download size={14} /> {busy ? "Signing…" : "Download signed PDF"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 //   MY WORKFLOWS — saved, reusable signing routes. A template stores the steps
 //   and signers only; each use attaches a fresh document and places the boxes.
 // ============================================================
@@ -832,6 +954,7 @@ function RequestorView(props) {
     onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
+  if (tab === "selfsign") return <SelfSignDoc user={user} notify={props.notify} back={() => setTab("home")} />;
   if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
   if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={myApproved} title="My approved requests" />;
@@ -843,6 +966,7 @@ function RequestorView(props) {
   const tiles = [
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + inWindow },
     { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
@@ -1181,6 +1305,7 @@ function ApproverView(props) {
     onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
+  if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
   if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
   if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
@@ -1191,6 +1316,7 @@ function ApproverView(props) {
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },

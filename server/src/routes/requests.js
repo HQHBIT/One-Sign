@@ -144,6 +144,54 @@ router.get("/", authRequired, async (req, res, next) => {
 });
 
 // ============================================================
+//   self-sign — sign your OWN document and download it. Stateless: nothing is
+//   stored and no request is created; the signed PDF streams straight back.
+// ============================================================
+router.post("/self-sign", authRequired, upload.single("file"), async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+    const ext = (file.originalname.split(".").pop() || "").toLowerCase();
+    if (ext !== "pdf") return res.status(400).json({ error: "Sign your documents supports PDF files only" });
+
+    // Same order as request creation: bake the chosen rotation first (lossless),
+    // then stamp — placeInRotatedPage keeps marks aligned on rotated pages.
+    const rotDeg = normalizeRotation(req.body?.rotation);
+    if (rotDeg) {
+      try {
+        const { bakedBytes } = await bakeUniformRotation(file.buffer, rotDeg / 90);
+        file.buffer = Buffer.from(bakedBytes);
+      } catch (e) {
+        console.error("[self-sign] rotate failed", e);
+        return res.status(400).json({ error: "Could not rotate the PDF" });
+      }
+    }
+
+    let marks = null;
+    try { marks = JSON.parse(req.body?.marks || "[]"); } catch { return res.status(400).json({ error: "marks must be valid JSON" }); }
+    marks = (Array.isArray(marks) ? marks : []).filter(m =>
+      typeof m?.x === "number" && typeof m?.y === "number" && typeof m?.w === "number" && typeof m?.h === "number");
+    if (marks.length === 0) return res.status(400).json({ error: "Place your signature or a date on the document first" });
+    const hasSig = marks.some(m => m.type !== "date");
+    if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature first (top-right menu)" });
+
+    const dateText = formatDdMmYy(Date.now());
+    const stamps = marks.map(m => m.type === "date"
+      ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
+      : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
+
+    let signed;
+    try { signed = Buffer.from(await applySelfMarks(file.buffer, stamps)); }
+    catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature to the document" }); }
+
+    const base = file.originalname.replace(/\.pdf$/i, "");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(base)}.signed.pdf"`);
+    res.send(signed);
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 //   create — supports legacy single-team OR multi-step workflow
 // ============================================================
 router.post("/", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), upload.single("file"), async (req, res, next) => {

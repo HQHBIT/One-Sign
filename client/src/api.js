@@ -227,6 +227,17 @@ export const api = {
   remindRequest(id) { return this.fetch(`/api/requests/${id}/reminder`, { method: "POST" }); },
   forceFinalizeRequest(id) { return this.fetch(`/api/requests/${id}/force-finalize`, { method: "POST" }); },
 
+  // -------- sign your own document (stateless — returns the signed PDF) --------
+  async selfSignDocument({ file, marks, rotation }) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("marks", JSON.stringify(marks));
+    if (rotation) fd.append("rotation", String(rotation));
+    const res = await this.fetch("/api/requests/self-sign", { method: "POST", body: fd, raw: true });
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
+
   // -------- saved workflow templates (My Workflows) --------
   listWorkflowTemplates() { return this.fetch("/api/workflow-templates").then(r => r.templates); },
   createWorkflowTemplate({ name, steps }) {
