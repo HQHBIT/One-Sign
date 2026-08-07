@@ -3153,11 +3153,25 @@ function BulkUserModal({ teams, onClose, onImport }) {
 
 function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDocuments }) {
   const [name, setName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const nameRef = useRef(null);
   const confirm = useConfirmation();
   const add = async () => {
-    if (!name.trim()) return;
-    try { await api.createTeam(name.trim()); setName(""); notify("Team added", "success"); await saveTeams(); }
-    catch (e) { notify(e.message, "error"); }
+    const clean = name.trim();
+    // Never fail silently: an empty box used to make this button a dead click.
+    if (!clean) { notify("Type a team name first", "info"); nameRef.current?.focus(); return; }
+    if (teams.some(t => t.name.trim().toLowerCase() === clean.toLowerCase())) {
+      notify(`"${clean}" already exists`, "error"); nameRef.current?.focus(); return;
+    }
+    setAdding(true);
+    try {
+      await api.createTeam(clean);
+      setName("");
+      await saveTeams();
+      notify(`Team "${clean}" added — assign members and approvers below`, "success");
+    }
+    catch (e) { notify(e.message || "Could not add the team", "error"); }
+    finally { setAdding(false); }
   };
   const remove = async (id, teamName) => {
     const ok = await confirm({
@@ -3174,8 +3188,13 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDo
     <div>
       <BackHeader back={back} title="Teams & authority" step={`${teams.length} teams`} />
       <div className="flex gap-3 mt-6 max-w-md">
-        <input placeholder="New team name" value={name} onChange={e => setName(e.target.value)} className="flex-1" />
-        <button className="btn-primary" onClick={add}><Plus size={14} /> Add team</button>
+        <input ref={nameRef} placeholder="New team name" value={name} disabled={adding}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") add(); }}
+          className="flex-1" maxLength={191} />
+        <button className="btn-primary shrink-0" onClick={add} disabled={adding}>
+          <Plus size={14} /> {adding ? "Adding…" : "Add team"}
+        </button>
       </div>
       {teams.length === 0 && (
         <div className="card p-10 text-sm opacity-60 text-center mt-8">
