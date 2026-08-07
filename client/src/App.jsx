@@ -967,12 +967,19 @@ function RequestorView(props) {
   const iSigned = r => (r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id && s.status === "signed"));
   const myApproved = my.filter(r => r.status === "approved");
   const mySigned = requests.filter(r => r.status === "approved" && r.requestorId !== user.id && iSigned(r));
-  // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
+  // Documents waiting on MY signature: workflow/direct steps where it's my turn,
+  // plus — when an admin has appointed me an approver for a team — that team's
+  // pending requests (authority, not role, confers the right to sign).
+  const myAuthorityTeams = user.signingAuthorityTeams || [];
   const awaitingMySig = requests.filter(r => {
-    if (r.status !== "pending" || !r.workflow?.length) return false;
-    const active = r.workflow.find(s => s.status === "active");
-    const next = active?.signers?.find(s => s.status === "pending");
-    return next?.userId === user.id;
+    if (r.status !== "pending") return false;
+    if (r.requestorId === user.id) return false; // never approve what I raised
+    if (r.workflow?.length) {
+      const active = r.workflow.find(s => s.status === "active");
+      const next = active?.signers?.find(s => s.status === "pending");
+      return next?.userId === user.id;
+    }
+    return !!r.targetTeamId && myAuthorityTeams.includes(r.targetTeamId);
   });
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
@@ -3220,22 +3227,30 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDo
 function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, notify }) {
   const [addApproverOpen, setAddApproverOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [approverQuery, setApproverQuery] = useState("");
+  const [memberQuery, setMemberQuery] = useState("");
   const [busy, setBusy] = useState(null); // userId currently being mutated
   const confirm = useConfirmation();
+  // Any-role pickers can be long (every user is eligible) — searchable by name/email.
+  const matches = (u, q) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return (u.name || "").toLowerCase().includes(s) || (u.email || "").toLowerCase().includes(s);
+  };
 
-  const approvers = users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(team.id));
+  // Anyone holding this team's signing authority is an approver for it —
+  // whatever their role. Authority is what confers the right to sign, so an
+  // admin can appoint a requestor, assistant or executive just the same.
+  const approvers = users.filter(u => (u.signingAuthorityTeams || []).includes(team.id));
   const members = users.filter(u => u.team === team.id);
 
-  // Eligible to grant approver authority on this team:
-  //   any approver not already authorised here
+  // Eligible to be appointed: any active user not already authorised here.
   const eligibleApprovers = users.filter(u =>
-    u.role === "approver" && !(u.signingAuthorityTeams || []).includes(team.id)
+    u.active !== false && !(u.signingAuthorityTeams || []).includes(team.id)
   );
-
-  // Eligible to assign as a department member:
-  //   any requestor not already in this team
+  // Eligible as a department member: any active user not already in this team.
   const eligibleMembers = users.filter(u =>
-    u.role === "requestor" && u.team !== team.id
+    u.active !== false && u.team !== team.id
   );
 
   const grant = async (userId) => {
@@ -3310,12 +3325,16 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
         ) : (
           <div className="space-y-1">
             {approvers.map(a => (
-              <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+              <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm min-w-0" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
                 {a.hasSignature
-                  ? <PenTool size={11} style={{ color: "var(--c-gold)" }} />
-                  : <PenTool size={11} className="opacity-30" />}
-                <span className="flex-1">{a.name}</span>
-                {!a.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
+                  ? <PenTool size={11} className="shrink-0" style={{ color: "var(--c-gold)" }} />
+                  : <PenTool size={11} className="opacity-30 shrink-0" />}
+                <span className="flex-1 truncate min-w-0" title={a.email}>{a.name}</span>
+                {a.role !== "approver" && (
+                  <span className="pill text-[9px] shrink-0" title="Appointed as an approver for this team"
+                    style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{ROLE_LABELS[a.role] || a.role}</span>
+                )}
+                {!a.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no sig</span>}
                 <button onClick={() => revoke(a.id, a.name)} disabled={busy === a.id}
                   className="opacity-40 hover:opacity-100 text-xs" title="Revoke authority">
                   {busy === a.id ? "…" : <X size={12} />}
@@ -3325,16 +3344,24 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addApproverOpen && eligibleApprovers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
-            {eligibleApprovers.map(u => (
-              <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
-                onClick={() => grant(u.id)} disabled={busy === u.id}>
-                <PenTool size={11} className={u.hasSignature ? "" : "opacity-30"} style={u.hasSignature ? { color: "var(--c-gold)" } : {}} />
-                <span className="flex-1">{u.name}</span>
-                {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
-                <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
-              </button>
-            ))}
+          <div className="card p-2 mt-2" style={{ backgroundColor: "var(--c-paper)" }}>
+            <input autoFocus value={approverQuery} onChange={e => setApproverQuery(e.target.value)}
+              placeholder={`Search ${eligibleApprovers.length} users…`} className="w-full text-xs mb-2" />
+            <div className="max-h-48 overflow-auto">
+              {eligibleApprovers.filter(u => matches(u, approverQuery)).slice(0, 60).map(u => (
+                <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70 min-w-0"
+                  onClick={() => grant(u.id)} disabled={busy === u.id}>
+                  <PenTool size={11} className={`shrink-0 ${u.hasSignature ? "" : "opacity-30"}`} style={u.hasSignature ? { color: "var(--c-gold)" } : {}} />
+                  <span className="flex-1 truncate min-w-0" title={u.email}>{u.name}</span>
+                  <span className="pill text-[9px] shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{ROLE_LABELS[u.role] || u.role}</span>
+                  {!u.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no sig</span>}
+                  <span className="text-xs opacity-50 shrink-0">{busy === u.id ? "…" : "+"}</span>
+                </button>
+              ))}
+              {eligibleApprovers.filter(u => matches(u, approverQuery)).length === 0 && (
+                <div className="text-xs opacity-50 italic px-2 py-2">No users match "{approverQuery}".</div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -3366,19 +3393,26 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addMemberOpen && eligibleMembers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
-            {eligibleMembers.map(u => {
-              const currentTeam = teams.find(t => t.id === u.team);
-              return (
-                <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
-                  onClick={() => assignMember(u.id)} disabled={busy === u.id}>
-                  <UserPlus size={11} className="opacity-50" />
-                  <span className="flex-1">{u.name}</span>
-                  {currentTeam && <span className="text-[10px] opacity-50">from {currentTeam.name}</span>}
-                  <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
-                </button>
-              );
-            })}
+          <div className="card p-2 mt-2" style={{ backgroundColor: "var(--c-paper)" }}>
+            <input autoFocus value={memberQuery} onChange={e => setMemberQuery(e.target.value)}
+              placeholder={`Search ${eligibleMembers.length} users…`} className="w-full text-xs mb-2" />
+            <div className="max-h-48 overflow-auto">
+              {eligibleMembers.filter(u => matches(u, memberQuery)).slice(0, 60).map(u => {
+                const currentTeam = teams.find(t => t.id === u.team);
+                return (
+                  <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70 min-w-0"
+                    onClick={() => assignMember(u.id)} disabled={busy === u.id}>
+                    <UserPlus size={11} className="opacity-50 shrink-0" />
+                    <span className="flex-1 truncate min-w-0" title={u.email}>{u.name}</span>
+                    {currentTeam && <span className="text-[10px] opacity-50 shrink-0 truncate max-w-[90px]">from {currentTeam.name}</span>}
+                    <span className="text-xs opacity-50 shrink-0">{busy === u.id ? "…" : "+"}</span>
+                  </button>
+                );
+              })}
+              {eligibleMembers.filter(u => matches(u, memberQuery)).length === 0 && (
+                <div className="text-xs opacity-50 italic px-2 py-2">No users match "{memberQuery}".</div>
+              )}
+            </div>
           </div>
         )}
       </div>

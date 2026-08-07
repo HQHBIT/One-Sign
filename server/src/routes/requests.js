@@ -113,18 +113,11 @@ router.get("/", authRequired, async (req, res, next) => {
     let rows;
     if (u.role === "admin") {
       rows = await query("SELECT * FROM requests ORDER BY created_at DESC");
-    } else if (u.role === "requestor") {
-      // Own requests PLUS any request where they are an assigned signer (direct requests).
-      rows = await query(`
-        SELECT DISTINCT r.* FROM requests r
-        LEFT JOIN request_steps st ON st.request_id = r.id
-        LEFT JOIN request_step_signers sg ON sg.step_id = st.id
-        WHERE r.requestor_id = ? OR sg.user_id = ?
-        ORDER BY r.created_at DESC
-      `, [u.id, u.id]);
     } else {
-      // Approver: requests they RAISED themselves, requests where they are an
-      // assigned signer (workflow), the legacy claim path, or a team they sign for.
+      // Everyone else, regardless of role: requests they RAISED, requests where
+      // they are an assigned signer (workflow/direct), the legacy claim path, or
+      // a team whose signing authority they hold. Authority — not role — decides,
+      // so an admin can appoint any user as a team's approver.
       rows = await query(`
         SELECT DISTINCT r.* FROM requests r
         LEFT JOIN request_steps st ON st.request_id = r.id
@@ -290,7 +283,7 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
 
     const approvers = await query(`
       SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-      WHERE u.role IN ('approver','executive') AND u.active = 1 AND sa.team_id = ?
+      WHERE u.active = 1 AND sa.team_id = ?
     `, [targetTeamId]);
     if (approvers.length === 0) return res.status(400).json({ error: "No approvers configured for this team" });
 
@@ -587,7 +580,7 @@ async function authoriseAccess(user, row) {
     WHERE st.request_id = ? AND sg.user_id = ?
   `, [row.id, user.id]);
   if (sg) return true;
-  if (isSigner(user.role) && row.status === "pending" && row.target_team_id) {
+  if (row.status === "pending" && row.target_team_id) {
     const auth = await queryOne(
       "SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?",
       [user.id, row.target_team_id]
@@ -638,7 +631,8 @@ export async function approveRequestHandler(req, res, next) {
     if (next) return await approveWorkflowStep({ req, res, row, signer: next });
 
     // Legacy single-marker (team path) — still approver-only + team authority.
-    if (!isSigner(req.user.role)) return res.status(403).json({ error: "Not authorised to sign this request" });
+    // No role gate: holding the team's signing authority is the authorisation
+    // (checked immediately below), so any user an admin appoints can sign.
     if (!row.target_team_id || !row.marker_json) return res.status(400).json({ error: "Request misconfigured" });
     const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
@@ -1138,7 +1132,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_a
     } else if (row.target_team_id) {
       const approvers = await query(`
         SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-        WHERE u.role IN ('approver','executive') AND u.active = 1 AND sa.team_id = ?
+        WHERE u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
         notifyUser({ user: a, requestId: row.id, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});

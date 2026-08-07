@@ -14,12 +14,13 @@ router.get("/", authRequired, async (req, res, next) => {
       signatureAspect: u.signature_aspect != null ? Number(u.signature_aspect) : null
     });
 
-    // Designated approvers: hold signing authority for the team.
+    // Designated approvers: whoever holds signing authority for the team. Any
+    // user can be appointed — authority, not role, is what confers signing rights.
     const auths = await query(`
       SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.role, u.signature_path, u.signature_aspect
       FROM signing_authority sa
       JOIN users u ON u.id = sa.user_id
-      WHERE u.role IN ('approver','executive') AND u.active = 1
+      WHERE u.active = 1
       ORDER BY u.name
     `);
     // Everyone assigned to the team — the fallback signer pool when a team has
