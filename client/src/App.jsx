@@ -669,12 +669,20 @@ function SelfSignDoc({ user, notify, back }) {
 
   const handleFile = e => {
     const f = e.target.files?.[0]; if (!f) return;
-    if (!/\.pdf$/i.test(f.name)) { notify("Sign your documents supports PDF files only", "error"); return; }
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    if (!["pdf", "xlsx", "xls"].includes(ext)) { notify("Only PDF or Excel files supported", "error"); return; }
     if (f.size > 14 * 1024 * 1024) { notify("File must be under 14 MB", "error"); return; }
+    const kind = ext === "pdf" ? "pdf" : "xlsx";
     const reader = new FileReader();
-    reader.onload = () => { setFile({ name: f.name, base64: reader.result, blob: f, ext: "pdf" }); setMarks([]); setRotation(0); setTool(user.hasSignature ? "signature" : "date"); };
+    reader.onload = () => {
+      setFile({ name: f.name, base64: reader.result, blob: f, ext: kind });
+      setMarks([]); setRotation(0);
+      // A dated text box has no spreadsheet equivalent, so Excel is signature-only.
+      setTool(user.hasSignature || kind === "xlsx" ? "signature" : "date");
+    };
     reader.readAsDataURL(f);
   };
+  const isPdf = file?.ext === "pdf";
 
   const markers = marks.map((m, i) => ({
     id: `self-${i}`, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h,
@@ -697,10 +705,10 @@ function SelfSignDoc({ user, notify, back }) {
       const url = await api.selfSignDocument({ file: file.blob, marks, rotation });
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${file.name.replace(/\.pdf$/i, "")}.signed.pdf`;
+      a.download = `${file.name.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${isPdf ? "pdf" : "xlsx"}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      notify("Signed PDF downloaded", "success");
+      notify(`Signed ${isPdf ? "PDF" : "workbook"} downloaded`, "success");
     } catch (e) { notify(e.message || "Could not sign the document", "error"); }
     finally { setBusy(false); }
   };
@@ -710,17 +718,17 @@ function SelfSignDoc({ user, notify, back }) {
 
   return (
     <div>
-      <BackHeader back={back} title="Sign your documents" step={file ? file.name : "Upload a PDF"} />
+      <BackHeader back={back} title="Sign your documents" step={file ? file.name : "Upload a document"} />
       <p className="text-sm opacity-60 mt-3 max-w-2xl">
-        Upload a PDF, place your signature (and today's date if you like), and download the signed copy — no approvals, nothing stored.
+        Upload a PDF or Excel workbook, place your signature (and today's date on a PDF if you like), and download the signed copy — no approvals, nothing stored.
       </p>
 
       {!file ? (
         <label className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
           <Upload size={22} className="opacity-50" />
-          <div className="text-sm font-medium">Click to upload a PDF</div>
-          <div className="text-xs opacity-50">Up to 14 MB</div>
-          <input type="file" accept=".pdf,application/pdf" className="hidden" onChange={handleFile} />
+          <div className="text-sm font-medium">Click to upload a PDF or Excel file</div>
+          <div className="text-xs opacity-50">PDF · XLSX — up to 14 MB</div>
+          <input type="file" accept=".pdf,.xlsx,.xls" className="hidden" onChange={handleFile} />
         </label>
       ) : (
         <>
@@ -732,11 +740,15 @@ function SelfSignDoc({ user, notify, back }) {
               onClick={() => setTool("signature")}>
               <PenTool size={12} /> My signature
             </button>
-            <button type="button"
-              className={`text-xs ${tool === "date" ? "btn-gold" : "btn-ghost"}`}
-              onClick={() => setTool("date")}>
-              <Calendar size={12} /> Date ({todayDdMmYy})
-            </button>
+            {/* Dates are a floating text box — PDF only. On a sheet they'd have to
+                overwrite a cell, so Excel offers signatures alone. */}
+            {isPdf && (
+              <button type="button"
+                className={`text-xs ${tool === "date" ? "btn-gold" : "btn-ghost"}`}
+                onClick={() => setTool("date")}>
+                <Calendar size={12} /> Date ({todayDdMmYy})
+              </button>
+            )}
             {marks.length > 0 && (
               <span className="opacity-60">· {sigCount} signature{sigCount === 1 ? "" : "s"} + {dateCount} date{dateCount === 1 ? "" : "s"} placed
                 <button type="button" className="underline ml-2" onClick={() => setMarks([])}>clear all</button>
@@ -747,7 +759,9 @@ function SelfSignDoc({ user, notify, back }) {
           </div>
           {!user.hasSignature && (
             <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-              No registered signature yet — you can still place dates. To sign, add your signature from the top-right menu first.
+              {isPdf
+                ? "No registered signature yet — you can still place dates. To sign, add your signature from the top-right menu first."
+                : "No registered signature yet — add your signature from the top-right menu to sign this workbook."}
             </div>
           )}
           <Suspense fallback={<ViewerFallback />}>
@@ -758,7 +772,7 @@ function SelfSignDoc({ user, notify, back }) {
           <div className="flex justify-end mt-4">
             <button className="btn-primary" onClick={download} disabled={busy || marks.length === 0}
               title={marks.length === 0 ? "Place your signature or a date first" : ""}>
-              <Download size={14} /> {busy ? "Signing…" : "Download signed PDF"}
+              <Download size={14} /> {busy ? "Signing…" : `Download signed ${isPdf ? "PDF" : "workbook"}`}
             </button>
           </div>
         </>
@@ -1001,7 +1015,7 @@ function RequestorView(props) {
   const tiles = [
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
-    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF, add your signature, download it — no approvals.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF or Excel file, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + inWindow },
     { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
@@ -1351,7 +1365,7 @@ function ApproverView(props) {
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
-    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF, add your signature, download it — no approvals.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF or Excel file, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },

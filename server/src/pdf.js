@@ -197,19 +197,6 @@ function drawEmbeddedRotated(page, embedded, rotation, visW, visH) {
   }
 }
 
-export async function writeXlsxSignatureManifest({ srcPath, signaturePath, marker, outName }) {
-  await fs.mkdir(SIGNED_DIR, { recursive: true });
-  const manifest = {
-    signedAt: Date.now(),
-    marker,
-    signatureFile: path.basename(signaturePath),
-    originalFile: path.basename(srcPath)
-  };
-  const outPath = path.join(SIGNED_DIR, outName.replace(/\.xlsx?$/i, "") + ".signed.json");
-  await fs.writeFile(outPath, JSON.stringify(manifest, null, 2));
-  return outPath;
-}
-
 // Stamps the REQUESTOR's own signature image(s) and/or date text(s) onto a PDF at
 // creation time, so the document goes out already self-signed / dated before it is
 // routed for approval. Works on raw bytes and returns new bytes (no disk write).

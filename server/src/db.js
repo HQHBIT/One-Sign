@@ -642,7 +642,9 @@ export async function hydrateRequest(row) {
     rejectedAt: row.rejected_at ? Number(row.rejected_at) : null,
     rejectReason: row.reject_reason,
     hasRejectVoice: !!row.reject_voice_path,
-    hasSignedFile: !!row.signed_file_path,
+    // Excel requests signed before real .xlsx stamping existed point at a
+    // ".signed.json" manifest, not a document — those still serve the original.
+    hasSignedFile: !!row.signed_file_path && !/\.json$/i.test(row.signed_file_path),
     reminders: rems.map(r => Number(r.sent_at)),
     requestType: row.request_type || "general",
     instantApproval: !!row.instant_approval,

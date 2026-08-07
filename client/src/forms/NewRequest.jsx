@@ -325,9 +325,9 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
   // --- "add your own" toolbar, rendered inside each mode's placement section so the
   //     requestor signs / dates the SAME document view where they place the signer box.
-  //     Available for any PDF (incl. Leave, now a normal upload type); a signature
-  //     can't be overlaid on a spreadsheet, so it stays PDF-only.
-  const selfBar = (file?.ext === "pdf") ? (
+  //     Available for PDFs and Excel workbooks alike; only the Date box is PDF-only,
+  //     since a floating dated text box has no spreadsheet equivalent.
+  const selfBar = file ? (
     <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,.08)" }}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-medium opacity-80 flex items-center gap-1">
@@ -339,11 +339,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           onClick={() => { setPlacingSlot(null); setSignerDatePlacing(false); setSelfPlacing(selfPlacing === "signature" ? null : "signature"); }}>
           + My signature
         </button>
-        <button type="button"
-          className={`text-xs ${selfPlacing === "date" ? "btn-gold" : "btn-ghost"}`}
-          onClick={() => { setPlacingSlot(null); setSignerDatePlacing(false); setSelfPlacing(selfPlacing === "date" ? null : "date"); }}>
-          + Date ({todayDdMmYy})
-        </button>
+        {file.ext === "pdf" && (
+          <button type="button"
+            className={`text-xs ${selfPlacing === "date" ? "btn-gold" : "btn-ghost"}`}
+            onClick={() => { setPlacingSlot(null); setSignerDatePlacing(false); setSelfPlacing(selfPlacing === "date" ? null : "date"); }}>
+            + Date ({todayDdMmYy})
+          </button>
+        )}
         {selfMarks.length > 0 && (
           <span className="opacity-60">
             · {selfMarks.filter(m => m.type !== "date").length} signature + {selfMarks.filter(m => m.type === "date").length} date placed (green)
@@ -618,113 +620,107 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {/* 3c. direct mode: add one or more specific people, each with a box */}
           {effectiveFile && mode ==="direct" && (
             <Section n="03" title="Choose who should sign" desc="Add one or more people — the same person can be added multiple times for multiple signatures.">
-              {file.ext !== "pdf" ? (
-                <div className="card p-4 text-sm" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-                  Direct requests support PDF documents only. Upload a PDF to use this mode.
-                </div>
-              ) : (
-                <>
-                  {/* search + add people */}
-                  <input type="text" value={directQuery} onChange={e => setDirectQuery(e.target.value)}
-                    className="w-full mb-2" placeholder="Search by name or email to add a signer (min 2 characters)…" />
-                  {directSearching && <div className="text-xs opacity-50 px-1 mb-2">Searching…</div>}
-                  {(() => {
-                    const avail = directResults;
-                    if (!directSearching && directQuery.trim().length >= 2 && avail.length === 0)
-                      return <div className="text-xs opacity-50 px-1 mb-2">No users found for "{directQuery}".</div>;
-                    if (avail.length === 0) return null;
-                    return (
-                      <div className="space-y-1 mb-4">
-                        {avail.map(u => (
-                          <button key={u.id}
-                            onClick={() => {
-                              // adding a person immediately arms signature placement for them
-                              const newIdx = directSigners.length;
-                              setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, boxes: [], dateFields: [] }]);
-                              setDirectQuery("");
-                              setSelfPlacing(null); setSignerDatePlacing(false);
-                              setPlacingSlot({ directIdx: newIdx, kind: "signature" });
-                            }}
-                            className="w-full text-left px-3 py-2 rounded card tile-hover flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium truncate">{u.name}</div>
-                              <div className="text-xs opacity-60 font-mono truncate">{u.email}</div>
-                            </div>
-                            <span className="flex items-center gap-2 shrink-0">
-                              {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no signature yet</span>}
-                              <span className="btn-ghost text-xs"><Plus size={11} /> Add</span>
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-
-                  {directSigners.length > 0 && (
-                    <div className="flex flex-col xl:flex-row gap-4">
-                      <div className="flex-1 min-w-0">
-                        <Suspense fallback={<ViewerFallback />}>
-                          <DocPreview file={file} markers={allMarkers} editable
-                            onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
-                        </Suspense>
-                      </div>
-                      <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
-                        {placingSlot?.directIdx != null && (
-                          <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
-                            {placingSlot.kind === "date"
-                              ? <span>Every click-drag drops a <b>date box</b> for {directSigners[placingSlot.directIdx]?.name}.{" "}
-                                  <button className="underline" onClick={() => setPlacingSlot(p => ({ ...p, kind: "signature" }))}>Back to signatures</button></span>
-                              : <span>Every click-drag adds a <b>signature box</b> for {directSigners[placingSlot.directIdx]?.name} — add as many as they should sign. Tap another name to switch.</span>}
-                          </div>
-                        )}
-
-                        <div className="card p-3">
-                          <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Signers</div>
-                          <div className="space-y-2">
-                            {directSigners.map((s, di) => {
-                              const boxCount = (s.boxes || []).length;
-                              const dfCount = (s.dateFields || []).length;
-                              const here = placingSlot?.directIdx === di;
-                              const isPlacingSig = here && placingSlot?.kind !== "date";
-                              const isPlacingDate = here && placingSlot?.kind === "date";
-                              const color = STEP_COLORS[di % STEP_COLORS.length];
-                              return (
-                                <div key={di} className="px-2 py-2 rounded cursor-pointer" role="button" tabIndex={0}
-                                  onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot({ directIdx: di, kind: "signature" }); }}
-                                  style={{
-                                    borderLeft: `3px solid ${color}`,
-                                    backgroundColor: here ? (isPlacingDate ? "rgba(199,125,46,.14)" : "rgba(184,137,74,.14)") : "rgba(15,26,46,.04)",
-                                    outline: here ? `1px solid ${isPlacingDate ? "#C77D2E" : "#B8894A"}` : "none",
-                                  }}>
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className="font-mono text-[10px] opacity-50 shrink-0">{di + 1}</span>
-                                    <span className="text-xs font-medium truncate min-w-0 flex-1">{s.name}</span>
-                                    {isPlacingSig && <span className="text-[9px] shrink-0" style={{ color: "#B8894A", fontWeight: 600 }}>placing signs</span>}
-                                    {isPlacingDate && <span className="text-[9px] shrink-0" style={{ color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
-                                    <button className="opacity-40 hover:opacity-100 shrink-0" title="Remove"
-                                      onClick={e => { e.stopPropagation(); setDirectSigners(list => list.filter((_, i) => i !== di)); setPlacingSlot(null); }}><X size={10} /></button>
-                                  </div>
-                                  {!s.hasSignature && <span className="pill pill-rejected text-[9px] mt-1 inline-block">no signature</span>}
-                                  <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                                    {boxCount
-                                      ? <span className="text-[10px] opacity-60 font-mono">{boxCount} sign{boxCount > 1 ? "s" : ""}{dfCount ? ` · ${dfCount} date` : ""}</span>
-                                      : <span className="text-[10px] opacity-50">click-drag the document to add signs</span>}
-                                    <button className={`text-[10px] ${isPlacingDate ? "btn-gold" : "btn-ghost"} !px-1.5 !py-0.5`}
-                                      title="Switch to placing date field(s) for this signer"
-                                      onClick={e => { e.stopPropagation(); setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? { directIdx: di, kind: "signature" } : { directIdx: di, kind: "date" }); }}>
-                                      Date
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
+              {/* search + add people */}
+              <input type="text" value={directQuery} onChange={e => setDirectQuery(e.target.value)}
+                className="w-full mb-2" placeholder="Search by name or email to add a signer (min 2 characters)…" />
+              {directSearching && <div className="text-xs opacity-50 px-1 mb-2">Searching…</div>}
+              {(() => {
+                const avail = directResults;
+                if (!directSearching && directQuery.trim().length >= 2 && avail.length === 0)
+                  return <div className="text-xs opacity-50 px-1 mb-2">No users found for "{directQuery}".</div>;
+                if (avail.length === 0) return null;
+                return (
+                  <div className="space-y-1 mb-4">
+                    {avail.map(u => (
+                      <button key={u.id}
+                        onClick={() => {
+                          // adding a person immediately arms signature placement for them
+                          const newIdx = directSigners.length;
+                          setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, boxes: [], dateFields: [] }]);
+                          setDirectQuery("");
+                          setSelfPlacing(null); setSignerDatePlacing(false);
+                          setPlacingSlot({ directIdx: newIdx, kind: "signature" });
+                        }}
+                        className="w-full text-left px-3 py-2 rounded card tile-hover flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{u.name}</div>
+                          <div className="text-xs opacity-60 font-mono truncate">{u.email}</div>
                         </div>
-                        {selfBar}
+                        <span className="flex items-center gap-2 shrink-0">
+                          {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no signature yet</span>}
+                          <span className="btn-ghost text-xs"><Plus size={11} /> Add</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {directSigners.length > 0 && (
+                <div className="flex flex-col xl:flex-row gap-4">
+                  <div className="flex-1 min-w-0">
+                    <Suspense fallback={<ViewerFallback />}>
+                      <DocPreview file={file} markers={allMarkers} editable
+                        onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
+                    </Suspense>
+                  </div>
+                  <div className="w-full xl:w-72 shrink-0 space-y-3 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
+                    {placingSlot?.directIdx != null && (
+                      <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: placingSlot.kind === "date" ? "rgba(199,125,46,.18)" : "rgba(184,137,74,.18)", color: "var(--c-sand)" }}>
+                        {placingSlot.kind === "date"
+                          ? <span>Every click-drag drops a <b>date box</b> for {directSigners[placingSlot.directIdx]?.name}.{" "}
+                              <button className="underline" onClick={() => setPlacingSlot(p => ({ ...p, kind: "signature" }))}>Back to signatures</button></span>
+                          : <span>Every click-drag adds a <b>signature box</b> for {directSigners[placingSlot.directIdx]?.name} — add as many as they should sign. Tap another name to switch.</span>}
+                      </div>
+                    )}
+
+                    <div className="card p-3">
+                      <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Signers</div>
+                      <div className="space-y-2">
+                        {directSigners.map((s, di) => {
+                          const boxCount = (s.boxes || []).length;
+                          const dfCount = (s.dateFields || []).length;
+                          const here = placingSlot?.directIdx === di;
+                          const isPlacingSig = here && placingSlot?.kind !== "date";
+                          const isPlacingDate = here && placingSlot?.kind === "date";
+                          const color = STEP_COLORS[di % STEP_COLORS.length];
+                          return (
+                            <div key={di} className="px-2 py-2 rounded cursor-pointer" role="button" tabIndex={0}
+                              onClick={() => { setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot({ directIdx: di, kind: "signature" }); }}
+                              style={{
+                                borderLeft: `3px solid ${color}`,
+                                backgroundColor: here ? (isPlacingDate ? "rgba(199,125,46,.14)" : "rgba(184,137,74,.14)") : "rgba(15,26,46,.04)",
+                                outline: here ? `1px solid ${isPlacingDate ? "#C77D2E" : "#B8894A"}` : "none",
+                              }}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-mono text-[10px] opacity-50 shrink-0">{di + 1}</span>
+                                <span className="text-xs font-medium truncate min-w-0 flex-1">{s.name}</span>
+                                {isPlacingSig && <span className="text-[9px] shrink-0" style={{ color: "#B8894A", fontWeight: 600 }}>placing signs</span>}
+                                {isPlacingDate && <span className="text-[9px] shrink-0" style={{ color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
+                                <button className="opacity-40 hover:opacity-100 shrink-0" title="Remove"
+                                  onClick={e => { e.stopPropagation(); setDirectSigners(list => list.filter((_, i) => i !== di)); setPlacingSlot(null); }}><X size={10} /></button>
+                              </div>
+                              {!s.hasSignature && <span className="pill pill-rejected text-[9px] mt-1 inline-block">no signature</span>}
+                              <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                                {boxCount
+                                  ? <span className="text-[10px] opacity-60 font-mono">{boxCount} sign{boxCount > 1 ? "s" : ""}{dfCount ? ` · ${dfCount} date` : ""}</span>
+                                  : <span className="text-[10px] opacity-50">click-drag the document to add signs</span>}
+                                {file.ext === "pdf" && (
+                                  <button className={`text-[10px] ${isPlacingDate ? "btn-gold" : "btn-ghost"} !px-1.5 !py-0.5`}
+                                    title="Switch to placing date field(s) for this signer"
+                                    onClick={e => { e.stopPropagation(); setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? { directIdx: di, kind: "signature" } : { directIdx: di, kind: "date" }); }}>
+                                    Date
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  )}
-                </>
+                    {selfBar}
+                  </div>
+                </div>
               )}
             </Section>
           )}
@@ -831,11 +827,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                                       {boxCount
                                         ? <span className="text-[10px] opacity-60 font-mono">{boxCount} sign{boxCount > 1 ? "s" : ""}{dfCount ? ` · ${dfCount} date` : ""}</span>
                                         : <span className="text-[10px] opacity-50">click-drag the document to add signs</span>}
-                                      <button className={`text-[10px] ${isPlacingDate ? "btn-gold" : "btn-ghost"} !px-1.5 !py-0.5`}
-                                        title="Switch to placing date field(s) for this signer"
-                                        onClick={e => { e.stopPropagation(); setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? { stepIdx: si, signerIdx: gi, kind: "signature" } : { stepIdx: si, signerIdx: gi, kind: "date" }); }}>
-                                        Date
-                                      </button>
+                                      {file.ext === "pdf" && (
+                                        <button className={`text-[10px] ${isPlacingDate ? "btn-gold" : "btn-ghost"} !px-1.5 !py-0.5`}
+                                          title="Switch to placing date field(s) for this signer"
+                                          onClick={e => { e.stopPropagation(); setSelfPlacing(null); setSignerDatePlacing(false); setPlacingSlot(isPlacingDate ? { stepIdx: si, signerIdx: gi, kind: "signature" } : { stepIdx: si, signerIdx: gi, kind: "date" }); }}>
+                                          Date
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 );

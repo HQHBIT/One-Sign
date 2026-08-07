@@ -7,7 +7,8 @@ import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { notifyUser } from "../notify.js";
-import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
+import { stampPdf, stampPdfMulti, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
+import { stampXlsx, signXlsxBuffer } from "../xlsx-sign.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -145,11 +146,13 @@ router.post("/self-sign", authRequired, upload.single("file"), async (req, res, 
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
     const ext = (file.originalname.split(".").pop() || "").toLowerCase();
-    if (ext !== "pdf") return res.status(400).json({ error: "Sign your documents supports PDF files only" });
+    if (!["pdf", "xlsx", "xls"].includes(ext)) return res.status(400).json({ error: "Only PDF or Excel accepted" });
+    const isPdf = ext === "pdf";
 
     // Same order as request creation: bake the chosen rotation first (lossless),
     // then stamp — placeInRotatedPage keeps marks aligned on rotated pages.
-    const rotDeg = normalizeRotation(req.body?.rotation);
+    // (Rotation is a page concept; spreadsheets have none.)
+    const rotDeg = isPdf ? normalizeRotation(req.body?.rotation) : 0;
     if (rotDeg) {
       try {
         const { bakedBytes } = await bakeUniformRotation(file.buffer, rotDeg / 90);
@@ -167,6 +170,9 @@ router.post("/self-sign", authRequired, upload.single("file"), async (req, res, 
     if (marks.length === 0) return res.status(400).json({ error: "Place your signature or a date on the document first" });
     const hasSig = marks.some(m => m.type !== "date");
     if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature first (top-right menu)" });
+    // A floating dated text box has no spreadsheet equivalent, and writing into a
+    // cell would overwrite the sheet's own content — so dates stay PDF-only.
+    if (!isPdf && !hasSig) return res.status(400).json({ error: "Place your signature on the sheet first" });
 
     const dateText = formatDdMmYy(Date.now());
     const stamps = marks.map(m => m.type === "date"
@@ -174,12 +180,18 @@ router.post("/self-sign", authRequired, upload.single("file"), async (req, res, 
       : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
 
     let signed;
-    try { signed = Buffer.from(await applySelfMarks(file.buffer, stamps)); }
+    try {
+      signed = isPdf
+        ? Buffer.from(await applySelfMarks(file.buffer, stamps))
+        : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
+    }
     catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature to the document" }); }
 
-    const base = file.originalname.replace(/\.pdf$/i, "");
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(base)}.signed.pdf"`);
+    const base = file.originalname.replace(/\.(pdf|xlsx|xls)$/i, "");
+    res.setHeader("Content-Type", isPdf
+      ? "application/pdf"
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(base)}.signed.${isPdf ? "pdf" : "xlsx"}"`);
     res.send(signed);
   } catch (e) { next(e); }
 });
@@ -226,15 +238,16 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     }
 
     // ---------- optional: the requestor's OWN signature / date stamps ----------
-    // Applied to the uploaded PDF up-front so the self-signed/dated document flows
+    // Applied to the uploaded document up-front so the self-signed/dated file flows
     // through whichever routing path (single / workflow / direct) below.
     let selfMarks = null;
     if (req.body?.selfMarks) {
       try { selfMarks = JSON.parse(req.body.selfMarks); } catch { return res.status(400).json({ error: "selfMarks must be valid JSON" }); }
     }
     if (Array.isArray(selfMarks) && selfMarks.length > 0) {
-      if (fileType !== "pdf") return res.status(400).json({ error: "Signing or dating the document yourself is available for PDF files only" });
       const hasSig = selfMarks.some(m => m.type !== "date");
+      // Dates are a floating text box — no spreadsheet equivalent (see xlsx-sign.js).
+      if (fileType !== "pdf" && !hasSig) return res.status(400).json({ error: "Dating the document yourself is available for PDF files only" });
       if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature before signing the document yourself" });
       const dateText = formatDdMmYy(Date.now());
       const stamps = selfMarks
@@ -243,7 +256,11 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
           ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
           : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
       if (stamps.length > 0) {
-        try { file.buffer = Buffer.from(await applySelfMarks(file.buffer, stamps)); }
+        try {
+          file.buffer = fileType === "pdf"
+            ? Buffer.from(await applySelfMarks(file.buffer, stamps))
+            : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
+        }
         catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature/date to the document" }); }
       }
     }
@@ -461,7 +478,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
 // team signing authority, or to already have a signature on file — the recipient
 // adds a signature when they go to sign. PDF only (the signing path stamps PDFs).
 async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general" }) {
-  if (fileType !== "pdf") return res.status(400).json({ error: "Direct requests support PDF documents only" });
+  // PDF and Excel both supported — the signing path stamps each accordingly.
   if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
   for (const [i, s] of signers.entries()) {
     if (!s.userId) return res.status(400).json({ error: `Recipient ${i + 1}: userId required` });
@@ -622,6 +639,9 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
     if (!row.signed_file_path) return res.status(404).json({ error: "Signed version not available" });
+    // Excel requests approved before real .xlsx stamping existed recorded a
+    // ".signed.json" manifest rather than a document — serve the original for those.
+    if (/\.json$/i.test(row.signed_file_path)) return res.sendFile(path.join(DOC_DIR, row.file_path));
     res.sendFile(path.join(SIGNED_DIR, row.signed_file_path));
   } catch (e) { next(e); }
 });
@@ -673,11 +693,13 @@ export async function approveRequestHandler(req, res, next) {
         });
         signedPath = outName;
       } else {
-        const manifest = await writeXlsxSignatureManifest({
-          srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull,
-          marker: { ...markerList[0], signerName: req.user.name, signedAt }, outName: row.id
+        // Excel: embed the signature image into the workbook itself.
+        const out = await stampXlsx({
+          srcPath: path.join(DOC_DIR, row.file_path),
+          stamps: markerList.map(m => ({ signaturePath: sigPathFull, x: m.x, y: m.y, w: m.w, h: m.h })),
+          outName: row.id
         });
-        signedPath = path.basename(manifest);
+        signedPath = path.basename(out);
       }
     } catch (e) {
       console.error("[approve] stamp failed", e);
@@ -728,10 +750,8 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     return res.status(403).json({ error: `Awaiting signature from ${u?.name || "another signer"}` });
   }
 
-  // Stamp the PDF: re-build from original applying ALL signed signers + this one
-  if (row.file_type !== "pdf") {
-    return res.status(400).json({ error: "Workflow currently supports PDF only" });
-  }
+  // Re-build from the ORIGINAL applying ALL signed signers + this one. Works for
+  // both PDFs (pdf-lib) and Excel workbooks (embedded images) — see below.
 
   // Mark this signer as signed FIRST so the rebuild includes it
   await execute(
@@ -765,9 +785,19 @@ async function approveWorkflowStep({ req, res, row, signer }) {
 
   let signedPath;
   try {
-    const outName = `${row.id}.signed.pdf`;
-    await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-    signedPath = outName;
+    if (row.file_type === "pdf") {
+      const outName = `${row.id}.signed.pdf`;
+      await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
+      signedPath = outName;
+    } else {
+      // Excel: only signature stamps are embeddable (date fields are PDF-only).
+      const out = await stampXlsx({
+        srcPath: path.join(DOC_DIR, row.file_path),
+        stamps: stamps.filter(st => st.signaturePath),
+        outName: row.id
+      });
+      signedPath = path.basename(out);
+    }
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
     // Roll back the signer status so it can be retried
@@ -885,11 +915,12 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
               });
               signedPath = outName;
             } else {
-              const manifest = await writeXlsxSignatureManifest({
-                srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull,
-                marker: { ...markerList[0], signerName: req.user.name, signedAt }, outName: row.id
+              const out = await stampXlsx({
+                srcPath: path.join(DOC_DIR, row.file_path),
+                stamps: markerList.map(m => ({ signaturePath: sigPathFull, x: m.x, y: m.y, w: m.w, h: m.h })),
+                outName: row.id
               });
-              signedPath = path.basename(manifest);
+              signedPath = path.basename(out);
             }
           } catch (e) {
             results.failed.push({ id, error: "Stamp failed" });
@@ -950,9 +981,19 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 
   let signedPath;
   try {
-    const outName = `${row.id}.signed.pdf`;
-    await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-    signedPath = outName;
+    if (row.file_type === "pdf") {
+      const outName = `${row.id}.signed.pdf`;
+      await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
+      signedPath = outName;
+    } else {
+      // Excel: only signature stamps are embeddable (date fields are PDF-only).
+      const out = await stampXlsx({
+        srcPath: path.join(DOC_DIR, row.file_path),
+        stamps: stamps.filter(st => st.signaturePath),
+        outName: row.id
+      });
+      signedPath = path.basename(out);
+    }
   } catch (e) {
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     return { error: "Stamp failed" };

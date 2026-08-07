@@ -19,13 +19,13 @@ export function DownloadBtn({ req }) {
     setBusy(true);
     try {
       const isPdf = req.fileType === "pdf";
-      // For xlsx, the "signed" version is a JSON manifest — always download the original file
-      const kind = (req.hasSignedFile && isPdf) ? "signed" : "file";
+      // Both PDFs and Excel workbooks now carry the signature in the signed file.
+      const kind = req.hasSignedFile ? "signed" : "file";
       const url = await api.getRequestFileBlob(req.id, kind);
       const a = document.createElement("a");
       a.href = url;
       const ext = isPdf ? "pdf" : "xlsx";
-      a.download = (req.hasSignedFile && isPdf) ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
+      a.download = req.hasSignedFile ? `${req.fileName.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${ext}` : req.fileName;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (e) { alert(e.message || "Download failed"); }
