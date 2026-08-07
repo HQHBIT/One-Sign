@@ -3,20 +3,21 @@ import { APPROVAL_WINDOW_MS, requestTypeLabel, requestTypeColor } from "../lib/c
 import { fmt, fmtShort } from "../lib/format.js";
 import { StatusPill } from "./StatusPill.jsx";
 import { Countdown } from "./Countdown.jsx";
+import { activeStep, nextPendingSigner } from "../lib/turn.js";
 
 export function RequestRow({ r, teams, users, i, actions, subtitle }) {
   const requestorName = r.requestorName || users.find(u => u.id === r.requestorId)?.name || "—";
   const approverName = r.approverName || users.find(u => u.id === r.approverId)?.name;
   const team = teams.find(t => t.id === r.targetTeamId);
 
-  // Workflow: find the next pending signer
+  // Workflow: name whoever the request is actually waiting on.
   let workflowLine = null;
   if (r.workflow && r.workflow.length > 0) {
-    const activeStep = r.workflow.find(s => s.status === "active");
-    if (activeStep) {
-      const next = activeStep.signers.find(s => s.status === "pending");
-      const stepTeam = teams.find(t => t.id === activeStep.teamId);
-      workflowLine = `Step ${activeStep.order}/${r.workflow.length} · ${stepTeam?.name || ""}${next ? ` · awaiting ${next.userName}` : ""}`;
+    const step = activeStep(r);
+    if (step) {
+      const next = nextPendingSigner(r);
+      const stepTeam = teams.find(t => t.id === step.teamId);
+      workflowLine = `Step ${step.order}/${r.workflow.length} · ${stepTeam?.name || ""}${next ? ` · awaiting ${next.userName}` : ""}`;
     } else if (r.status === "approved" || r.status === "approved_pending") {
       const totalSigners = r.workflow.reduce((n, s) => n + s.signers.length, 0);
       workflowLine = `${totalSigners} signature${totalSigners === 1 ? "" : "s"} collected across ${r.workflow.length} step${r.workflow.length === 1 ? "" : "s"}`;

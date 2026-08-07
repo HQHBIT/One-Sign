@@ -14,6 +14,7 @@ import {
   COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
+import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -978,23 +979,13 @@ function RequestorView(props) {
   const pending = my.filter(r => r.status === "pending");
   // Two separate lists: requests I RAISED that are approved, and documents I was
   // asked to sign and signed (someone else's request).
-  const iSigned = r => (r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id && s.status === "signed"));
+  const iSigned = r => iSignedInWorkflow(r, user.id);
   const myApproved = my.filter(r => r.status === "approved");
   const mySigned = requests.filter(r => r.status === "approved" && r.requestorId !== user.id && iSigned(r));
   // Documents waiting on MY signature: workflow/direct steps where it's my turn,
   // plus — when an admin has appointed me an approver for a team — that team's
   // pending requests (authority, not role, confers the right to sign).
-  const myAuthorityTeams = user.signingAuthorityTeams || [];
-  const awaitingMySig = requests.filter(r => {
-    if (r.status !== "pending") return false;
-    if (r.requestorId === user.id) return false; // never approve what I raised
-    if (r.workflow?.length) {
-      const active = r.workflow.find(s => s.status === "active");
-      const next = active?.signers?.find(s => s.status === "pending");
-      return next?.userId === user.id;
-    }
-    return !!r.targetTeamId && myAuthorityTeams.includes(r.targetTeamId);
-  });
+  const awaitingMySig = requests.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
 
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
@@ -1333,7 +1324,7 @@ function ApproverView(props) {
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
-  const iSignedInWorkflow = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id && s.status === "signed"));
+  const iSigned = r => iSignedInWorkflow(r, user.id);
   // Requests routed to me to SIGN — never my own (I don't approve what I raised).
   const mine = requests.filter(r => {
     if (r.requestorId === user.id) return false;
@@ -1345,10 +1336,14 @@ function ApproverView(props) {
   // Requests I raised myself, to track.
   const myRequests = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length;
-  const pending = mine.filter(r => r.status === "pending");
-  const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSignedInWorkflow(r)));
-  const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSignedInWorkflow(r)));
-  const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSignedInWorkflow(r)));
+  // Only what I can act on NOW. Being on the route isn't enough — a request I've
+  // already signed, or one sitting with an earlier signer, is not my pending work.
+  const pending = mine.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
+  // On the route, still open, but waiting on somebody else.
+  const waitingOnOthers = mine.filter(r => r.status === "pending" && !isMyTurn(r, user.id, user.signingAuthorityTeams));
+  const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSigned(r)));
+  const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSigned(r)));
+  const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSigned(r)));
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
     onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
@@ -1356,7 +1351,7 @@ function ApproverView(props) {
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
   if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
-  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} back={() => setTab("home")} />;
+  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} waiting={waitingOnOthers} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
@@ -1449,26 +1444,18 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
   );
 }
 
-function ApproverPending({ items, user, users, teams, approveRequest, rejectRequest, undoApproval, refresh, back, notify }) {
+function ApproverPending({ items, waiting = [], user, users, teams, approveRequest, rejectRequest, undoApproval, refresh, back, notify }) {
   const [openId, setOpenId] = useState(null);
   const [filterType, setFilterType] = useState("all");
   const [selected, setSelected] = useState(() => new Set());
   const [batching, setBatching] = useState(false);
 
-  // Only "pending" rows (where I'm the next signer) are batch-approvable. approved_pending rows are excluded.
-  const isMyTurn = (r) => {
-    if (r.status !== "pending") return false;
-    if (r.workflow && r.workflow.length > 0) {
-      const active = r.workflow.find(s => s.status === "active");
-      const next = active?.signers.find(s => s.status === "pending");
-      return next?.userId === user.id;
-    }
-    // Legacy: any approver with authority for the team can claim it
-    return (user.signingAuthorityTeams || []).includes(r.targetTeamId);
-  };
+  // Only rows where I'm the next signer are batch-approvable; approved_pending
+  // rows (already signed, inside the 1-hour window) are excluded.
+  const myTurn = (r) => isMyTurn(r, user.id, user.signingAuthorityTeams);
 
   const visible = items.filter(r => filterType === "all" || (r.requestType || "general") === filterType);
-  const selectable = visible.filter(isMyTurn);
+  const selectable = visible.filter(myTurn);
   const allSelected = selectable.length > 0 && selectable.every(r => selected.has(r.id));
 
   const toggle = (id) => {
@@ -1546,15 +1533,15 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
       {visible.length === 0 ? <Empty icon={Inbox} text={items.length === 0 ? "Nothing awaiting your approval." : "No requests of this type."} /> : (
         <div className="card mt-2 overflow-hidden">
           {visible.map((r, i) => {
-            const myTurn = isMyTurn(r);
+            const mine = myTurn(r);
             return (
               <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
-                {myTurn && (
+                {mine && (
                   <label className="pl-5 pr-2 cursor-pointer flex items-center" title="Select for batch approval">
                     <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
                   </label>
                 )}
-                {!myTurn && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
+                {!mine && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
                 <div className="flex-1 min-w-0">
                   <RequestRow r={r} teams={teams} users={users} i={0}
                     actions={r.status === "approved_pending" && r.approverId === user.id
@@ -1566,6 +1553,25 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
           })}
         </div>
       )}
+
+      {/* Documents I've already signed that have moved on to the next signer.
+          Kept visible so signing isn't a dead end — but out of the count above,
+          since none of it is mine to act on. */}
+      {waiting.length > 0 && (
+        <div className="mt-8">
+          <div className="text-xs tracking-widest uppercase opacity-50 mb-2">
+            Signed by you · waiting on others ({waiting.length})
+          </div>
+          <div className="card overflow-hidden" style={{ opacity: 0.75 }}>
+            {waiting.map((r, i) => (
+              <div key={r.id} className={i > 0 ? "border-t" : ""} style={{ borderColor: "var(--c-ink-08)" }}>
+                <RequestRow r={r} teams={teams} users={users} i={0} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
         onClose={() => setOpenId(null)} notify={notify} />}
@@ -1739,12 +1745,8 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   let mySlot = null;
   let nextPendingUser = null;
   if (isWorkflow) {
-    const activeStep = req.workflow.find(s => s.status === "active");
-    if (activeStep) {
-      const next = activeStep.signers.find(s => s.status === "pending");
-      nextPendingUser = next;
-      if (next?.userId === user.id) mySlot = next;
-    }
+    nextPendingUser = nextPendingSigner(req);
+    if (nextPendingUser?.userId === user.id) mySlot = nextPendingUser;
   }
   const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
 
