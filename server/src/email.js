@@ -179,6 +179,34 @@ const templates = {
     ].filter((x) => x !== null).join("\n"),
   }),
 
+  // Mid-workflow hand-off: the previous signer has signed and it is now THIS
+  // person's turn. Names the signer explicitly so the recipient knows why the
+  // document has reached them.
+  your_turn: (c) => ({
+    subject: `Your signature is next: ${c.fileName}`,
+    html: layout({
+      preheader: `${c.previousSignerName || "The previous signer"} has signed — it's now your turn`,
+      pillHtml: pill("Awaiting your signature", "pending"),
+      heading: "It's your turn to sign",
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.previousSignerName || "The previous signer")}</strong> has signed the document, and it is now waiting for your approval.`) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Signed by", value: c.previousSignerName },
+          { label: "Raised by", value: c.requestorName },
+        ]) +
+        button("Review & sign", requestUrl(c), "gold") +
+        caption("Sign in to SignFlow to review and sign the document."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.previousSignerName || "The previous signer"} has signed "${c.fileName}", and it is now waiting for your approval.`,
+      c.requestorName ? `Raised by: ${c.requestorName}` : null, ``,
+      `Review & sign: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
+    ].filter((x) => x !== null).join("\n"),
+  }),
+
   approved: (c) => ({
     subject: `Approved: ${c.fileName}`,
     html: layout({

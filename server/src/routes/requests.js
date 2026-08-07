@@ -541,15 +541,29 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   res.json({ request: await hydrateRequest(row) });
 }
 
-async function notifyNextSigner(requestId, fileName, requestorName) {
+// Tell whoever is next in line that the document has reached them. Mid-workflow
+// (previousSignerName given) this names the person who just signed — "X has
+// signed the document and it is now waiting for your approval" — instead of the
+// generic new-request notice used for the very first signer.
+async function notifyNextSigner(requestId, fileName, requestorName, previousSignerName = null) {
   const next = await getNextPendingSigner(requestId);
   if (!next) return;
   const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
   if (!u) return;
+  // Mid-workflow callers don't carry the raiser's name — look it up so the
+  // notification never shows a blank "sent by".
+  let raisedBy = requestorName;
+  if (!raisedBy) {
+    const r = await queryOne(
+      "SELECT u.name FROM requests rq JOIN users u ON u.id = rq.requestor_id WHERE rq.id = ?", [requestId]);
+    raisedBy = r?.name || "";
+  }
   notifyUser({
-    user: u, requestId, template: "new_request",
+    user: u, requestId,
+    template: previousSignerName ? "your_turn" : "new_request",
     ctx: {
-      approverName: u.name, requestorName, fileName, teamName: "(workflow step)", requestId,
+      approverName: u.name, requestorName: raisedBy, previousSignerName,
+      fileName, teamName: "(workflow step)", requestId,
       // approveToken withheld until domain authentication is live — see the
       // matching note in the team-request send above.
     }
@@ -771,7 +785,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     // Same step still active — just update signed file path
     await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ? WHERE id = ?",
       [signedPath, req.userRow.signature_path, row.id]);
-    await notifyNextSigner(row.id, row.file_name, "");
+    await notifyNextSigner(row.id, row.file_name, "", req.user.name);
   } else {
     // Mark step done
     await execute("UPDATE request_steps SET status = 'done' WHERE id = ?", [signer.step_id]);
@@ -784,7 +798,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
       await execute("UPDATE request_steps SET status = 'active' WHERE id = ?", [nextStep.id]);
       await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ?, current_step = ? WHERE id = ?",
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
-      await notifyNextSigner(row.id, row.file_name, "");
+      await notifyNextSigner(row.id, row.file_name, "", req.user.name);
     } else {
       // All steps done — the signer completing the workflow chooses: finalize
       // instantly or enter the 1-hour rejection window.
@@ -952,7 +966,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
   if (remainingInStep) {
     await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ? WHERE id = ?",
       [signedPath, req.userRow.signature_path, row.id]);
-    await notifyNextSigner(row.id, row.file_name, "");
+    await notifyNextSigner(row.id, row.file_name, "", req.user.name);
   } else {
     await execute("UPDATE request_steps SET status = 'done' WHERE id = ?", [signer.step_id]);
     const nextStep = await queryOne(
@@ -963,7 +977,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
       await execute("UPDATE request_steps SET status = 'active' WHERE id = ?", [nextStep.id]);
       await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ?, current_step = ? WHERE id = ?",
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
-      await notifyNextSigner(row.id, row.file_name, "");
+      await notifyNextSigner(row.id, row.file_name, "", req.user.name);
     } else {
       if (wantsInstant(req) || row.instant_approval) {
         await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,

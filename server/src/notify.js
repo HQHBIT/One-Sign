@@ -17,6 +17,11 @@ function inAppText(template, ctx = {}) {
   switch (template) {
     case "new_request":
       return { title: `New signature request: ${f}`, body: `${ctx.requestorName || "Someone"} sent "${f}" for your signature.` };
+    case "your_turn":
+      return {
+        title: `Your signature is next: ${f}`,
+        body: `${ctx.previousSignerName || "The previous signer"} has signed — it's now waiting for your approval.`,
+      };
     case "approved":
       return { title: `Approved! ${f}`, body: `${ctx.approverName ? `Approved by ${ctx.approverName}. ` : ""}The signed file is ready.` };
     case "rejected":
