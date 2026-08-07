@@ -382,10 +382,16 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     for (const s of step.signers) {
       const u = userById[s.userId];
       if (!u) return res.status(400).json({ error: `Unknown signer: ${s.userId}` });
-      if (!isSigner(u.role)) return res.status(400).json({ error: `${u.name} is not an approver` });
-      if (!u.signature_path) return res.status(400).json({ error: `${u.name} has no signature on file` });
+      if (u.active != null && Number(u.active) === 0) return res.status(400).json({ error: `${u.name} is no longer active` });
+      // A signer qualifies either by holding the team's signing authority, or by
+      // being a MEMBER of that team — the fallback that keeps team routing usable
+      // when no approver has been designated yet. (Only the named person can
+      // actually sign; the approve path checks identity + signature.)
       const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [s.userId, step.teamId]);
-      if (!auth) return res.status(400).json({ error: `${u.name} has no signing authority for ${teamById[step.teamId].name}` });
+      const isMember = u.team_id === step.teamId;
+      if (!auth && !isMember) {
+        return res.status(400).json({ error: `${u.name} is neither an approver for nor a member of ${teamById[step.teamId].name}` });
+      }
     }
   }
 

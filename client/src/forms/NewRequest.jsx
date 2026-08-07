@@ -4,12 +4,21 @@
 import { useState, useEffect, useRef, useMemo, Suspense, lazy } from "react";
 import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
-  Building2, Trash2, Plus, Send, Calendar, Save
+  Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
 import { api } from "../api.js";
+
+// Who a requestor may pick as a signer for a team: the designated approvers,
+// or — when the team has none yet — its own members. Falls back gracefully if
+// an older payload only carries `approvers`.
+export const teamSigners = (t) =>
+  (t?.signers?.length ? t.signers : (t?.approvers?.length ? t.approvers : (t?.members || [])));
+const usesMembers = (t) => !(t?.approvers?.length) && (t?.members?.length > 0);
+// 1st / 2nd / 3rd / 4th … — labels the signing order within a step.
+export const ord = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`; };
 
 // Lazy viewer module — same shared chunk as the rest of the app.
 const ViewerModule = () => import("../viewer.jsx");
@@ -119,7 +128,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     const signerSlot = step.signers?.[placingSlot.signerIdx];
     if (!signerSlot) return null;
     const team = teams.find(t => t.id === step.teamId);
-    const approver = (team?.approvers || []).find(a => a.id === signerSlot.userId);
+    const approver = teamSigners(team).find(a => a.id === signerSlot.userId);
     const a = approver?.signatureAspect;
     return (a && a > 0 && isFinite(a)) ? a : null;
   }, [mode, placingSlot, workflow, teams]);
@@ -158,7 +167,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       workflow.forEach((step, si) => {
         const team = teams.find(t => t.id === step.teamId);
         step.signers.forEach((s, gi) => {
-          const u = (team?.approvers || []).find(a => a.id === s.userId);
+          const u = teamSigners(team).find(a => a.id === s.userId);
           (s.boxes || []).forEach((b, bi) => base.push({
             id: `s${si}-${gi}-b${bi}`, page: b.page || 1, x: b.x, y: b.y, w: b.w, h: b.h,
             color: STEP_COLORS[si % STEP_COLORS.length],
@@ -397,6 +406,26 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const removeSigner = (stepIdx, signerIdx) => setWorkflow(wf => wf.map((s, i) => i !== stepIdx ? s : {
     ...s, signers: s.signers.filter((_, j) => j !== signerIdx)
   }));
+  // Signing SEQUENCE within a step: signers sign strictly in this order (the
+  // server stores the index as signer_order and only activates the next one
+  // after the previous has signed). Moving a signer keeps the placement
+  // selection pointing at the same person.
+  const moveSigner = (stepIdx, from, to) => {
+    setWorkflow(wf => wf.map((st, i) => {
+      if (i !== stepIdx) return st;
+      if (to < 0 || to >= st.signers.length) return st;
+      const signers = [...st.signers];
+      const [moved] = signers.splice(from, 1);
+      signers.splice(to, 0, moved);
+      return { ...st, signers };
+    }));
+    setPlacingSlot(p => {
+      if (!p || p.stepIdx !== stepIdx) return p;
+      if (p.signerIdx === from) return { ...p, signerIdx: to };
+      if (p.signerIdx === to) return { ...p, signerIdx: from };
+      return p;
+    });
+  };
 
   // ---------- submit ----------
   const effectiveFile = !!file;
@@ -558,20 +587,26 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 {teams.map(t => {
                   const active = targetTeam === t.id;
                   const nApprovers = (t.approvers || []).length;
-                  const dead = nApprovers === 0; // no signing authority — selecting it would only fail at submit
+                  const nMembers = (t.members || []).length;
+                  // "Any approver signs" needs a designated approver. A team with only
+                  // members is still usable — via Multi-step workflow, where the
+                  // requestor names the signers and their order.
+                  const dead = nApprovers === 0;
                   return (
-                    <button key={t.id} onClick={() => !dead && setTargetTeam(t.id)} disabled={dead}
-                      title={dead ? "No approvers hold signing authority for this team yet — ask the administrator" : ""}
-                      className={`card p-4 text-left ${dead ? "" : "tile-hover"} ${active ? "ring-2" : ""}`}
+                    <button key={t.id} onClick={() => dead ? setMode("workflow") : setTargetTeam(t.id)}
+                      title={dead ? "No approver designated yet — switch to Multi-step workflow to pick signers from this team" : ""}
+                      className={`card p-4 text-left tile-hover ${active ? "ring-2" : ""}`}
                       style={{
                         borderColor: active ? "#B8894A" : undefined,
                         backgroundColor: active ? "rgba(184,137,74,.08)" : undefined,
-                        opacity: dead ? 0.45 : 1, cursor: dead ? "not-allowed" : "pointer"
+                        opacity: dead ? 0.7 : 1
                       }}>
                       <Building2 size={18} className="mb-3 opacity-70" />
                       <div className="font-medium">{t.name}</div>
-                      <div className="text-xs mt-1" style={dead ? { color: "var(--c-rust-deep)" } : { opacity: 0.6 }}>
-                        {dead ? "No signing authority yet" : `${nApprovers} approver(s)`}
+                      <div className="text-xs mt-1" style={dead ? { color: "var(--c-gold-deep)" } : { opacity: 0.6 }}>
+                        {dead
+                          ? (nMembers ? `${nMembers} member(s) — pick signers in workflow →` : "No members yet")
+                          : `${nApprovers} approver(s)`}
                       </div>
                     </button>
                   );
@@ -739,19 +774,26 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                               <select value={step.teamId} onChange={e => setStepTeam(si, e.target.value)}
                                 className="text-xs w-full min-w-0" style={{ maxWidth: "100%" }}>
                                 <option value="">— team —</option>
+                                {/* Every team is selectable: those without a designated
+                                    approver fall back to their own members as signers. */}
                                 {teams.map(t => {
-                                  const n = (t.approvers || []).length;
-                                  return <option key={t.id} value={t.id} disabled={n === 0}>{t.name}{n === 0 ? " — no approvers" : ""}</option>;
+                                  const n = teamSigners(t).length;
+                                  return <option key={t.id} value={t.id}>{t.name}{n === 0 ? " — no members yet" : ""}</option>;
                                 })}
                               </select>
                             </div>
                             <button className="btn-ghost text-[10px] shrink-0" onClick={() => removeStep(si)}><Trash2 size={10} /></button>
                           </div>
+                          {team && usesMembers(team) && (
+                            <div className="text-[10px] mb-2 px-2 py-1 rounded" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "var(--c-sand)" }}>
+                              No approver designated for {team.name} — choosing from its {(team.members || []).length} member(s).
+                            </div>
+                          )}
 
                           {team && (
                             <div className="space-y-1.5">
                               {step.signers.map((s, gi) => {
-                                const u = (team.approvers || []).find(a => a.id === s.userId);
+                                const u = teamSigners(team).find(a => a.id === s.userId);
                                 const boxCount = (s.boxes || []).length;
                                 const dfCount = (s.dateFields || []).length;
                                 const here = placingSlot?.stepIdx === si && placingSlot?.signerIdx === gi;
@@ -765,10 +807,23 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                                       outline: here ? `1px solid ${isPlacingDate ? "#C77D2E" : "#B8894A"}` : "none",
                                     }}>
                                     <div className="flex items-center gap-1.5 min-w-0">
-                                      <span className="font-mono text-[10px] opacity-50 shrink-0">{si + 1}.{gi + 1}</span>
-                                      <span className="text-xs font-medium truncate min-w-0 flex-1">{u?.name || "?"}</span>
+                                      {/* signing order within this step — 1st signs, then 2nd… */}
+                                      <span className="text-[9px] font-semibold shrink-0 px-1.5 py-0.5 rounded"
+                                        title={`Signs ${ord(gi + 1)} in step ${si + 1}`}
+                                        style={{ backgroundColor: `${stepColor}22`, color: stepColor }}>{ord(gi + 1)}</span>
+                                      <span className="text-xs font-medium truncate min-w-0 flex-1" title={u?.name || ""}>{u?.name || "?"}</span>
                                       {isPlacingSig && <span className="text-[9px] shrink-0" style={{ color: "#B8894A", fontWeight: 600 }}>placing signs</span>}
                                       {isPlacingDate && <span className="text-[9px] shrink-0" style={{ color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
+                                      {step.signers.length > 1 && (
+                                        <span className="flex items-center shrink-0">
+                                          <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign earlier"
+                                            disabled={gi === 0}
+                                            onClick={e => { e.stopPropagation(); moveSigner(si, gi, gi - 1); }}><ChevronUp size={11} /></button>
+                                          <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign later"
+                                            disabled={gi === step.signers.length - 1}
+                                            onClick={e => { e.stopPropagation(); moveSigner(si, gi, gi + 1); }}><ChevronDown size={11} /></button>
+                                        </span>
+                                      )}
                                       <button className="opacity-40 hover:opacity-100 shrink-0" onClick={e => { e.stopPropagation(); removeSigner(si, gi); setPlacingSlot(null); }}><X size={10} /></button>
                                     </div>
                                     {!u?.hasSignature && <span className="pill pill-rejected text-[9px] mt-0.5 inline-block">no signature</span>}
@@ -831,20 +886,20 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
 
 function AddSignerControl({ team, existing, onAdd }) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const all = team.approvers || [];
+  // Designated approvers, or the team's own members when none are designated.
+  const all = teamSigners(team);
   const available = all.filter(a => !existing.includes(a.id));
-  // A team with NO approvers at all is a dead end — say so clearly instead of
-  // the misleading "already added" (which blocked adding signatures entirely).
+  // Only a team with nobody at all is a dead end.
   if (all.length === 0) return (
     <div className="text-xs px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-      No approvers hold signing authority for <b>{team.name}</b> yet — pick a different team, or ask the administrator to grant authority under <b>Teams &amp; authority</b>.
+      <b>{team.name}</b> has no approvers or members yet — pick a different team, or ask the administrator to assign people to it under <b>Teams &amp; authority</b>.
     </div>
   );
-  if (available.length === 0) return <div className="text-xs opacity-50 italic px-3">All team approvers already added.</div>;
+  if (available.length === 0) return <div className="text-xs opacity-50 italic px-3">Everyone in this team is already added.</div>;
   return (
     <div className="relative">
       <button className="btn-ghost text-xs w-full justify-center" onClick={() => setPickerOpen(o => !o)}>
-        <Plus size={11} /> Add signer
+        <Plus size={11} /> Add signer{existing.length > 0 ? ` (signs ${ord(existing.length + 1)})` : ""}
       </button>
       {pickerOpen && (
         <div className="absolute left-0 right-0 mt-1 z-10 card p-2 shadow-lg" style={{ backgroundColor: "var(--c-paper)" }}>

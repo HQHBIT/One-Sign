@@ -8,23 +8,45 @@ const uid = () => `t_${Date.now().toString(36)}_${Math.random().toString(36).sli
 router.get("/", authRequired, async (req, res, next) => {
   try {
     const rows = await query("SELECT id, name FROM teams ORDER BY name");
-    // Include each team's approvers (with hasSignature flag) so requestors can build workflows
+    const shape = (u) => ({
+      id: u.user_id, name: u.name, email: u.email, role: u.role,
+      hasSignature: !!u.signature_path,
+      signatureAspect: u.signature_aspect != null ? Number(u.signature_aspect) : null
+    });
+
+    // Designated approvers: hold signing authority for the team.
     const auths = await query(`
-      SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.signature_path, u.signature_aspect
+      SELECT sa.team_id, u.id AS user_id, u.name, u.email, u.role, u.signature_path, u.signature_aspect
       FROM signing_authority sa
       JOIN users u ON u.id = sa.user_id
       WHERE u.role IN ('approver','executive') AND u.active = 1
       ORDER BY u.name
     `);
-    const byTeam = {};
-    for (const a of auths) {
-      (byTeam[a.team_id] ||= []).push({
-        id: a.user_id, name: a.name, email: a.email,
-        hasSignature: !!a.signature_path,
-        signatureAspect: a.signature_aspect != null ? Number(a.signature_aspect) : null
-      });
-    }
-    const teams = rows.map(t => ({ ...t, approvers: byTeam[t.id] || [] }));
+    // Everyone assigned to the team — the fallback signer pool when a team has
+    // no designated approver yet, so team routing is never a dead end.
+    const mems = await query(`
+      SELECT u.team_id, u.id AS user_id, u.name, u.email, u.role, u.signature_path, u.signature_aspect
+      FROM users u
+      WHERE u.team_id IS NOT NULL AND u.active = 1
+      ORDER BY u.name
+    `);
+
+    const approversBy = {}, membersBy = {};
+    for (const a of auths) (approversBy[a.team_id] ||= []).push(shape(a));
+    for (const m of mems) (membersBy[m.team_id] ||= []).push(shape(m));
+
+    const teams = rows.map(t => {
+      const approvers = approversBy[t.id] || [];
+      const members = membersBy[t.id] || [];
+      // `signers` is what a requestor may pick from: the designated approvers,
+      // or — when none are set — the team's own members.
+      const usingMembers = approvers.length === 0 && members.length > 0;
+      return {
+        ...t, approvers, members,
+        signers: approvers.length ? approvers : members,
+        signerSource: usingMembers ? "members" : "approvers",
+      };
+    });
     res.json({ teams });
   } catch (e) { next(e); }
 });

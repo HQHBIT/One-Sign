@@ -3,7 +3,7 @@ import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
-  RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
+  RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
   KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar
 } from "lucide-react";
@@ -52,7 +52,7 @@ import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
 import { PasswordResetModal } from "./components/PasswordResetModal.jsx";
 
 // Forms — multi-step wizards and the big create flow
-import { NewRequest } from "./forms/NewRequest.jsx";
+import { NewRequest, teamSigners, ord } from "./forms/NewRequest.jsx";
 import { OnboardUserWizard } from "./forms/OnboardUserWizard.jsx";
 
 // Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
@@ -820,7 +820,15 @@ function MyWorkflows({ teams, notify, back, onUse }) {
           </div>
           {editing.steps.map((st, si) => {
             const team = teams.find(t => t.id === st.teamId);
-            const pool = (team?.approvers || []).filter(a => !st.signers.includes(a.id));
+            const pool = teamSigners(team).filter(a => !st.signers.includes(a.id));
+            // Reorder within the step — signers sign in exactly this sequence.
+            const moveSigner = (from, to) => {
+              if (to < 0 || to >= st.signers.length) return;
+              const signers = [...st.signers];
+              const [m] = signers.splice(from, 1);
+              signers.splice(to, 0, m);
+              patchStep(si, { signers });
+            };
             return (
               <div key={si} className="card p-4" style={{ borderLeft: `3px solid ${STEP_COLORS[si % STEP_COLORS.length]}` }}>
                 <div className="flex items-center justify-between gap-2 mb-3 min-w-0">
@@ -829,9 +837,10 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                     <select value={st.teamId} onChange={e => patchStep(si, { teamId: e.target.value, signers: [] })}
                       className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
                       <option value="">— team —</option>
+                      {/* Teams without a designated approver fall back to members. */}
                       {teams.map(t => {
-                        const n = (t.approvers || []).length;
-                        return <option key={t.id} value={t.id} disabled={n === 0}>{t.name}{n === 0 ? " — no approvers" : ""}</option>;
+                        const n = teamSigners(t).length;
+                        return <option key={t.id} value={t.id}>{t.name}{n === 0 ? " — no members yet" : ""}</option>;
                       })}
                     </select>
                   </div>
@@ -839,14 +848,31 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                 </div>
                 {team && (
                   <>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
+                    {!(team.approvers || []).length && (team.members || []).length > 0 && (
+                      <div className="text-[10px] mb-2 px-2 py-1 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "var(--c-sand)" }}>
+                        No approver designated — choosing from {team.name}'s {(team.members || []).length} member(s).
+                      </div>
+                    )}
+                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">Signing order</div>
+                    <div className="space-y-1.5 mb-2">
                       {st.signers.map((uid2, gi) => {
-                        const u = (team.approvers || []).find(a => a.id === uid2);
+                        const u = teamSigners(team).find(a => a.id === uid2);
                         return (
-                          <span key={gi} className="pill inline-flex items-center gap-1.5" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
-                            <span className="font-mono text-[9px] opacity-50">{si + 1}.{gi + 1}</span> {u?.name || "(removed)"}
-                            <button className="opacity-50 hover:opacity-100" onClick={() => patchStep(si, { signers: st.signers.filter((_, k) => k !== gi) })}><X size={9} /></button>
-                          </span>
+                          <div key={gi} className="flex items-center gap-2 px-2 py-1.5 rounded min-w-0" style={{ backgroundColor: "rgba(15,26,46,.05)" }}>
+                            <span className="text-[9px] font-semibold shrink-0 px-1.5 py-0.5 rounded"
+                              style={{ backgroundColor: `${STEP_COLORS[si % STEP_COLORS.length]}22`, color: STEP_COLORS[si % STEP_COLORS.length] }}>{ord(gi + 1)}</span>
+                            <span className="text-sm truncate min-w-0 flex-1" title={u?.name || ""}>{u?.name || "(removed)"}</span>
+                            {u && !u.hasSignature && <span className="pill pill-rejected text-[9px] shrink-0">no signature</span>}
+                            {st.signers.length > 1 && (
+                              <span className="flex items-center shrink-0">
+                                <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign earlier" disabled={gi === 0}
+                                  onClick={() => moveSigner(gi, gi - 1)}><ChevronUp size={12} /></button>
+                                <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign later" disabled={gi === st.signers.length - 1}
+                                  onClick={() => moveSigner(gi, gi + 1)}><ChevronDown size={12} /></button>
+                              </span>
+                            )}
+                            <button className="opacity-50 hover:opacity-100 shrink-0" onClick={() => patchStep(si, { signers: st.signers.filter((_, k) => k !== gi) })}><X size={10} /></button>
+                          </div>
                         );
                       })}
                       {st.signers.length === 0 && <span className="text-xs opacity-50 italic">No signers yet</span>}
@@ -854,10 +880,10 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                     {pool.length > 0 ? (
                       <select value="" onChange={e => { if (e.target.value) patchStep(si, { signers: [...st.signers, e.target.value] }); }}
                         className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
-                        <option value="">+ Add signer…</option>
+                        <option value="">+ Add signer{st.signers.length ? ` (signs ${ord(st.signers.length + 1)})` : ""}…</option>
                         {pool.map(a => <option key={a.id} value={a.id}>{a.name}{a.hasSignature ? "" : " (no signature yet)"}</option>)}
                       </select>
-                    ) : <div className="text-[11px] opacity-50">All of this team's approvers are added.</div>}
+                    ) : <div className="text-[11px] opacity-50">Everyone in this team is already added.</div>}
                   </>
                 )}
               </div>
