@@ -15,7 +15,7 @@ import {
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
-import { UnlockModal, UnlockCountdown, ConfidentialWatermark } from "./components/UnlockGate.jsx";
+import { UnlockModal, UnlockCountdown, ConfidentialWatermark, ConfidentialPrompt } from "./components/UnlockGate.jsx";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -988,11 +988,32 @@ function RequestorView(props) {
   // pending requests (authority, not role, confers the right to sign).
   const awaitingMySig = requests.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
 
-  const openNew = (type = null) => { setNewType(type); setTab("new"); };
+  // Starting a new request asks, once and up front, whether the document is
+  // confidential — a decision point rather than a checkbox that can be missed.
+  // Skipped entirely when the server holds no key, so nobody is prompted for a
+  // choice the backend cannot honour.
+  const [askConfidential, setAskConfidential] = useState(false);
+  const [newConfidential, setNewConfidential] = useState(false);
+  const [confAvailable, setConfAvailable] = useState(false);
+  useEffect(() => {
+    api.authConfig().then(c => setConfAvailable(!!c.confidentialEnabled)).catch(() => setConfAvailable(false));
+  }, []);
+  const openNew = (type = null) => {
+    setNewType(type);
+    setNewConfidential(false);
+    if (confAvailable) { setAskConfidential(true); return; }   // the form opens once they choose
+    setTab("new");
+  };
+  const chooseConfidential = (yes) => {
+    setNewConfidential(yes);
+    setAskConfidential(false);
+    setTab("new");
+  };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
-    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+    defaultConfidential={newConfidential}
+    onDone={() => { setNewType(null); setPresetTpl(null); setNewConfidential(false); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={props.notify} back={() => setTab("home")} />;
@@ -1054,6 +1075,7 @@ function RequestorView(props) {
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
+      {askConfidential && <ConfidentialPrompt onChoose={chooseConfidential} />}
       {rejectedCount > 0 && (
         <div className="mt-8">
           <button className="btn-ghost text-sm" onClick={() => setTab("rejected")}>
@@ -1353,7 +1375,27 @@ function ApproverView(props) {
   // "Awaiting your approval" sits first on the home screen; this opens the
   // review drawer for an item directly from there.
   const [quickOpenId, setQuickOpenId] = useState(null);
-  const openNew = (type = null) => { setNewType(type); setTab("new"); };
+  // Starting a new request asks, once and up front, whether the document is
+  // confidential — a decision point rather than a checkbox that can be missed.
+  // Skipped entirely when the server holds no key, so nobody is prompted for a
+  // choice the backend cannot honour.
+  const [askConfidential, setAskConfidential] = useState(false);
+  const [newConfidential, setNewConfidential] = useState(false);
+  const [confAvailable, setConfAvailable] = useState(false);
+  useEffect(() => {
+    api.authConfig().then(c => setConfAvailable(!!c.confidentialEnabled)).catch(() => setConfAvailable(false));
+  }, []);
+  const openNew = (type = null) => {
+    setNewType(type);
+    setNewConfidential(false);
+    if (confAvailable) { setAskConfidential(true); return; }   // the form opens once they choose
+    setTab("new");
+  };
+  const chooseConfidential = (yes) => {
+    setNewConfidential(yes);
+    setAskConfidential(false);
+    setTab("new");
+  };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSigned = r => iSignedInWorkflow(r, user.id);
@@ -1378,7 +1420,8 @@ function ApproverView(props) {
   const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSigned(r)));
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
-    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+    defaultConfidential={newConfidential}
+    onDone={() => { setNewType(null); setPresetTpl(null); setNewConfidential(false); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
@@ -1439,6 +1482,7 @@ function ApproverView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
+      {askConfidential && <ConfidentialPrompt onChoose={chooseConfidential} />}
 
       {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}

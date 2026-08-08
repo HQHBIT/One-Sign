@@ -106,6 +106,46 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
   );
 }
 
+/**
+ * Asked once, when starting a new request: is this document confidential?
+ * A decision point rather than a checkbox buried in the form, so the requestor
+ * makes the choice knowingly and sees what it costs the approver.
+ *   onChoose(true|false) — proceed to the form with confidential on or off
+ */
+export function ConfidentialPrompt({ onChoose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }}>
+      <div className="card p-6 w-full max-w-md" style={{ backgroundColor: "var(--c-cream)" }}>
+        <div className="flex items-center gap-2 mb-3">
+          <Lock size={17} style={{ color: "var(--c-gold)" }} />
+          <h3 className="font-display text-xl">Is this a confidential document?</h3>
+        </div>
+
+        <p className="text-sm opacity-75 mb-3">
+          If you proceed, <strong>the approver will need MFA through an OTP in order to view your
+          document</strong> — a 6-digit code is emailed to them, and the document stays open for 60
+          seconds once they enter it.
+        </p>
+        <ul className="text-xs opacity-70 mb-5 space-y-1.5 pl-4" style={{ listStyle: "disc" }}>
+          <li>The file is stored encrypted.</li>
+          <li>IT support cannot view or recover it — not even to help you.</li>
+          <li>It cannot be printed, and only you can download it once it is fully signed.</li>
+        </ul>
+
+        <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+          <button className="btn-ghost" onClick={() => onChoose(false)}>Cancel</button>
+          <button className="btn-primary" onClick={() => onChoose(true)}>
+            <Lock size={14} /> Yes, Proceed
+          </button>
+        </div>
+        <p className="text-[11px] opacity-50 mt-3 text-center sm:text-right">
+          Cancel continues as a normal request.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /** The live countdown pill. Calls onExpire once the window lapses. */
 export function UnlockCountdown({ endsAt, onExpire }) {
   const [left, setLeft] = useState(() => endsAt - Date.now());

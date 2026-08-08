@@ -26,14 +26,14 @@ const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview 
 const ViewerFallback = () =>
   <div className="card p-10 text-sm opacity-50 text-center">Loading viewer…</div>;
 
-export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType, presetWorkflow }) {
+export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType, presetWorkflow, defaultConfidential = false }) {
   const [file, setFile] = useState(null);
   const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
   const [mode, setMode] = useState(presetWorkflow ? "workflow" : "single"); // "single" | "workflow" | "direct"
   const [requestType, setRequestType] = useState(defaultType || "general");
   // Confidential: encrypted at rest, IT Admin locked out, and every view
   // needs a fresh emailed code. Hidden unless the server has a key configured.
-  const [confidential, setConfidential] = useState(false);
+  const [confidential, setConfidential] = useState(defaultConfidential);
   const [confAvailable, setConfAvailable] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -522,9 +522,9 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                     <Lock size={13} style={{ color: "var(--c-gold)" }} /> Confidential document
                   </div>
                   <div className="text-xs opacity-60 mt-0.5">
-                    Stored encrypted. Only you and the signers can open it — IT support cannot view or
-                    recover it. Each viewing needs a fresh code emailed to the viewer, and the document
-                    stays open for 60 seconds.
+                    {confidential
+                      ? "The approver will need MFA through an OTP to view this document. Stored encrypted — IT support cannot view or recover it. Untick to make this an ordinary request."
+                      : "Stored encrypted. Only you and the signers can open it — IT support cannot view or recover it. Each viewing needs a fresh code emailed to the viewer, and the document stays open for 60 seconds."}
                   </div>
                 </div>
               </label>
