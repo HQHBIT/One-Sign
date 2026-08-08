@@ -3,6 +3,8 @@ import { Printer } from "lucide-react";
 import { api } from "../api.js";
 
 export function PrintBtn({ req }) {
+  // Printing produces a copy that leaves every control behind.
+  if (req.confidential) return null;
   const [busy, setBusy] = useState(false);
   // Inside the 1-hour rejection window the document isn't final — the approver
   // can still reject or withdraw — so printing is held until it completes.

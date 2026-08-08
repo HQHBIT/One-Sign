@@ -1,4 +1,4 @@
-import { FileText, FileSpreadsheet, Zap, GitBranch } from "lucide-react";
+import { FileText, FileSpreadsheet, Zap, GitBranch, Lock } from "lucide-react";
 import { APPROVAL_WINDOW_MS, requestTypeLabel, requestTypeColor } from "../lib/constants.js";
 import { fmt, fmtShort } from "../lib/format.js";
 import { StatusPill } from "./StatusPill.jsx";
@@ -38,6 +38,10 @@ export function RequestRow({ r, teams, users, i, actions, subtitle }) {
           <span className="font-medium text-sm sm:text-base truncate">{r.fileName}</span>
           {r.instantApproval && <span title="Instant approval" className="shrink-0" style={{ color: "var(--c-gold)" }}><Zap size={11} /></span>}
           {r.workflow?.length > 0 && <span title="Multi-step workflow" className="opacity-60 shrink-0"><GitBranch size={11} /></span>}
+          {r.confidential && (
+            <span title="Confidential — encrypted, and a fresh code is needed to open it"
+              className="shrink-0" style={{ color: "var(--c-gold)" }}><Lock size={11} /></span>
+          )}
         </div>
         <div className="text-xs opacity-60 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 7px", borderRadius: 4, backgroundColor: `${typeColor}1A`, color: typeColor, fontWeight: 500 }}>

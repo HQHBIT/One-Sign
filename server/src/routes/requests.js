@@ -1,4 +1,5 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
@@ -7,8 +8,12 @@ import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { notifyUser } from "../notify.js";
-import { stampPdf, stampPdfMulti, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
-import { stampXlsx, signXlsxBuffer } from "../xlsx-sign.js";
+import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
+import { signXlsxBuffer } from "../xlsx-sign.js";
+import {
+  isEnabled as confidentialEnabled, sealIfConfidential, storedNameFor,
+  readMaybe, newUnlockCode, maskEmail
+} from "../confidential.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -106,6 +111,73 @@ export function signerBoxes(s) {
 }
 
 // ============================================================
+//   confidential unlock gate
+//   ------------------------------------------------------------
+//   A confidential document is only served while the viewer holds a live
+//   window, opened by entering a code emailed to them moments earlier. This
+//   gates the API, not the cryptography — see docs/…/confidential-documents.
+// ============================================================
+const UNLOCK_WINDOW_MS = 60_000;      // how long the document stays viewable
+const UNLOCK_CODE_TTL_MS = 5 * 60_000; // how long the emailed code stays usable
+const UNLOCK_MAX_ATTEMPTS = 5;
+const UNLOCK_MAX_ISSUES = 5;
+const UNLOCK_ISSUE_WINDOW_MS = 15 * 60_000;
+
+// Records the ACT of access — never any content.
+async function logAccess(req, requestId, action) {
+  try {
+    await execute(
+      "INSERT INTO confidential_access_log (request_id, user_id, action, at, ip) VALUES (?, ?, ?, ?, ?)",
+      [requestId, req.user.id, action, Date.now(), (req.ip || "").slice(0, 64)]
+    );
+  } catch { /* auditing must never block the user's work */ }
+}
+
+// A file name like "PR Termination - <person>.pdf" leaks the substance, so for
+// anyone who is not on the route (in practice: the IT Admin, who keeps
+// operational visibility of status and participants) the name and note are
+// stripped. Applied once, here, so there is a single place to audit.
+function redactConfidential(hydrated, row, user) {
+  if (!row.confidential) return hydrated;
+  const onRoute = user.id === row.requestor_id
+    || user.id === row.approver_id
+    // Legacy single-team requests carry no approver_id until someone signs, so
+    // holding the target team's authority IS being on the route. Without this,
+    // the very person due to sign would see "Confidential document".
+    || (!!row.target_team_id && (user.signingAuthorityTeams || []).includes(row.target_team_id))
+    || (hydrated.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id));
+  if (onRoute) return hydrated;
+  return { ...hydrated, fileName: "Confidential document", note: "", marker: null };
+}
+
+// null when the viewer may proceed; otherwise the JSON body to return with 403.
+async function requireUnlocked(req, row) {
+  const live = await queryOne(
+    `SELECT 1 AS ok FROM confidential_unlocks
+      WHERE request_id = ? AND user_id = ? AND consumed_at IS NOT NULL AND window_ends_at > ?`,
+    [row.id, req.user.id, Date.now()]
+  );
+  return live ? null : { error: "This document is locked", needsUnlock: true };
+}
+
+// Stamp a document and store the signed copy, returning its stored filename.
+// Confidential documents stay in memory end to end — decrypt, stamp, re-encrypt
+// — so a readable copy never exists on disk. Every signing path goes through
+// here, so none of them can forget.
+async function stampAndStore({ row, stamps }) {
+  const srcBytes = await readMaybe(path.join(DOC_DIR, row.file_path));
+  const isPdf = row.file_type === "pdf";
+  const outBytes = isPdf
+    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps }))
+    // Excel embeds signature images only — date fields are PDF-only.
+    : await signXlsxBuffer({ buffer: srcBytes, stamps: stamps.filter(s => s.type !== "date" && s.signaturePath) });
+  const outName = storedNameFor(`${row.id}.signed.${isPdf ? "pdf" : "xlsx"}`, row.confidential);
+  await fs.mkdir(SIGNED_DIR, { recursive: true });
+  await fs.writeFile(path.join(SIGNED_DIR, outName), sealIfConfidential(outBytes, row.confidential));
+  return outName;
+}
+
+// ============================================================
 //   list (role-scoped)
 // ============================================================
 router.get("/", authRequired, async (req, res, next) => {
@@ -132,7 +204,9 @@ router.get("/", authRequired, async (req, res, next) => {
         ORDER BY r.created_at DESC
       `, [u.id, u.id, u.id, u.id]);
     }
-    const requests = await Promise.all(rows.map(hydrateRequest));
+    const requests = await Promise.all(
+      rows.map(async r => redactConfidential(await hydrateRequest(r), r, u))
+    );
     res.json({ requests });
   } catch (e) { next(e); }
 });
@@ -215,6 +289,14 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
 
     const note = req.body?.note || "";
     const instantApproval = req.body?.instantApproval === "true" || req.body?.instantApproval === true ? 1 : 0;
+
+    // Confidential: the stored file is encrypted and the IT Admin is locked out.
+    // Fail CLOSED — without a configured key we refuse rather than quietly
+    // storing something the requestor believes is protected.
+    const confidential = req.body?.confidential === "true" || req.body?.confidential === true ? 1 : 0;
+    if (confidential && !confidentialEnabled()) {
+      return res.status(503).json({ error: "Confidential documents are not configured on this server" });
+    }
     const allowedTypes = ["leave", "document", "expense", "invoice", "general"];
     const rawType = (req.body?.requestType || "general").toString().toLowerCase();
     const requestType = allowedTypes.includes(rawType) ? rawType : "general";
@@ -273,7 +355,7 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     }
 
     if (Array.isArray(workflow) && workflow.length > 0) {
-      return await createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType });
+      return await createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType, confidential });
     }
 
     // ---------- direct (person-to-person) path ----------
@@ -281,7 +363,7 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
       let signers = null;
       try { signers = JSON.parse(req.body.signers || "[]"); }
       catch { return res.status(400).json({ error: "signers must be valid JSON" }); }
-      return await createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType });
+      return await createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType, confidential });
     }
 
     // ---------- legacy single-marker single-team path ----------
@@ -327,14 +409,14 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     }
 
     const id = uid();
-    const storedName = `${id}.${ext}`;
+    const storedName = storedNameFor(`${id}.${ext}`, confidential);
     await fs.mkdir(DOC_DIR, { recursive: true });
-    await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+    await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
 
     await execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json, confidential)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null, confidential]);
 
     for (const a of approvers) {
       notifyUser({
@@ -355,7 +437,7 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
   } catch (e) { next(e); }
 });
 
-async function createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType = "general" }) {
+async function createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType = "general", confidential = 0 }) {
   // Validate workflow shape
   for (const [i, step] of workflow.entries()) {
     if (!step?.teamId) return res.status(400).json({ error: `Step ${i + 1}: teamId required` });
@@ -427,18 +509,18 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   }
 
   const id = uid();
-  const storedName = `${id}.${ext}`;
+  const storedName = storedNameFor(`${id}.${ext}`, confidential);
   await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+  await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
 
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType, confidential]);
 
     for (let i = 0; i < workflow.length; i++) {
       const step = workflow[i];
@@ -477,7 +559,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
 // team-workflow path it does NOT require the signer to be an approver, to have
 // team signing authority, or to already have a signature on file — the recipient
 // adds a signature when they go to sign. PDF only (the signing path stamps PDFs).
-async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general" }) {
+async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general", confidential = 0 }) {
   // PDF and Excel both supported — the signing path stamps each accordingly.
   if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
   for (const [i, s] of signers.entries()) {
@@ -518,18 +600,18 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   }
 
   const id = uid();
-  const storedName = `${id}.${ext}`;
+  const storedName = storedNameFor(`${id}.${ext}`, confidential);
   await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+  await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
 
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
-      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential]);
 
     const stepId = uid("st");
     await conn.execute(
@@ -575,12 +657,16 @@ async function notifyNextSigner(requestId, fileName, requestorName, previousSign
       "SELECT u.name FROM requests rq JOIN users u ON u.id = rq.requestor_id WHERE rq.id = ?", [requestId]);
     raisedBy = r?.name || "";
   }
+  // Confidential routes swap to the redacted templates, which name neither the
+  // document nor the note.
+  const conf = await queryOne("SELECT confidential FROM requests WHERE id = ?", [requestId]);
   notifyUser({
     user: u, requestId,
     template: previousSignerName ? "your_turn" : "new_request",
     ctx: {
       approverName: u.name, requestorName: raisedBy, previousSignerName,
       fileName, teamName: "(workflow step)", requestId,
+      confidential: !!conf?.confidential,
       // approveToken withheld until domain authentication is live — see the
       // matching note in the team-request send above.
     }
@@ -601,6 +687,9 @@ async function getNextPendingSigner(requestId) {
 // ============================================================
 async function authoriseAccess(user, row) {
   if (!row) return false;
+  // Confidential documents exclude the IT Admin BY DESIGN — that is the whole
+  // point of the feature. Must stay above the admin shortcut below.
+  if (row.confidential && user.role === "admin") return false;
   if (user.role === "admin") return true;
   if (user.id === row.requestor_id) return true;
   if (user.id === row.approver_id) return true;
@@ -629,7 +718,16 @@ router.get("/:id/file", authRequired, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
-    res.sendFile(path.join(DOC_DIR, row.file_path));
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      if (req.query?.download === "1" && !(row.requestor_id === req.user.id && row.status === "approved")) {
+        return res.status(403).json({ error: "Confidential documents can only be downloaded by the requestor, once fully signed" });
+      }
+      await logAccess(req, row.id, req.query?.download === "1" ? "download" : "view");
+    }
+    res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(await readMaybe(path.join(DOC_DIR, row.file_path)));
   } catch (e) { next(e); }
 });
 
@@ -641,8 +739,106 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     if (!row.signed_file_path) return res.status(404).json({ error: "Signed version not available" });
     // Excel requests approved before real .xlsx stamping existed recorded a
     // ".signed.json" manifest rather than a document — serve the original for those.
-    if (/\.json$/i.test(row.signed_file_path)) return res.sendFile(path.join(DOC_DIR, row.file_path));
-    res.sendFile(path.join(SIGNED_DIR, row.signed_file_path));
+    if (/\.json$/i.test(row.signed_file_path)) return res.send(await readMaybe(path.join(DOC_DIR, row.file_path)));
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      // Taking a copy OUT of SignFlow is restricted to the requestor, and only
+      // once the document is fully signed. (Viewing already puts the bytes in
+      // the participant's browser, so this is a policy control, not a
+      // cryptographic one — an approver who can read it could save it.)
+      const wantsDownload = req.query?.download === "1";
+      if (wantsDownload && !(row.requestor_id === req.user.id && row.status === "approved")) {
+        return res.status(403).json({ error: "Confidential documents can only be downloaded by the requestor, once fully signed" });
+      }
+      await logAccess(req, row.id, wantsDownload ? "download" : "view");
+    }
+    res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(await readMaybe(path.join(SIGNED_DIR, row.signed_file_path)));
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /:id/unlock — email a fresh code ----------
+router.post("/:id/unlock", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).end();
+    if (!row.confidential) return res.status(400).json({ error: "This document is not confidential" });
+    // Deliberately AFTER the confidential check but using the same rule as
+    // viewing: only participants may request a code. Admins are not participants.
+    if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+
+    const since = Date.now() - UNLOCK_ISSUE_WINDOW_MS;
+    const recent = await queryOne(
+      "SELECT COUNT(*) AS n FROM confidential_unlocks WHERE request_id = ? AND user_id = ? AND issued_at > ?",
+      [row.id, req.user.id, since]
+    );
+    if (Number(recent?.n || 0) >= UNLOCK_MAX_ISSUES) {
+      return res.status(429).json({ error: "Too many codes requested. Try again in 15 minutes." });
+    }
+
+    const code = newUnlockCode();
+    const now = Date.now();
+    await execute(
+      `INSERT INTO confidential_unlocks (id, request_id, user_id, code_hash, issued_at, code_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [uid("cu"), row.id, req.user.id, bcrypt.hashSync(code, 10), now, now + UNLOCK_CODE_TTL_MS]
+    );
+
+    const to = req.userRow?.secondary_email || req.userRow?.email;
+    // Sent directly, NOT via notifyUser: an unlock code must arrive even when
+    // the user has switched workflow email notifications off.
+    await sendEmail({
+      to, template: "confidential_unlock_code",
+      ctx: { name: req.user.name, code, minutes: Math.round(UNLOCK_CODE_TTL_MS / 60000) }
+    }).catch(e => console.error("[unlock] email failed", e));
+    await logAccess(req, row.id, "unlock_sent");
+
+    res.json({ sent: true, to: maskEmail(to), expiresInMs: UNLOCK_CODE_TTL_MS });
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /:id/unlock/verify — open the 60-second window ----------
+router.post("/:id/unlock/verify", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).end();
+    if (!row.confidential) return res.status(400).json({ error: "This document is not confidential" });
+    if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+
+    const code = String(req.body?.code || "").trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "Enter the 6-digit code" });
+
+    const rec = await queryOne(
+      `SELECT * FROM confidential_unlocks
+        WHERE request_id = ? AND user_id = ? AND consumed_at IS NULL
+        ORDER BY issued_at DESC LIMIT 1`,
+      [row.id, req.user.id]
+    );
+    if (!rec) return res.status(400).json({ error: "Request a code first", code: "no_code" });
+    if (Date.now() > Number(rec.code_expires_at)) {
+      return res.status(400).json({ error: "That code has expired. Request a new one.", code: "code_expired" });
+    }
+    if (Number(rec.attempts) >= UNLOCK_MAX_ATTEMPTS) {
+      return res.status(400).json({ error: "Too many wrong attempts. Request a new code.", code: "too_many_attempts" });
+    }
+    if (!bcrypt.compareSync(code, rec.code_hash)) {
+      await execute("UPDATE confidential_unlocks SET attempts = attempts + 1 WHERE id = ?", [rec.id]);
+      await logAccess(req, row.id, "unlock_fail");
+      const left = UNLOCK_MAX_ATTEMPTS - (Number(rec.attempts) + 1);
+      return res.status(400).json({
+        error: left > 0 ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many wrong attempts. Request a new code.",
+        attemptsLeft: Math.max(0, left)
+      });
+    }
+
+    // The clock starts HERE, immediately before the document loads, so the
+    // window is 60s of actual visibility rather than being eaten by the email.
+    const now = Date.now();
+    const endsAt = now + UNLOCK_WINDOW_MS;
+    await execute("UPDATE confidential_unlocks SET consumed_at = ?, window_ends_at = ? WHERE id = ?", [now, endsAt, rec.id]);
+    await logAccess(req, row.id, "unlock_ok");
+    res.json({ ok: true, windowEndsAt: endsAt, windowMs: UNLOCK_WINDOW_MS });
   } catch (e) { next(e); }
 });
 
@@ -659,6 +855,13 @@ export async function approveRequestHandler(req, res, next) {
     if (!row) return res.status(404).json({ error: "Not found" });
     if (row.status !== "pending") return res.status(400).json({ error: "Not pending" });
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+
+    // You cannot sign what you are not currently permitted to see.
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      await logAccess(req, row.id, "sign");
+    }
 
     // Workflow path?
     const next = await getNextPendingSigner(row.id);
@@ -679,28 +882,15 @@ export async function approveRequestHandler(req, res, next) {
 
     let signedPath = null;
     try {
-      if (row.file_type === "pdf") {
-        const outName = `${row.id}.signed.pdf`;
-        // every signature box + any date fields the requestor placed for the
-        // approver, all showing this approval's date.
-        await stampPdfMulti({
-          srcPath: path.join(DOC_DIR, row.file_path),
-          stamps: [
-            ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
-            ...dateStampsFor(row.signer_date_fields_json, signedAt)
-          ],
-          outName
-        });
-        signedPath = outName;
-      } else {
-        // Excel: embed the signature image into the workbook itself.
-        const out = await stampXlsx({
-          srcPath: path.join(DOC_DIR, row.file_path),
-          stamps: markerList.map(m => ({ signaturePath: sigPathFull, x: m.x, y: m.y, w: m.w, h: m.h })),
-          outName: row.id
-        });
-        signedPath = path.basename(out);
-      }
+      // every signature box + any date fields the requestor placed for the
+      // approver, all showing this approval's date.
+      signedPath = await stampAndStore({
+        row,
+        stamps: [
+          ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+          ...dateStampsFor(row.signer_date_fields_json, signedAt)
+        ]
+      });
     } catch (e) {
       console.error("[approve] stamp failed", e);
       return res.status(500).json({ error: "Failed to stamp signature" });
@@ -721,7 +911,7 @@ export async function approveRequestHandler(req, res, next) {
       const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
       notifyUser({
         user: requestor, requestId: row.id, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+        ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
       }).catch(() => {});
     } else {
       await execute(`
@@ -785,19 +975,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
 
   let signedPath;
   try {
-    if (row.file_type === "pdf") {
-      const outName = `${row.id}.signed.pdf`;
-      await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-      signedPath = outName;
-    } else {
-      // Excel: only signature stamps are embeddable (date fields are PDF-only).
-      const out = await stampXlsx({
-        srcPath: path.join(DOC_DIR, row.file_path),
-        stamps: stamps.filter(st => st.signaturePath),
-        outName: row.id
-      });
-      signedPath = path.basename(out);
-    }
+    signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
     // Roll back the signer status so it can be retried
@@ -844,7 +1022,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
         const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
         notifyUser({
           user: requestor, requestId: row.id, template: "approved",
-          ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
       } else {
         await execute(`
@@ -903,25 +1081,13 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
           const signedAt = Date.now();
           let signedPath;
           try {
-            if (row.file_type === "pdf") {
-              const outName = `${row.id}.signed.pdf`;
-              await stampPdfMulti({
-                srcPath: path.join(DOC_DIR, row.file_path),
-                stamps: [
-                  ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
-                  ...dateStampsFor(row.signer_date_fields_json, signedAt)
-                ],
-                outName
-              });
-              signedPath = outName;
-            } else {
-              const out = await stampXlsx({
-                srcPath: path.join(DOC_DIR, row.file_path),
-                stamps: markerList.map(m => ({ signaturePath: sigPathFull, x: m.x, y: m.y, w: m.w, h: m.h })),
-                outName: row.id
-              });
-              signedPath = path.basename(out);
-            }
+            signedPath = await stampAndStore({
+              row,
+              stamps: [
+                ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+                ...dateStampsFor(row.signer_date_fields_json, signedAt)
+              ]
+            });
           } catch (e) {
             results.failed.push({ id, error: "Stamp failed" });
             continue;
@@ -932,7 +1098,7 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
             const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
             notifyUser({
               user: requestor, requestId: row.id, template: "approved",
-              ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+              ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
             }).catch(() => {});
           } else {
             await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
@@ -981,19 +1147,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 
   let signedPath;
   try {
-    if (row.file_type === "pdf") {
-      const outName = `${row.id}.signed.pdf`;
-      await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-      signedPath = outName;
-    } else {
-      // Excel: only signature stamps are embeddable (date fields are PDF-only).
-      const out = await stampXlsx({
-        srcPath: path.join(DOC_DIR, row.file_path),
-        stamps: stamps.filter(st => st.signaturePath),
-        outName: row.id
-      });
-      signedPath = path.basename(out);
-    }
+    signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     return { error: "Stamp failed" };
@@ -1027,7 +1181,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
         const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
         notifyUser({
           user: requestor, requestId: row.id, template: "approved",
-          ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, requestId: row.id }
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
       } else {
         await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
@@ -1084,7 +1238,7 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     notifyUser({
       user: requestor, requestId: row.id, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: reason || (voicePath ? "A voice note was attached — listen in SignFlow." : ""), requestId: row.id }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, reason: reason || (voicePath ? "A voice note was attached — listen in SignFlow." : ""), requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -1124,7 +1278,7 @@ router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     notifyUser({
       user: requestor, requestId: row.id, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: "Withdrawn within 1h window", requestId: row.id }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, reason: "Withdrawn within 1h window", requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -1181,7 +1335,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_a
     if (next) {
       const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
       if (u) {
-        notifyUser({ user: u, requestId: row.id, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
+        notifyUser({ user: u, requestId: row.id, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, confidential: !!row.confidential, requestId: row.id } }).catch(() => {});
         count = 1;
       }
     } else if (row.target_team_id) {
@@ -1190,7 +1344,7 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_a
         WHERE u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
-        notifyUser({ user: a, requestId: row.id, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, requestId: row.id } }).catch(() => {});
+        notifyUser({ user: a, requestId: row.id, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, confidential: !!row.confidential, requestId: row.id } }).catch(() => {});
       }
       count = approvers.length;
     }
@@ -1210,7 +1364,7 @@ router.post("/:id/force-finalize", authRequired, requireRole("admin"), async (re
     const approver  = await queryOne("SELECT * FROM users WHERE id = ?", [row.approver_id]);
     notifyUser({
       user: requestor, requestId: row.id, template: "approved",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: approver?.name, requestId: row.id }
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: approver?.name, requestId: row.id }
     }).catch(() => {});
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });

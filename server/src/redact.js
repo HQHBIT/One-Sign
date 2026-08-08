@@ -15,5 +15,5 @@ export function redactEmailBody(body) {
     .replace(/^(Password:\s*|New password:\s*).+$/gm, "$1••••••••")
     // Mask one-time reset codes. The reset OTP is a self-service secret — the log
     // must never expose a live code, or an admin could complete a user's reset.
-    .replace(/^(Reset code:\s*|Code:\s*|OTP:\s*).+$/gm, "$1••••••••");
+    .replace(/^(Reset code:\s*|Unlock code:\s*|Code:\s*|OTP:\s*).+$/gm, "$1••••••••");
 }

@@ -394,7 +394,129 @@ const templates = {
       `— ${BRAND.fromName}`,
     ].join("\n"),
   }),
+
+  // ---------- confidential documents ----------
+  // These templates deliberately NEVER carry the file name or note. A subject
+  // line like "PR Termination - <person>.pdf" would leak the substance to
+  // anyone who sees the inbox, defeating the point of marking it confidential.
+  confidential_unlock_code: (c) => ({
+    subject: `Your ${BRAND.fromName} document unlock code`,
+    html: layout({
+      preheader: "Your one-time code to open a confidential document",
+      pillHtml: pill("Confidential", "neutral"),
+      heading: "Your unlock code",
+      contentHtml:
+        greet(c.name) +
+        p(`Use the one-time code below to open the confidential document. It's valid for ${esc(String(c.minutes))} minutes, and the document stays open for 60 seconds once unlocked.`) +
+        details([{ label: "Unlock code", value: c.code }], { mono: true, accent: true }) +
+        caption("If you didn't ask to open a document, ignore this email — nothing has been opened."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `Use this one-time code to open the confidential document.`, ``,
+      `Unlock code: ${c.code}`,
+      `Valid for ${c.minutes} minutes. The document stays open for 60 seconds once unlocked.`, ``,
+      `If you didn't ask to open a document, ignore this email.`, ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  confidential_new_request: (c) => ({
+    subject: `A confidential document needs your signature`,
+    html: layout({
+      preheader: "A confidential document is waiting for you",
+      pillHtml: pill("Confidential", "neutral"),
+      heading: "A confidential document needs your signature",
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.requestorName || "A colleague")}</strong> has sent you a confidential document to sign.`) +
+        p(`Its name and contents are not included in this email. Open ${esc(BRAND.fromName)} and request an unlock code to view it.`) +
+        button("Open SignFlow", requestUrl(c), "gold"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.requestorName || "A colleague"} has sent you a confidential document to sign.`,
+      `Its name and contents are deliberately not included in this email.`, ``,
+      `Open ${BRAND.fromName} and request an unlock code to view it:`,
+      requestUrl(c), ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  confidential_your_turn: (c) => ({
+    subject: `Your signature is next on a confidential document`,
+    html: layout({
+      preheader: "A confidential document is waiting for your approval",
+      pillHtml: pill("Confidential", "neutral"),
+      heading: "Your signature is next",
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.previousSignerName || "The previous signer")}</strong> has signed the confidential document, and it is now waiting for your approval.`) +
+        p(`Its name and contents are not included in this email. Open ${esc(BRAND.fromName)} and request an unlock code to view it.`) +
+        button("Open SignFlow", requestUrl(c), "gold"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.previousSignerName || "The previous signer"} has signed the confidential document, and it is now waiting for your approval.`,
+      `Its name and contents are deliberately not included in this email.`, ``,
+      requestUrl(c), ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  confidential_approved: (c) => ({
+    subject: `Your confidential document has been signed`,
+    html: layout({
+      preheader: "Your confidential document is signed",
+      pillHtml: pill("Confidential", "approved"),
+      heading: "Your confidential document has been signed",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`<strong>${esc(c.approverName || "The approver")}</strong> has signed your confidential document.`) +
+        p(`Open ${esc(BRAND.fromName)} and request an unlock code to view or download it.`) +
+        button("Open SignFlow", requestUrl(c), "green"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `${c.approverName || "The approver"} has signed your confidential document.`, ``,
+      requestUrl(c), ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  confidential_rejected: (c) => ({
+    subject: `Your confidential document was rejected`,
+    html: layout({
+      preheader: "Your confidential document was rejected",
+      pillHtml: pill("Confidential", "rejected"),
+      heading: "Your confidential document was rejected",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`<strong>${esc(c.approverName || "The approver")}</strong> rejected your confidential document.`) +
+        p(`The reason is not included in this email. Open ${esc(BRAND.fromName)} to read it.`) +
+        button("Open SignFlow", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `${c.approverName || "The approver"} rejected your confidential document.`,
+      `The reason is deliberately not included in this email.`, ``,
+      requestUrl(c), ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
 };
+
+// Confidential requests swap in the redacted variant of whichever workflow
+// email would otherwise be sent. Called by notifyUser.
+export function confidentialTemplate(template) {
+  const map = {
+    new_request: "confidential_new_request",
+    your_turn: "confidential_your_turn",
+    approved: "confidential_approved",
+    rejected: "confidential_rejected",
+  };
+  return map[template] || template;
+}
 
 // Render a template without sending — used by the preview generator + tests.
 export function renderTemplate(template, ctx) {

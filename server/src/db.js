@@ -325,6 +325,39 @@ async function runSchema() {
   // Per-user toggle: receive workflow emails or not (in-app always arrives).
   await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
 
+  // ---------- confidential documents ----------
+  // The file is stored encrypted (see confidential.js) and the IT Admin is
+  // locked out in code. Viewing needs a fresh emailed code and lasts 60s.
+  await tryExec(`ALTER TABLE requests ADD COLUMN confidential TINYINT(1) NOT NULL DEFAULT 0`);
+
+  // An issued unlock code and, once used, the short window it opened. The code
+  // itself is never stored — only its bcrypt hash.
+  await tryExec(`CREATE TABLE IF NOT EXISTS confidential_unlocks (
+    id              VARCHAR(64)  NOT NULL PRIMARY KEY,
+    request_id      VARCHAR(64)  NOT NULL,
+    user_id         VARCHAR(64)  NOT NULL,
+    code_hash       VARCHAR(255) NOT NULL,
+    issued_at       BIGINT       NOT NULL,
+    code_expires_at BIGINT       NOT NULL,
+    consumed_at     BIGINT       DEFAULT NULL,
+    window_ends_at  BIGINT       DEFAULT NULL,
+    attempts        INT          NOT NULL DEFAULT 0,
+    INDEX idx_cu_req_user (request_id, user_id),
+    CONSTRAINT fk_cu_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    CONSTRAINT fk_cu_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Who opened what, and when. Records the ACT of access only — never content.
+  await tryExec(`CREATE TABLE IF NOT EXISTS confidential_access_log (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    request_id VARCHAR(64) NOT NULL,
+    user_id    VARCHAR(64) NOT NULL,
+    action     VARCHAR(24) NOT NULL,
+    at         BIGINT      NOT NULL,
+    ip         VARCHAR(64) DEFAULT NULL,
+    INDEX idx_cal_request (request_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
   // attaches a document and places boxes each time they use it.
@@ -647,6 +680,7 @@ export async function hydrateRequest(row) {
     hasSignedFile: !!row.signed_file_path && !/\.json$/i.test(row.signed_file_path),
     reminders: rems.map(r => Number(r.sent_at)),
     requestType: row.request_type || "general",
+    confidential: !!row.confidential,
     instantApproval: !!row.instant_approval,
     currentStep: Number(row.current_step || 0),
     workflow: stepsHydrated

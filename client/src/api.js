@@ -33,9 +33,18 @@ export const api = {
       throw Object.assign(new Error("Session expired"), { status: 401 });
     }
     if (!res.ok) {
-      let msg = res.statusText, code = null;
-      if (ct.includes("application/json")) { try { const b = await res.json(); msg = b.error || msg; code = b.code || null; } catch {} }
-      throw Object.assign(new Error(msg), { status: res.status, code });
+      let msg = res.statusText, code = null, needsUnlock = false, attemptsLeft;
+      if (ct.includes("application/json")) {
+        try {
+          const b = await res.json();
+          msg = b.error || msg; code = b.code || null;
+          // A locked confidential document isn't an error to shout about — the
+          // caller turns this into the unlock prompt.
+          needsUnlock = b.needsUnlock === true;
+          attemptsLeft = b.attemptsLeft;
+        } catch {}
+      }
+      throw Object.assign(new Error(msg), { status: res.status, code, needsUnlock, attemptsLeft });
     }
     if (opts.raw) return res;
     if (ct.includes("application/json")) return res.json();
@@ -181,7 +190,7 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation }) {
+  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation, confidential }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (rotation) fd.append("rotation", String(rotation));
@@ -195,6 +204,7 @@ export const api = {
     if (instantApproval) fd.append("instantApproval", "true");
     if (note) fd.append("note", note);
     if (requestType) fd.append("requestType", requestType);
+    if (confidential) fd.append("confidential", "true");
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
@@ -286,10 +296,21 @@ export const api = {
   */
 
   // -------- authenticated file blobs --------
-  async getRequestFileBlob(id, kind = "file") {
-    const res = await this.fetch(`/api/requests/${id}/${kind}`, { raw: true });
+  async getRequestFileBlob(id, kind = "file", { download = false } = {}) {
+    const res = await this.fetch(`/api/requests/${id}/${kind}${download ? "?download=1" : ""}`, { raw: true });
     const blob = await res.blob();
     return URL.createObjectURL(blob);
+  },
+
+  // -------- confidential documents --------
+  // Email a fresh unlock code, then exchange it for a 60-second viewing window.
+  async requestUnlockCode(id) {
+    return this.fetch(`/api/requests/${id}/unlock`, { method: "POST" });
+  },
+  async verifyUnlockCode(id, code) {
+    return this.fetch(`/api/requests/${id}/unlock/verify`, {
+      method: "POST", body: JSON.stringify({ code }),
+    });
   },
   async getSignatureBlob(userId) {
     try {

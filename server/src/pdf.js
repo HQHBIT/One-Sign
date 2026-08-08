@@ -45,8 +45,19 @@ export async function stampPdf({ srcPath, signaturePath, marker, outName }) {
 // native /Rotate (the requestor's rotate-control choice); placeInRotatedPage maps
 // each stamp so it lands upright on the displayed (rotated) page.
 export async function stampPdfMulti({ srcPath, stamps, outName }) {
-  const pdfBytes = await fs.readFile(srcPath);
-  const pdf = await PDFDocument.load(pdfBytes);
+  const out = await stampPdfMultiBytes({ srcBytes: await fs.readFile(srcPath), stamps });
+  await fs.mkdir(SIGNED_DIR, { recursive: true });
+  const outPath = path.join(SIGNED_DIR, outName);
+  await fs.writeFile(outPath, out);
+  return outPath;
+}
+
+// Same stamping, bytes in / bytes out. Confidential documents are decrypted into
+// memory, stamped here and re-encrypted before touching the disk, so a readable
+// copy never exists in the filesystem. stampPdfMulti is a thin wrapper over this
+// so both paths provably behave identically.
+export async function stampPdfMultiBytes({ srcBytes, stamps }) {
+  const pdf = await PDFDocument.load(srcBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
 
   const cache = new Map();
@@ -78,11 +89,7 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
     page.drawImage(sigImg, place);
   }
 
-  const out = await pdf.save();
-  await fs.mkdir(SIGNED_DIR, { recursive: true });
-  const outPath = path.join(SIGNED_DIR, outName);
-  await fs.writeFile(outPath, out);
-  return outPath;
+  return await pdf.save();
 }
 
 

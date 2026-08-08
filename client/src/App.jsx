@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -15,6 +15,7 @@ import {
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
+import { UnlockModal, UnlockCountdown, ConfidentialWatermark } from "./components/UnlockGate.jsx";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -430,7 +431,7 @@ export default function App() {
           ? <ApproveDrawer req={deepLinkReq} user={user} users={users} teams={teams}
               approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
               onClose={() => setDeepLinkReq(null)} notify={notify} />
-          : <PreviewDrawer req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
+          : <PreviewDrawer user={user} req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
       )}
       {user && updateReady && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-full pl-4 pr-2 py-2 shadow-lg text-sm"
@@ -1136,14 +1137,14 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
                       <Undo2 size={12} /> Withdraw
                     </button>
                   )}
-                  {r.hasSignedFile && <DownloadBtn req={r} />}
+                  {r.hasSignedFile && <DownloadBtn req={r} user={user} />}
                   {r.hasSignedFile && <PrintBtn req={r} />}
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -1160,14 +1161,14 @@ function ApprovedList({ items, teams, users, back, title = "Approved requests" }
               actions={(
                 <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
-                  <DownloadBtn req={r} />
+                  <DownloadBtn req={r} user={user} />
                   <PrintBtn req={r} />
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -1195,7 +1196,7 @@ function RejectedList({ items, teams, users, back }) {
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -1241,12 +1242,17 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
   return out;
 }
 
-function PreviewDrawer({ req, onClose, users, teams }) {
+function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
   const [leaveStyles, setLeaveStyles] = useState(null);
+  // Confidential documents load only inside a live unlock window. `locked` puts
+  // the code prompt up; `windowEndsAt` drives the countdown and re-locks at 0.
+  const [locked, setLocked] = useState(!!req.confidential);
+  const [windowEndsAt, setWindowEndsAt] = useState(null);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
+    if (locked) { setFile(null); return; }
     let url = null;
     (async () => {
       try {
@@ -1257,10 +1263,21 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         if (req.requestType === "leave" && req.fileType !== "pdf") {
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        // The window may have lapsed between unlocking and loading — ask again
+        // rather than showing a blank drawer.
+        if (e.needsUnlock) { setLocked(true); setWindowEndsAt(null); }
+        else console.error(e);
+      }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [req.id, req.hasSignedFile]);
+  }, [req.id, req.hasSignedFile, locked]);
+
+  // When the window lapses the document is pulled from view immediately — the
+  // bytes are already in the browser, so this is about not leaving it on screen.
+  const relock = useCallback(() => {
+    setFile(null); setWindowEndsAt(null); setLocked(true);
+  }, []);
 
   const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams);
 
@@ -1284,16 +1301,26 @@ function PreviewDrawer({ req, onClose, users, teams }) {
             )}
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
         </div>
         <div className="p-4 sm:p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
-          {file ? (
-            <Suspense fallback={<ViewerFallback />}>
-              <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
-            </Suspense>
+          {locked ? (
+            <div className="card p-8 text-center">
+              <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
+              <div className="text-sm font-medium">This document is locked</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it for 60 seconds.</div>
+            </div>
+          ) : file ? (
+            <div style={{ position: "relative" }}>
+              {req.confidential && <ConfidentialWatermark name={user?.name || ""} />}
+              <Suspense fallback={<ViewerFallback />}>
+                <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+              </Suspense>
+            </div>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
           {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
@@ -1305,6 +1332,11 @@ function PreviewDrawer({ req, onClose, users, teams }) {
           )}
         </div>
       </div>
+      {locked && (
+        <UnlockModal requestId={req.id}
+          onUnlocked={endsAt => { setWindowEndsAt(endsAt); setLocked(false); }}
+          onCancel={onClose} />
+      )}
     </div>
   );
 }
@@ -1720,9 +1752,15 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
+  // Confidential documents need a live unlock window before they can be read —
+  // and the server refuses to APPROVE without one too, so the gate has to be
+  // cleared before the approve buttons can do anything.
+  const [locked, setLocked] = useState(!!req.confidential);
+  const [windowEndsAt, setWindowEndsAt] = useState(null);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
+    if (locked) { setFile(null); return; }
     let url = null;
     (async () => {
       try {
@@ -1733,10 +1771,15 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         if (req.requestType === "leave" && req.fileType !== "pdf") {
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        if (e.needsUnlock) { setLocked(true); setWindowEndsAt(null); }
+        else console.error(e);
+      }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [req.id, req.hasSignedFile]);
+  }, [req.id, req.hasSignedFile, locked]);
+
+  const relock = useCallback(() => { setFile(null); setWindowEndsAt(null); setLocked(true); }, []);
 
   const pendingApproved = req.status === "approved_pending";
 
@@ -1813,7 +1856,8 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            {canApprove && markers.length > 0 && (
+            {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
+            {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
                 <ChevronDown size={13} /> <span className="hidden sm:inline">Go to signature</span>
@@ -1827,16 +1871,25 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {/* ── Single scrollable body ── */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? (
-            <Suspense fallback={<ViewerFallback />}>
-              <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
-            </Suspense>
+          {locked ? (
+            <div className="card p-8 text-center">
+              <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
+              <div className="text-sm font-medium">This document is locked</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view and sign it.</div>
+            </div>
+          ) : file ? (
+            <div style={{ position: "relative" }}>
+              {req.confidential && <ConfidentialWatermark name={user?.name || ""} />}
+              <Suspense fallback={<ViewerFallback />}>
+                <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
+              </Suspense>
+            </div>
           ) : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
 
         {/* ── Pinned action bar(s) ── */}
-        {canApprove && (
+        {canApprove && !locked && (
           <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3"
             style={{
               borderColor: "var(--c-ink-10)",
@@ -1926,6 +1979,11 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           </div>
         </div>
       )}
+      {locked && (
+        <UnlockModal requestId={req.id}
+          onUnlocked={endsAt => { setWindowEndsAt(endsAt); setLocked(false); }}
+          onCancel={onClose} />
+      )}
     </div>
   );
 }
@@ -1954,14 +2012,14 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
                   ) : (
                     <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   )}
-                  <DownloadBtn req={r} />
+                  <DownloadBtn req={r} user={user} />
                   <PrintBtn req={r} />
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
       {act && <ApproveDrawer req={act} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
         onClose={() => setActId(null)} notify={notify} />}
@@ -1988,7 +2046,7 @@ function ApproverRejected({ items, back, users, teams }) {
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -3593,7 +3651,7 @@ function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
+              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} user={user} /><PrintBtn req={r} /></div>} />
           ))}
       </div>
     </div>

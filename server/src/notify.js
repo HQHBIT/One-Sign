@@ -7,13 +7,15 @@
 //   invites, password reset / OTP) do NOT go through here — they always send.
 // ============================================================
 import { execute, queryOne } from "./db.js";
-import { sendEmail } from "./email.js";
+import { sendEmail, confidentialTemplate } from "./email.js";
 
 const uid = (p = "n") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
 // Compact in-app title/body per template, derived from the same ctx the email uses.
 function inAppText(template, ctx = {}) {
-  const f = ctx.fileName || "a document";
+  // Confidential documents are never named — not in the email, and not in the
+  // in-app notification either, which is visible in the bell dropdown.
+  const f = ctx.confidential ? "a confidential document" : (ctx.fileName || "a document");
   switch (template) {
     case "new_request":
       return { title: `New signature request: ${f}`, body: `${ctx.requestorName || "Someone"} sent "${f}" for your signature.` };
@@ -50,5 +52,8 @@ export async function notifyUser({ user, template, ctx = {}, requestId = null })
   // Email: only when the recipient hasn't turned it off (default = on).
   const emailOn = row.email_notifications == null || Number(row.email_notifications) === 1;
   if (!emailOn) return { delivered: false, skipped: "email notifications off" };
-  return sendEmail({ to: row.email, template, ctx });
+  // Confidential requests swap to the redacted template, which carries neither
+  // the file name nor the note.
+  const tpl = ctx.confidential ? confidentialTemplate(template) : template;
+  return sendEmail({ to: row.email, template: tpl, ctx });
 }

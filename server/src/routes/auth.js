@@ -1,6 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { isEnabled as confidentialEnabled } from "../confidential.js";
 import { queryOne, query, hydrateUser, execute } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
@@ -20,6 +21,9 @@ router.get("/config", (req, res) => {
     oneAccessEnabled: oneAccessEnabled(),
     localLoginEnabled: localLoginEnabled(),
     oneAccessStartUrl: oneAccessEnabled() ? "/api/auth/oneaccess/start" : null,
+    // Whether this server holds a CONFIDENTIAL_KEY. When false the client hides
+    // the Confidential toggle rather than offering protection it cannot deliver.
+    confidentialEnabled: confidentialEnabled(),
   });
 });
 

@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useMemo, Suspense, lazy } from "react";
 import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
-  Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown
+  Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
 import { BackHeader } from "../components/BackHeader.jsx";
@@ -31,6 +31,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
   const [mode, setMode] = useState(presetWorkflow ? "workflow" : "single"); // "single" | "workflow" | "direct"
   const [requestType, setRequestType] = useState(defaultType || "general");
+  // Confidential: encrypted at rest, IT Admin locked out, and every view
+  // needs a fresh emailed code. Hidden unless the server has a key configured.
+  const [confidential, setConfidential] = useState(false);
+  const [confAvailable, setConfAvailable] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -78,6 +82,12 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     api.getSignatureBlob(user.id).then(u => { if (cancelled) { if (u) URL.revokeObjectURL(u); return; } url = u; setMySigUrl(u); }).catch(() => {});
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
   }, [file?.ext, user.hasSignature, user.id]);
+
+  // Is confidential storage configured on this server? If not, the toggle is
+  // hidden rather than offering a guarantee the backend cannot honour.
+  useEffect(() => {
+    api.authConfig().then(c => setConfAvailable(!!c.confidentialEnabled)).catch(() => setConfAvailable(false));
+  }, []);
 
   // Debounced directory search for "send to a specific person".
   useEffect(() => {
@@ -446,10 +456,10 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       const sdArg = signerDateFields.length > 0 ? signerDateFields : undefined;
       if (mode === "single") {
         if (!canSubmitSingle) { notify("Complete all steps first", "error"); return; }
-        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: markers, selfMarks: selfArg, signerDateFields: sdArg, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, targetTeamId: targetTeam, marker: markers, selfMarks: selfArg, signerDateFields: sdArg, note, requestType, rotation: docRotation, confidential });
       } else if (mode === "direct") {
         if (!canSubmitDirect) { notify("Add at least one person and place each of their signature boxes", "error"); return; }
-        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, boxes: s.boxes || [], dateFields: s.dateFields || [] })), selfMarks: selfArg, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, direct: true, signers: directSigners.map(s => ({ userId: s.userId, boxes: s.boxes || [], dateFields: s.dateFields || [] })), selfMarks: selfArg, note, requestType, rotation: docRotation, confidential });
       } else {
         if (!canSubmitWorkflow) { notify("Complete the workflow — every signer needs a placed signature", "error"); return; }
         // Legacy x/y/w/h carries the first box for back-compat; boxes[] is the full list.
@@ -460,7 +470,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             return { userId: s.userId, page: b0.page || 1, x: b0.x, y: b0.y, w: b0.w, h: b0.h, boxes: s.boxes, dateFields: s.dateFields || [] };
           })
         }));
-        await addRequest({ file: submitFile, workflow: wfPayload, selfMarks: selfArg, note, requestType, rotation: docRotation });
+        await addRequest({ file: submitFile, workflow: wfPayload, selfMarks: selfArg, note, requestType, rotation: docRotation, confidential });
       }
       notify("Request submitted", "success");
       onDone();
@@ -498,6 +508,27 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 );
               })}
             </div>
+
+            {/* Confidential — encrypted at rest, admin locked out, code needed to
+                view. Hidden entirely when the server holds no key, so we never
+                promise protection the backend cannot deliver. */}
+            {confAvailable && (
+              <label className="card p-4 mt-3 flex items-start gap-3 cursor-pointer tile-hover"
+                style={{ borderLeft: "4px solid var(--c-gold)", backgroundColor: confidential ? "rgba(184,137,74,.08)" : undefined }}>
+                <input type="checkbox" className="mt-1" checked={confidential}
+                  onChange={e => setConfidential(e.target.checked)} />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium flex items-center gap-1.5">
+                    <Lock size={13} style={{ color: "var(--c-gold)" }} /> Confidential document
+                  </div>
+                  <div className="text-xs opacity-60 mt-0.5">
+                    Stored encrypted. Only you and the signers can open it — IT support cannot view or
+                    recover it. Each viewing needs a fresh code emailed to the viewer, and the document
+                    stays open for 60 seconds.
+                  </div>
+                </div>
+              </label>
+            )}
           </Section>
 
           {/* 1. upload (every request type, including leave, uploads its own document) */}
