@@ -107,6 +107,11 @@ r = await fetch(`${B}/api/requests/${id}/approve`, {
 ck(r.status === 403, "approve is refused without a live window (" + r.status + ")");
 
 // ---------- 4. wrong codes are counted and capped ----------
+// A oneAccess user who set a work email has their OLD address demoted to
+// secondary_email. The code must go to the WORK address (users.email) — sending
+// it to the superseded one makes the document permanently unopenable for them.
+await execute("UPDATE users SET secondary_email = 'stale.old@onelogin.com' WHERE id = 'u_ca'");
+
 r = await fetch(`${B}/api/requests/${id}/unlock`, { method: "POST", headers: auth("u_ca") });
 ck(r.status === 200, "code issued (" + r.status + ")");
 const issued = await r.json();
@@ -129,6 +134,10 @@ const mail = await queryOne(
   "SELECT * FROM emails WHERE to_email=? AND template='confidential_unlock_code' ORDER BY sent_at DESC LIMIT 1",
   ["u_ca.conf@hqhb.in"]);
 ck(!!mail, "an unlock email was recorded");
+ck(mail?.to_email === "u_ca.conf@hqhb.in",
+   "*** the code went to the WORK email, not the superseded oneAccess one *** (" + mail?.to_email + ")");
+const stale = await queryOne("SELECT id FROM emails WHERE to_email='stale.old@onelogin.com'");
+ck(!stale, "nothing was ever sent to the superseded address");
 ck(!mail.subject.includes(FILE_NAME) && !mail.body.includes(FILE_NAME), "the unlock email never names the document");
 ck(/Unlock code:\s*••/.test(mail.body), "*** the stored copy has the code MASKED *** (" + (mail.body.match(/Unlock code:.*/) || [""])[0].trim() + ")");
 
@@ -231,6 +240,13 @@ ck(r.status === 200, "admin still opens ordinary documents");
 await execute("DELETE FROM notifications WHERE request_id=?", [ordId]);
 await execute("DELETE FROM requests WHERE id=?", [ordId]);
 await fs.unlink(path.join(DOCS, ord.file_path)).catch(() => {});
+
+// ---------- 13. a placeholder oneAccess address fails loudly ----------
+await execute("UPDATE users SET email = 'u_ca.12345@oneaccess.local' WHERE id = 'u_ca'");
+r = await fetch(`${B}/api/requests/${id}/unlock`, { method: "POST", headers: auth("u_ca") });
+ck(r.status === 400 && (await r.json()).code === "no_work_email",
+   "a user with no work email is told so, not left waiting for a code that cannot arrive");
+await execute("UPDATE users SET email = 'u_ca.conf@hqhb.in' WHERE id = 'u_ca'");
 
 console.log(fail.length ? `\n${fail.length} check(s) failed` : "\nCONFIDENTIAL DOCUMENTS E2E PASSED");
 await clean();

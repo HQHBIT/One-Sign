@@ -768,6 +768,22 @@ router.post("/:id/unlock", authRequired, async (req, res, next) => {
     // viewing: only participants may request a code. Admins are not participants.
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
 
+    // users.email is the WORK email — setting one promotes it to `email` and
+    // demotes the old oneAccess address to secondary_email (see auth.js
+    // /me/work-email). Every other notification uses `email`; this must too, or
+    // the code goes to the superseded @onelogin.com address the user can't read.
+    // oneAccess users who never captured a work email carry a placeholder
+    // @oneaccess.local address; fail loudly rather than leaving them waiting for
+    // a code that can never arrive. Checked BEFORE issuing, so an undeliverable
+    // request neither writes a row nor consumes their rate limit.
+    const to = req.userRow?.email;
+    if (!to || /@oneaccess\.local$/i.test(to)) {
+      return res.status(400).json({
+        error: "Add your work email address before opening confidential documents",
+        code: "no_work_email"
+      });
+    }
+
     const since = Date.now() - UNLOCK_ISSUE_WINDOW_MS;
     const recent = await queryOne(
       "SELECT COUNT(*) AS n FROM confidential_unlocks WHERE request_id = ? AND user_id = ? AND issued_at > ?",
@@ -785,7 +801,6 @@ router.post("/:id/unlock", authRequired, async (req, res, next) => {
       [uid("cu"), row.id, req.user.id, bcrypt.hashSync(code, 10), now, now + UNLOCK_CODE_TTL_MS]
     );
 
-    const to = req.userRow?.secondary_email || req.userRow?.email;
     // Sent directly, NOT via notifyUser: an unlock code must arrive even when
     // the user has switched workflow email notifications off.
     await sendEmail({
