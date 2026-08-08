@@ -22,23 +22,42 @@ const IV_LEN = 12;       // 96-bit nonce, the GCM standard
 const TAG_LEN = 16;
 const HEADER_LEN = 3 + IV_LEN;
 
+// The AES key is DERIVED from CONFIDENTIAL_KEY rather than being it verbatim.
+// Demanding an exact 32-byte base64 blob made deployment fragile: a BOM, a
+// trailing newline or a shell's encoding silently produced the wrong bytes and
+// the feature just stayed off. scrypt accepts any sufficiently long secret and
+// always yields exactly 32 bytes, with no entropy lost for a random input.
+//
+// Fixed salt: there is one key per deployment, so a salt adds nothing here —
+// its usual job (stopping one rainbow table covering many users) doesn't apply.
+const KDF_SALT = Buffer.from("signflow.confidential.v1");
+const MIN_SECRET_CHARS = 24;
+
 let cachedKey = null;
 let cachedRaw = null;
 
-/** The 32-byte key, or null when unset/malformed. Re-read if the env changes (tests). */
+/** Normalise away the things that broke this before: BOM, quotes, whitespace. */
+function rawSecret() {
+  return (process.env.CONFIDENTIAL_KEY || "")
+    .replace(/^﻿/, "")     // UTF-8 BOM, courtesy of PowerShell redirection
+    .replace(/^['"]|['"]$/g, "") // stray quotes from a shell that kept them
+    .trim();
+}
+
+/** The derived 32-byte key, or null when the secret is unset or too short. */
 function key() {
-  const raw = process.env.CONFIDENTIAL_KEY || "";
+  const raw = rawSecret();
   if (!raw) { cachedRaw = null; cachedKey = null; return null; }
-  if (raw === cachedRaw) return cachedKey;
-  let buf;
-  try { buf = Buffer.from(raw, "base64"); } catch { return null; }
-  if (buf.length !== 32) {
-    console.warn(`[confidential] CONFIDENTIAL_KEY must be 32 bytes base64, got ${buf.length} — feature disabled`);
+  if (raw.length < MIN_SECRET_CHARS) {
+    console.warn(`[confidential] CONFIDENTIAL_KEY is only ${raw.length} characters; at least ${MIN_SECRET_CHARS} random characters are required — feature disabled`);
     cachedRaw = raw; cachedKey = null;
     return null;
   }
-  cachedRaw = raw; cachedKey = buf;
-  return buf;
+  if (raw === cachedRaw && cachedKey) return cachedKey;
+  // Derived once and cached — scrypt is deliberately slow.
+  cachedKey = crypto.scryptSync(raw, KDF_SALT, 32, { N: 16384, r: 8, p: 1 });
+  cachedRaw = raw;
+  return cachedKey;
 }
 
 /**
@@ -57,10 +76,10 @@ export function isEnabled() {
  * never any part of it.
  */
 export function keyStatus() {
-  const raw = process.env.CONFIDENTIAL_KEY || "";
+  const raw = rawSecret();
   if (!raw) return "not_set";
-  const len = Buffer.from(raw, "base64").length;
-  return len === 32 ? "ok" : `bad_length_${len}_expected_32`;
+  if (raw.length < MIN_SECRET_CHARS) return `too_short_${raw.length}_need_${MIN_SECRET_CHARS}`;
+  return "ok";
 }
 
 /** Does this buffer carry our envelope? */

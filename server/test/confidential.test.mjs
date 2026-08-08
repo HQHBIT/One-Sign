@@ -49,11 +49,42 @@ ck(threw(() => C.decryptBuffer(otherKeyId)), "unknown key id is rejected, not si
 // --- fail closed ---
 delete process.env.CONFIDENTIAL_KEY;
 ck(C.isEnabled() === false, "disabled when the key is absent");
+ck(C.keyStatus() === "not_set", "status says not_set");
 ck(threw(() => C.encryptBuffer(plain)), "refuses to encrypt without a key (never silent plaintext)");
-process.env.CONFIDENTIAL_KEY = Buffer.alloc(16, 1).toString("base64");
-ck(C.isEnabled() === false, "disabled when the key is the wrong length");
+process.env.CONFIDENTIAL_KEY = "tooshort";
+ck(C.isEnabled() === false, "disabled when the secret is too short to be safe");
+ck(/^too_short_8_/.test(C.keyStatus()), "status explains why: " + C.keyStatus());
 process.env.CONFIDENTIAL_KEY = KEY;
-ck(C.isEnabled() === true, "re-enabled once a valid key returns");
+ck(C.isEnabled() === true, "re-enabled once a usable secret returns");
+ck(C.keyStatus() === "ok", "status says ok");
+
+// --- the secret is DERIVED, so real-world paste damage no longer breaks it ---
+// These are the exact failures seen in production: a BOM from PowerShell
+// redirection, wrapping quotes, and trailing whitespace/newlines.
+const base = "a".repeat(20) + "Zx9/+Qw=";
+const variants = {
+  "plain":            base,
+  "UTF-8 BOM":        "﻿" + base,
+  "double quoted":    '"' + base + '"',
+  "single quoted":    "'" + base + "'",
+  "trailing newline": base + String.fromCharCode(10),
+  "leading space":    "  " + base,
+  "CRLF":             base + String.fromCharCode(13, 10),
+};
+process.env.CONFIDENTIAL_KEY = base;
+const canonical = C.encryptBuffer(plain);
+for (const [label, v] of Object.entries(variants)) {
+  process.env.CONFIDENTIAL_KEY = v;
+  ck(C.isEnabled() === true, `accepts a secret with ${label}`);
+  let ok = false;
+  try { ok = C.decryptBuffer(canonical).equals(plain); } catch { ok = false; }
+  ck(ok, `${label} derives the SAME key (no silent data loss)`);
+}
+
+// A different secret must NOT open it — derivation isn't collapsing inputs.
+process.env.CONFIDENTIAL_KEY = "b".repeat(20) + "Zx9/+Qw=";
+ck(threw(() => C.decryptBuffer(canonical)), "a different secret cannot open the document");
+process.env.CONFIDENTIAL_KEY = KEY;
 
 // --- pass-through helpers ---
 ck(C.sealIfConfidential(plain, false).equals(plain), "non-confidential content is stored as-is");

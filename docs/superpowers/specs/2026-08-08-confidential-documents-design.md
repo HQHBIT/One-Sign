@@ -234,6 +234,13 @@ email would bypass the unlock gate entirely.
 
 ## 5. Key management
 
+`CONFIDENTIAL_KEY` is a **secret string, not a raw key**. The AES key is derived
+from it with scrypt, so any sufficiently long random value works — at least 24
+characters. Demanding an exact 32-byte base64 blob proved fragile in practice: a
+BOM from PowerShell redirection, a trailing newline or wrapping quotes silently
+produced the wrong bytes and the feature simply stayed off. A BOM, quotes and
+surrounding whitespace are now stripped before derivation.
+
 Generate:
 
 ```bash
