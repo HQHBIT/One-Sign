@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import { isEnabled as confidentialEnabled } from "../confidential.js";
+import { isEnabled as confidentialEnabled, keyStatus as confidentialKeyStatus } from "../confidential.js";
 import { queryOne, query, hydrateUser, execute } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
@@ -24,6 +24,9 @@ router.get("/config", (req, res) => {
     // Whether this server holds a CONFIDENTIAL_KEY. When false the client hides
     // the Confidential toggle rather than offering protection it cannot deliver.
     confidentialEnabled: confidentialEnabled(),
+    // Diagnostic only — decoded byte length, never the key itself. A
+    // fail-closed feature is silent when misconfigured; this says why.
+    confidentialKey: confidentialKeyStatus(),
   });
 });
 

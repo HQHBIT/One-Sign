@@ -50,6 +50,19 @@ export function isEnabled() {
   return key() !== null;
 }
 
+/**
+ * Why the feature is off, for diagnostics. A fail-closed feature is invisible
+ * when misconfigured, so "it isn't working" needs an answer that doesn't
+ * require reading server logs. Reports the DECODED LENGTH only — never the key,
+ * never any part of it.
+ */
+export function keyStatus() {
+  const raw = process.env.CONFIDENTIAL_KEY || "";
+  if (!raw) return "not_set";
+  const len = Buffer.from(raw, "base64").length;
+  return len === 32 ? "ok" : `bad_length_${len}_expected_32`;
+}
+
 /** Does this buffer carry our envelope? */
 export function looksEncrypted(buf) {
   return Buffer.isBuffer(buf) && buf.length > HEADER_LEN + TAG_LEN && buf[0] === MAGIC;
