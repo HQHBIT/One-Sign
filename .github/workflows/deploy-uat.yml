@@ -2,6 +2,9 @@ name: Deploy OneSign to EC2 (UAT)
 on:
   push:
     branches: [UAT]
+  # Secrets change without any code changing. A manual run lets a rotated
+  # key reach the server without inventing a dummy commit.
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -69,8 +72,10 @@ jobs:
           target: "/home/ubuntu/OneSign"
           overwrite: true
 
-      - name: Restart backend on EC2
-        if: steps.changes.outputs.server == 'true'
+      # Always runs: this step syncs secrets into .env, and a secret can change
+      # with no server file touched. Gating it on server changes meant a rotated
+      # key silently never applied. Restart is a couple of seconds via pm2.
+      - name: Sync secrets and restart backend on EC2
         uses: appleboy/ssh-action@v1
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
