@@ -15,3 +15,7 @@ client/public/pdf.worker.min.js
 
 # oneAccess public key cache (fetched at runtime)
 server/keys/
+
+# Locally generated CONFIDENTIAL_KEY, en route to the password manager.
+# Must never be committed — it decrypts every confidential document.
+confidential-key.txt
