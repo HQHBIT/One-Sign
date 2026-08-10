@@ -117,7 +117,9 @@ export function signerBoxes(s) {
 //   window, opened by entering a code emailed to them moments earlier. This
 //   gates the API, not the cryptography — see docs/…/confidential-documents.
 // ============================================================
-const UNLOCK_WINDOW_MS = 60_000;      // how long the document stays viewable
+// 120s, raised from 60s on 2026-08-10: the shorter window kept expiring
+// mid-read for real approvers, forcing a fresh code every time.
+const UNLOCK_WINDOW_MS = 120_000;     // how long the document stays viewable
 const UNLOCK_CODE_TTL_MS = 5 * 60_000; // how long the emailed code stays usable
 const UNLOCK_MAX_ATTEMPTS = 5;
 const UNLOCK_MAX_ISSUES = 5;

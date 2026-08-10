@@ -524,7 +524,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                   <div className="text-xs opacity-60 mt-0.5">
                     {confidential
                       ? "The approver will need MFA through an OTP to view this document. Stored encrypted — IT support cannot view or recover it. Untick to make this an ordinary request."
-                      : "Stored encrypted. Only you and the signers can open it — IT support cannot view or recover it. Each viewing needs a fresh code emailed to the viewer, and the document stays open for 60 seconds."}
+                      : "Stored encrypted. Only you and the signers can open it — IT support cannot view or recover it. Each viewing needs a fresh code emailed to the viewer, and the document stays open for 2 minutes."}
                   </div>
                 </div>
               </label>

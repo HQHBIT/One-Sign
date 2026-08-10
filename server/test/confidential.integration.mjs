@@ -160,7 +160,7 @@ r = await fetch(`${B}/api/requests/${id}/unlock/verify`, {
   method: "POST", headers: { ...auth("u_ca"), "Content-Type": "application/json" }, body: JSON.stringify({ code: KNOWN }) });
 ck(r.status === 200, "the right code is accepted (" + r.status + ")");
 const win = await r.json();
-ck(win.windowMs === 60000, "the window is 60 seconds, got " + win.windowMs);
+ck(win.windowMs === 120000, "the window is 2 minutes, got " + win.windowMs);
 
 // ---------- 6. inside the window the document opens and decrypts correctly ----------
 r = await fetch(`${B}/api/requests/${id}/file`, { headers: auth("u_ca") });

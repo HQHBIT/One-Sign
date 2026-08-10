@@ -52,7 +52,7 @@ email. This is why Phase 2 uses a user-chosen passphrase rather than a code.
 |---|---|---|
 | Key custody | Server-held, in `CONFIDENTIAL_KEY` env var | Phase 1 scope; Phase 2 moves it to the user. |
 | Step-up factor | Emailed 6-digit code only | Owner's choice. Passkey step-up was offered and declined; it remains available for Phase 2. |
-| Unlock window | 60 seconds | Owner's choice, chosen deliberately after a shorter-than-recommended window was flagged. |
+| Unlock window | 120 seconds (raised from 60 on 2026-08-10) | Owner's choice. The original 60s kept expiring mid-read in real use — the flagged risk materialised — and was doubled at the owner's request. |
 | Download | Requestor only, and only once `status = 'approved'` | A downloaded copy escapes every control here. |
 | Printing | Disabled entirely for confidential documents | Printing is a copy. |
 | Executive Assistants | Excluded, even with `can_view` delegated | Widening the circle undermines the guarantee. |
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS confidential_unlocks (
   issued_at       BIGINT NOT NULL,
   code_expires_at BIGINT NOT NULL,         -- issued_at + 5 min, to enter the code
   consumed_at     BIGINT DEFAULT NULL,
-  window_ends_at  BIGINT DEFAULT NULL,     -- consumed_at + 60_000
+  window_ends_at  BIGINT DEFAULT NULL,     -- consumed_at + UNLOCK_WINDOW_MS (120s)
   attempts        INT NOT NULL DEFAULT 0,
   INDEX idx_cu_req_user (request_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -159,7 +159,7 @@ enumerate addresses.
 **`POST /api/requests/:id/unlock/verify`** `{ code }` — opens the window.
 Rejects if the code has expired (5 minutes), is already consumed, or `attempts >= 5`. Every failure
 increments `attempts` and logs `unlock_fail`. On success sets `consumed_at` and
-`window_ends_at = now + 60_000`, returns `{ windowEndsAt }`.
+`window_ends_at = now + 120_000`, returns `{ windowEndsAt }`.
 
 **Every read of a confidential document** — `GET /:id/file`, `GET /:id/signed`, and the approve
 route — requires a live window for that user:
@@ -174,8 +174,8 @@ prompt rather than a generic failure.
 
 Approving requires a live window too — you cannot sign what you are not currently permitted to see.
 
-**The clock starts at verification**, immediately before the document loads, so the 60 seconds is
-60 seconds of actual visibility rather than being partly consumed by the email round trip.
+**The clock starts at verification**, immediately before the document loads, so the window is
+120 seconds of actual visibility rather than being partly consumed by the email round trip.
 
 **The requestor is not exempt.** Re-opening their own confidential document later requires a code
 just as an approver does — otherwise the guarantee is only as strong as the raiser's session.
@@ -261,7 +261,7 @@ password manager before the feature is switched on. This is the operational cost
 | `CONFIDENTIAL_KEY` absent | Toggle hidden; `confidential=true` rejected with a clear error. Existing confidential documents return 503, never plaintext. |
 | Wrong or rotated key | GCM tag check fails; 500 with "Could not open this document". Never a partial or garbled file. |
 | Code expired (5 min) | 400 `code_expired`; client offers resend. |
-| Window expired (60 s) | 403 `locked`; viewer blanks, client offers a new code. |
+| Window expired (120 s) | 403 `locked`; viewer blanks, client offers a new code. |
 | 5 failed attempts | Row is dead; a new code must be issued. Logged as `unlock_fail`. |
 | More than 5 codes / 15 min | 429. |
 | Legacy plaintext file | `readMaybe` returns it unchanged — no migration needed. |
@@ -276,7 +276,7 @@ Server, as integration tests beside the existing suite:
 3. The signed output is encrypted too, and no plaintext file is left in `uploads/`.
 4. Admin gets 403 on the file and sees "Confidential document" instead of the name.
 5. A participant without a live window gets 403 `needsUnlock`; with one, 200.
-6. The window expires after 60 s — same request, 403 afterwards.
+6. The window expires when window_ends_at passes — same request, 403 afterwards.
 7. Wrong code increments attempts; the 6th attempt is refused.
 8. A 6th code request inside 15 minutes returns 429.
 9. Approve is refused without a live window.
@@ -296,8 +296,9 @@ a key-id byte so rotation is possible later without re-designing storage.
 
 ## 9. Risks
 
-- **60 seconds may prove too short** to read a multi-page requisition. Mitigated by one-click
-  resend; revisit after real use. Flagged before the decision, chosen deliberately.
+- ~~60 seconds may prove too short~~ It was: the window kept expiring mid-read, and was raised
+  to 120 seconds on 2026-08-10. If two minutes also proves short, the next step is an in-window
+  one-click extension rather than a longer default.
 - **The code shares a channel with sign-in.** oneAccess authenticates against the same mailbox, so
   whoever controls the email controls both factors. Accepted; passkey step-up in Phase 2 fixes it.
 - **Phase 1 does not meet the literal "not even Admin" bar** against someone with server access.

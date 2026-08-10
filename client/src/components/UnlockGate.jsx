@@ -82,7 +82,7 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
           <form onSubmit={verify}>
             <p className="text-sm opacity-70 mt-2 mb-4">
               A 6-digit code has been sent to <strong>{sentTo}</strong>. The document stays open for
-              {" "}<strong>60 seconds</strong> once unlocked.
+              {" "}<strong>2 minutes</strong> once unlocked.
             </p>
             <input
               ref={inputRef} value={code} inputMode="numeric" autoComplete="one-time-code"
@@ -128,8 +128,8 @@ export function ConfidentialPrompt({ onChoose }) {
 
         <p className="text-sm opacity-75 mb-3">
           If you proceed, <strong>the approver will need MFA through an OTP in order to view your
-          document</strong> — a 6-digit code is emailed to them, and the document stays open for 60
-          seconds once they enter it.
+          document</strong> — a 6-digit code is emailed to them, and the document stays open for
+          2 minutes once they enter it.
         </p>
         <ul className="text-xs opacity-70 mb-5 space-y-1.5 pl-4" style={{ listStyle: "disc" }}>
           <li>The file is stored encrypted.</li>

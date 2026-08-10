@@ -407,7 +407,7 @@ const templates = {
       heading: "Your unlock code",
       contentHtml:
         greet(c.name) +
-        p(`Use the one-time code below to open the confidential document. It's valid for ${esc(String(c.minutes))} minutes, and the document stays open for 60 seconds once unlocked.`) +
+        p(`Use the one-time code below to open the confidential document. It's valid for ${esc(String(c.minutes))} minutes, and the document stays open for 2 minutes once unlocked.`) +
         details([{ label: "Unlock code", value: c.code }], { mono: true, accent: true }) +
         caption("If you didn't ask to open a document, ignore this email — nothing has been opened."),
     }),
@@ -415,7 +415,7 @@ const templates = {
       `${BRAND.greeting} ${c.name}`, ``,
       `Use this one-time code to open the confidential document.`, ``,
       `Unlock code: ${c.code}`,
-      `Valid for ${c.minutes} minutes. The document stays open for 60 seconds once unlocked.`, ``,
+      `Valid for ${c.minutes} minutes. The document stays open for 2 minutes once unlocked.`, ``,
       `If you didn't ask to open a document, ignore this email.`, ``,
       `— ${BRAND.fromName}`,
     ].join("\n"),

@@ -1334,7 +1334,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
               <div className="text-sm font-medium">This document is locked</div>
-              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it for 60 seconds.</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it for 2 minutes.</div>
             </div>
           ) : file ? (
             <div style={{ position: "relative" }}>
