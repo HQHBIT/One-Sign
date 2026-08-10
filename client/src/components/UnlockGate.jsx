@@ -178,22 +178,17 @@ export function UnlockCountdown({ endsAt, onExpire }) {
   );
 }
 
-/** Diagonal watermark naming the viewer — deters and attributes screen capture. */
-export function ConfidentialWatermark({ name }) {
-  const stamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
-  const text = `CONFIDENTIAL · ${name} · ${stamp}`;
+/**
+ * The word "Confidential" wherever the request appears — rows and drawer
+ * headers. Replaced the diagonal on-document watermark at the owner's request
+ * (2026-08-10): the label moved off the document and onto the request.
+ */
+export function ConfidentialBadge() {
   return (
-    <div aria-hidden="true" style={{
-      position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5,
-      overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{
-        transform: "rotate(-28deg)", whiteSpace: "nowrap", opacity: 0.13,
-        fontSize: "clamp(11px, 1.6vw, 17px)", fontWeight: 700, letterSpacing: ".14em",
-        color: "var(--c-ink)", lineHeight: 2.6, textAlign: "center",
-      }}>
-        {Array.from({ length: 9 }, (_, i) => <div key={i}>{text}&nbsp;&nbsp;·&nbsp;&nbsp;{text}</div>)}
-      </div>
-    </div>
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full shrink-0 text-[10px] font-semibold tracking-wider uppercase"
+      style={{ backgroundColor: "rgba(184,137,74,.16)", color: "#8B6914" }}
+      title="Confidential — encrypted, and a fresh code is needed to open it">
+      <Lock size={10} /> Confidential
+    </span>
   );
 }

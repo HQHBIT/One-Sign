@@ -34,8 +34,10 @@ This is the single most important section. It must not be softened later.
 
 - Anyone with shell access to the EC2 instance. They can read `CONFIDENTIAL_KEY` from the
   environment and decrypt at will. The unlock code gates the API, not the mathematics.
-- A photograph of the screen. No software control prevents this; the watermark deters and
-  attributes it.
+- A photograph of the screen. No software control prevents this. (An on-document watermark
+  naming the viewer originally deterred and attributed it; removed at the owner's request on
+  2026-08-10, so screen capture is now undeterred. The access log still records who had the
+  document open and when.)
 
 Phase 2 (client-side encryption) is what removes the server from the trust boundary. Phase 1 is
 deliberately not that, and the UI copy must not claim otherwise.
@@ -226,9 +228,10 @@ email would bypass the unlock gate entirely.
   open this. IT support cannot view or recover it."*
 - **UnlockModal** — "A 6-digit code has been sent to t••••@hqhb.in", code input, resend,
   and the remaining-attempts count on failure.
-- **Viewer** — a countdown pill; at zero the document blanks and offers a new code. A watermark
-  across the view carries the viewer's name and the timestamp.
-- **RequestRow** — a lock badge on confidential rows.
+- **Viewer** — a countdown pill; at zero the document blanks and offers a new code. (The
+  on-document watermark shipped initially was removed at the owner's request on 2026-08-10.)
+- **RequestRow / drawer headers** — a "Confidential" badge (lock icon + the word) wherever the
+  request appears.
 - **DownloadBtn / PrintBtn** — hidden for confidential unless the viewer is the requestor and the
   status is `approved`; the server enforces the same rule independently.
 

@@ -15,7 +15,7 @@ import {
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
-import { UnlockModal, UnlockCountdown, ConfidentialWatermark, ConfidentialPrompt } from "./components/UnlockGate.jsx";
+import { UnlockModal, UnlockCountdown, ConfidentialBadge, ConfidentialPrompt } from "./components/UnlockGate.jsx";
 import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -1323,6 +1323,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0">
+            {req.confidential && <ConfidentialBadge />}
             {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
             {/* Take the document away right here — the approved email deep-links
                 into this drawer, so the download mustn't require backing out to
@@ -1344,12 +1345,9 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it for 2 minutes.</div>
             </div>
           ) : file ? (
-            <div style={{ position: "relative" }}>
-              {req.confidential && <ConfidentialWatermark name={user?.name || ""} />}
-              <Suspense fallback={<ViewerFallback />}>
-                <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
-              </Suspense>
-            </div>
+            <Suspense fallback={<ViewerFallback />}>
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+            </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
           {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
@@ -1907,6 +1905,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {req.confidential && <ConfidentialBadge />}
             {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
             {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
@@ -1929,12 +1928,9 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <div className="text-xs opacity-60 mt-1">Enter the emailed code to view and sign it.</div>
             </div>
           ) : file ? (
-            <div style={{ position: "relative" }}>
-              {req.confidential && <ConfidentialWatermark name={user?.name || ""} />}
-              <Suspense fallback={<ViewerFallback />}>
-                <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
-              </Suspense>
-            </div>
+            <Suspense fallback={<ViewerFallback />}>
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
+            </Suspense>
           ) : <div className="text-sm opacity-50">Loading…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
