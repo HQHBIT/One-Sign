@@ -1171,7 +1171,7 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
   );
 }
 
-function ApprovedList({ items, teams, users, back, title = "Approved requests" }) {
+function ApprovedList({ items, teams, users, user, back, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -1195,7 +1195,7 @@ function ApprovedList({ items, teams, users, back, title = "Approved requests" }
   );
 }
 
-function RejectedList({ items, teams, users, back }) {
+function RejectedList({ items, teams, users, user, back }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -2071,7 +2071,7 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
   );
 }
 
-function ApproverRejected({ items, back, users, teams }) {
+function ApproverRejected({ items, back, users, teams, user }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -3639,7 +3639,7 @@ function BulkSignatureModal({ users, onClose, onDone }) {
   );
 }
 
-function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
+function AdminDocuments({ requests, users, teams, user, back, defaultTeamId }) {
   const [filter, setFilter] = useState("all");
   const [teamId, setTeamId] = useState(defaultTeamId || "all");
   const teamName = teamId === "all" ? "All teams" : (teams.find(t => t.id === teamId)?.name || "—");
