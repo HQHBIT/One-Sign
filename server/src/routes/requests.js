@@ -425,6 +425,9 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
         user: a, requestId: id, template: "new_request",
         ctx: {
           approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id,
+          // Routes confidential requests to the redacted template — without this
+          // the creation email named the document, defeating the redaction.
+          confidential: !!confidential,
           // approveToken intentionally withheld until hqhb.in has SPF/DKIM
           // (SendGrid domain authentication): an "Approve" button + token link
           // from an unauthenticated sender trips Gmail's phishing filters and

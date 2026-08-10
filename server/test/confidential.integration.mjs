@@ -94,6 +94,26 @@ r = await fetch(B + "/api/requests", { headers: auth("u_cr") });
 const raiserRow = (await r.json()).requests.find(x => x.id === id);
 ck(raiserRow?.fileName === FILE_NAME, "the requestor sees the real file name");
 
+// ---------- 2b. the CREATION email itself is the redacted variant ----------
+// Not just renderTemplate: the row actually recorded for the approver must use
+// confidential_new_request and never name the document. (notifyUser is fire-and-
+// forget, so allow the insert a moment to land.)
+// Only rows from THIS run — the emails table keeps prior runs' rows, and the
+// insert lands after the SendGrid round-trip, so filter by creation time and
+// wait rather than grabbing whatever is newest.
+let createMail = null;
+for (let i = 0; i < 25 && !createMail; i++) {
+  createMail = await queryOne(
+    `SELECT * FROM emails WHERE to_email='u_ca.conf@hqhb.in'
+       AND template IN ('new_request','confidential_new_request') AND sent_at >= ?
+     ORDER BY sent_at DESC, id DESC LIMIT 1`, [now]);
+  if (!createMail) await new Promise(res => setTimeout(res, 300));
+}
+ck(createMail?.template === "confidential_new_request",
+   "creation notice uses the redacted template, got: " + createMail?.template);
+ck(createMail && !createMail.subject.includes(FILE_NAME) && !createMail.body.includes(FILE_NAME),
+   "creation notice never names the document");
+
 // ---------- 3. a participant still needs an unlock code ----------
 r = await fetch(`${B}/api/requests/${id}/file`, { headers: auth("u_ca") });
 ck(r.status === 403, "approver without a window gets 403");
