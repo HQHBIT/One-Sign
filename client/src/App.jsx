@@ -1322,8 +1322,15 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0">
             {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
+            {/* Take the document away right here — the approved email deep-links
+                into this drawer, so the download mustn't require backing out to
+                hunt for the row in a list. The buttons carry their own rules
+                (greyed inside the 1-hour window; confidential = requestor only,
+                once fully signed, and only while unlocked). */}
+            {!locked && <DownloadBtn req={req} user={user} />}
+            {!locked && <PrintBtn req={req} />}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
