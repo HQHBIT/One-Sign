@@ -20,6 +20,11 @@ const clock = (ms) => {
  *   onUnlocked(windowEndsAt) — the document may now be loaded
  *   onCancel()               — the viewer backed out
  */
+// Both drawers close when their backdrop is clicked, and this modal mounts
+// INSIDE that backdrop — so every click here must stop propagating, or tapping
+// the code input bubbles up and closes the whole drawer under the user.
+const trapClicks = (e) => e.stopPropagation();
+
 export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
   const [stage, setStage] = useState("sending");   // sending | enter | verifying
   const [sentTo, setSentTo] = useState("");
@@ -61,7 +66,7 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }} onClick={trapClicks}>
       <div className="card p-6 w-full max-w-sm" style={{ backgroundColor: "var(--c-cream)" }}>
         <div className="flex items-start justify-between mb-1">
           <div className="flex items-center gap-2">
@@ -114,7 +119,7 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
  */
 export function ConfidentialPrompt({ onChoose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }} onClick={trapClicks}>
       <div className="card p-6 w-full max-w-md" style={{ backgroundColor: "var(--c-cream)" }}>
         <div className="flex items-center gap-2 mb-3">
           <Lock size={17} style={{ color: "var(--c-gold)" }} />
