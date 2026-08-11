@@ -8,10 +8,48 @@
 //   second mode.
 // ============================================================
 import { useState, useEffect, useRef } from "react";
-import { RefreshCw, LogOut, Check, X } from "lucide-react";
+import { RefreshCw, LogOut, Check, X, Star, Trash2 } from "lucide-react";
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
+
+// ------------------------------------------------------------
+// The user's saved signatures: thumbnail, name tag, default star, delete.
+// Shown in manage mode only — first-login and admin capture stay single-shot.
+// ------------------------------------------------------------
+function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, armedId }) {
+  if (!sigs.length) return null;
+  return (
+    <div className="mb-4">
+      <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Your signatures ({sigs.length}/5)</div>
+      <div className="space-y-2">
+        {sigs.map(s => (
+          <div key={s.id} className="card p-2 flex items-center gap-3" style={{ backgroundColor: "var(--c-paper)" }}>
+            <div className="flex items-center justify-center shrink-0" style={{ width: 96, height: 40 }}>
+              {thumbs[s.id]
+                ? <img src={thumbs[s.id]} alt={s.label} style={{ maxWidth: 96, maxHeight: 40, objectFit: "contain" }} />
+                : <span className="text-xs opacity-40">…</span>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">{s.label}</div>
+              {s.isDefault && <div className="text-[10px] tracking-wider uppercase" style={{ color: "#8B6914" }}>Default</div>}
+            </div>
+            {!s.isDefault && (
+              <button className="btn-ghost text-xs" disabled={busy} onClick={() => onDefault(s)}
+                title="Used when you don't pick one at signing time">
+                <Star size={12} /> Make default
+              </button>
+            )}
+            <button className={`text-xs ${armedId === s.id ? "btn-danger" : "btn-ghost"}`} disabled={busy}
+              onClick={() => onDelete(s)} title="Delete this signature">
+              <Trash2 size={12} />{armedId === s.id ? " Sure?" : ""}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Returns a new canvas tightly cropped to the signature's actual content,
@@ -55,7 +93,7 @@ function trimSignatureCanvas(srcCanvas) {
   return out;
 }
 
-export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUserId }) {
+export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, currentUserId, manage = false, onChanged }) {
   useEscapeKey(!!onCancel, onCancel);
   const trapRef = useFocusTrap(true);
   const canvasRef = useRef(null);
@@ -68,9 +106,31 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
   const lastWidthRef = useRef(2.0);
   const [currentSigUrl, setCurrentSigUrl] = useState(null);
 
-  // Fetch the current signature image, if any, so the user can see what's stored.
+  // ---- manage mode: the user's saved set, plus the tag for the next one ----
+  const [sigs, setSigs] = useState([]);
+  const [thumbs, setThumbs] = useState({});
+  const [tag, setTag] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const loadSigs = async () => {
+    try {
+      const list = await api.mySignatures();
+      setSigs(list);
+      const t = {};
+      for (const s of list) t[s.id] = await api.mySignatureBlob(s.id);
+      setThumbs(prev => { Object.values(prev).forEach(u => u && URL.revokeObjectURL(u)); return t; });
+    } catch { /* list stays empty */ }
+  };
   useEffect(() => {
-    if (!currentUserId) return;
+    if (manage) loadSigs();
+    return () => setThumbs(prev => { Object.values(prev).forEach(u => u && URL.revokeObjectURL(u)); return {}; });
+  }, [manage]);
+
+  // Fetch the current signature image, if any, so the user can see what's stored.
+  // (Manage mode shows the full list instead.)
+  useEffect(() => {
+    if (!currentUserId || manage) return;
     let url = null;
     (async () => {
       try {
@@ -79,7 +139,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
       } catch { /* ignore */ }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [currentUserId]);
+  }, [currentUserId, manage]);
 
   useEffect(() => {
     const c = canvasRef.current; if (!c) return;
@@ -177,11 +237,12 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
     const r = new FileReader(); r.onload = () => setUploaded(r.result); r.readAsDataURL(f);
   };
 
-  const save = () => {
+  // Trimmed dataUrl from whichever mode is active, delivered to `deliver`.
+  const produceDataUrl = (deliver) => {
     if (mode === "draw") {
       if (empty) return;
       const trimmed = trimSignatureCanvas(canvasRef.current);
-      onSave((trimmed || canvasRef.current).toDataURL("image/png"));
+      deliver((trimmed || canvasRef.current).toDataURL("image/png"));
     } else {
       if (!uploaded) return;
       // For uploaded files, trim transparent / near-white edges so the signature fills
@@ -193,11 +254,42 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
         c.height = img.naturalHeight;
         c.getContext("2d").drawImage(img, 0, 0);
         const trimmed = trimSignatureCanvas(c);
-        onSave((trimmed || c).toDataURL("image/png"));
+        deliver((trimmed || c).toDataURL("image/png"));
       };
-      img.onerror = () => onSave(uploaded);
+      img.onerror = () => deliver(uploaded);
       img.src = uploaded;
     }
+  };
+
+  const save = () => produceDataUrl(onSave);
+
+  // Manage mode: adding stays in the modal so several can be added in one sitting.
+  const addToSet = () => produceDataUrl(async (dataUrl) => {
+    const label = tag.trim() || (sigs.length === 0 ? "My signature" : "");
+    if (!label) { setErr("Give this signature a name tag first"); return; }
+    setBusy(true); setErr("");
+    try {
+      await api.addMySignature({ dataUrl, label });
+      setTag(""); setUploaded(null); clear();
+      await loadSigs();
+      onChanged?.();
+    } catch (e) { setErr(e.message || "Could not save the signature"); }
+    finally { setBusy(false); }
+  });
+
+  const makeDefault = async (s) => {
+    setBusy(true); setErr("");
+    try { await api.setDefaultSignature(s.id); await loadSigs(); onChanged?.(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+  const [armedDelete, setArmedDelete] = useState(null);
+  const removeSig = async (s) => {
+    if (armedDelete !== s.id) { setArmedDelete(s.id); setTimeout(() => setArmedDelete(null), 2500); return; }
+    setBusy(true); setErr(""); setArmedDelete(null);
+    try { await api.deleteMySignature(s.id); await loadSigs(); onChanged?.(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
   };
 
   return (
@@ -217,6 +309,11 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
             </div>
             <div className="text-xs opacity-60 mt-2">Draw or upload below to replace it. The new version is auto-cropped to its content.</div>
           </div>
+        )}
+
+        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} armedId={armedDelete} />}
+        {manage && err && (
+          <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
         )}
 
         <div className="flex gap-2 mb-4 text-xs">
@@ -255,11 +352,24 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
               </button>
             )}
           </div>
-          <div className="flex gap-2">
-            {onCancel && <button className="btn-ghost" onClick={onCancel}>Cancel</button>}
-            <button className="btn-primary" onClick={save} disabled={mode === "draw" ? empty : !uploaded}>
-              <Check size={14} /> Save signature
-            </button>
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            {onCancel && <button className="btn-ghost" onClick={onCancel}>{manage ? "Done" : "Cancel"}</button>}
+            {manage ? (
+              <>
+                <input type="text" value={tag} onChange={e => { setTag(e.target.value); setErr(""); }}
+                  placeholder={sigs.length === 0 ? "Name tag (e.g. Official)" : "Name tag — required"}
+                  maxLength={60} className="text-sm" style={{ width: 190 }} />
+                <button className="btn-primary" onClick={addToSet}
+                  disabled={busy || sigs.length >= 5 || (mode === "draw" ? empty : !uploaded)}
+                  title={sigs.length >= 5 ? "You can keep up to 5 signatures — delete one first" : "Save the drawing above under this name"}>
+                  <Check size={14} /> {busy ? "Saving…" : "Add signature"}
+                </button>
+              </>
+            ) : (
+              <button className="btn-primary" onClick={save} disabled={mode === "draw" ? empty : !uploaded}>
+                <Check size={14} /> Save signature
+              </button>
+            )}
           </div>
         </div>
       </div>

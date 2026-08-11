@@ -325,6 +325,22 @@ async function runSchema() {
   // Per-user toggle: receive workflow emails or not (in-app always arrives).
   await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
 
+  // A user may keep several signatures (e.g. official + initials), each with a
+  // label the approver picks from at signing time. users.signature_path stays
+  // the DEFAULT and is kept in sync, so every legacy path — stamping, previews,
+  // self-sign — keeps working unchanged; this table adds the named alternatives.
+  await tryExec(`CREATE TABLE IF NOT EXISTS user_signatures (
+    id         VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id    VARCHAR(64)  NOT NULL,
+    label      VARCHAR(60)  NOT NULL,
+    file_path  VARCHAR(255) NOT NULL,
+    aspect     DOUBLE       DEFAULT NULL,
+    is_default TINYINT(1)   NOT NULL DEFAULT 0,
+    created_at BIGINT       NOT NULL,
+    INDEX idx_us_user (user_id),
+    CONSTRAINT fk_us_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // ---------- confidential documents ----------
   // The file is stored encrypted (see confidential.js) and the IT Admin is
   // locked out in code. Viewing needs a fresh emailed code and lasts 60s.

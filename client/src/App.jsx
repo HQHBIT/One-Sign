@@ -318,9 +318,9 @@ export default function App() {
     try { await api.remindRequest(id); notify("Reminder sent", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
-  const approveRequest = async (id, instant) => {
+  const approveRequest = async (id, instant, signatureId = null) => {
     try {
-      await api.approveRequest(id, instant);
+      await api.approveRequest(id, instant, signatureId);
       notify(instant ? "Approved!" : "Approved! You have 1 hour to change your mind.", "success");
       await refresh(user);
     }
@@ -415,6 +415,7 @@ export default function App() {
           onMarkAllNotifsRead={markAllNotifsRead} onToggleEmailNotifs={toggleEmailNotifications}
           logout={logout}
           setSignature={setMySignature}
+          refreshUser={async () => { const me = await api.me(); setUser(me.user); }}
           saveUsers={saveUsers} saveTeams={saveTeams}
           addRequest={createRequest}
           sendReminder={sendReminder}
@@ -626,10 +627,11 @@ function Shell(props) {
       )}
       {editSig && (
         <SignatureModal
-          title={user.hasSignature ? "Update your signature" : "Add your signature"}
-          subtitle="Drawing or uploading a new image will replace any existing signature on file."
+          manage
+          title="My signatures"
+          subtitle="Keep up to 5 signatures, each with a name tag. The default is used unless you pick another while signing."
           onCancel={() => setEditSig(false)}
-          currentUserId={user.hasSignature ? user.id : null}
+          onChanged={() => props.refreshUser?.()}
           onSave={async dataUrl => { await setSignature(dataUrl); setEditSig(false); notify("Signature updated", "success"); }}
         />
       )}
@@ -1830,6 +1832,32 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
   const relock = useCallback(() => { setFile(null); setWindowEndsAt(null); setLocked(true); }, []);
 
+  // ---- which of my signatures to stamp ----
+  // The default (or only) one is pre-selected; a picker appears only when the
+  // signer actually has a choice to make.
+  const [mySigs, setMySigs] = useState([]);
+  const [sigId, setSigId] = useState(null);
+  const [sigThumbs, setSigThumbs] = useState({});
+  useEffect(() => {
+    let dead = false;
+    const urls = [];
+    (async () => {
+      try {
+        const list = await api.mySignatures();
+        if (dead) return;
+        setMySigs(list);
+        setSigId((list.find(s => s.isDefault) || list[0])?.id || null);
+        const t = {};
+        for (const s of list) {
+          const u = await api.mySignatureBlob(s.id);
+          if (u) { t[s.id] = u; urls.push(u); }
+        }
+        if (!dead) setSigThumbs(t);
+      } catch { /* picker simply stays hidden */ }
+    })();
+    return () => { dead = true; urls.forEach(u => URL.revokeObjectURL(u)); };
+  }, []);
+
   const pendingApproved = req.status === "approved_pending";
 
   // Workflow context
@@ -1844,11 +1872,21 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
 
   const enterPreview = async () => {
     try {
-      const url = await api.getSignatureBlob(user.id);
+      // Preview with the CHOSEN signature, not blindly the default.
+      const url = (sigId && await api.mySignatureBlob(sigId)) || await api.getSignatureBlob(user.id);
       if (!url) { notify("Could not load your signature", "error"); return; }
       setSigUrl(url);
       setPreviewing(true);
     } catch { notify("Failed to load signature preview", "error"); }
+  };
+
+  // Switching signatures while previewing swaps the stamped image live.
+  const pickSignature = async (id) => {
+    setSigId(id);
+    if (previewing) {
+      const url = await api.mySignatureBlob(id);
+      if (url) setSigUrl(url);
+    }
   };
 
   // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place).
@@ -1945,19 +1983,40 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             }}>
             {previewing ? (
               <>
-                <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
-                  <Eye size={13} />
-                  <span className="hidden sm:inline">How should this be approved?</span>
-                  <span className="sm:hidden">Choose how to approve</span>
+                <div className="flex flex-col gap-2 min-w-0">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
+                    <Eye size={13} />
+                    <span className="hidden sm:inline">How should this be approved?</span>
+                    <span className="sm:hidden">Choose how to approve</span>
+                  </div>
+                  {/* Pick WHICH signature to stamp — shown only when there is an
+                      actual choice; a single signature is auto-selected. */}
+                  {mySigs.length > 1 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] tracking-wider uppercase opacity-50">Sign with</span>
+                      {mySigs.map(s => (
+                        <button key={s.id} type="button" onClick={() => pickSignature(s.id)}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs"
+                          title={s.isDefault ? `${s.label} (default)` : s.label}
+                          style={{
+                            border: sigId === s.id ? "2px solid var(--c-gold)" : "2px solid rgba(15,26,46,.15)",
+                            backgroundColor: sigId === s.id ? "rgba(184,137,74,.10)" : "transparent",
+                          }}>
+                          {sigThumbs[s.id] && <img src={sigThumbs[s.id]} alt="" style={{ height: 20, maxWidth: 56, objectFit: "contain" }} />}
+                          <span className="font-medium">{s.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true); onClose(); }}
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId); onClose(); }}
                     title="Sign and finalise the document immediately">
                     <Zap size={14} /> Instant Approval
                   </button>
                   <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
-                    onClick={async () => { await approveRequest(req.id, false); onClose(); }}
+                    onClick={async () => { await approveRequest(req.id, false, sigId); onClose(); }}
                     title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
                     <Clock size={14} /> Enable 1hr Rejection Window
                   </button>

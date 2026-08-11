@@ -173,6 +173,25 @@ export const api = {
     });
   },
 
+  // -------- my signatures (multiple, tagged) --------
+  mySignatures() { return this.fetch("/api/users/me/signatures").then(r => r.signatures); },
+  addMySignature({ dataUrl, label }) {
+    return this.fetch("/api/users/me/signatures", { method: "POST", body: JSON.stringify({ dataUrl, label }) }).then(r => r.signature);
+  },
+  setDefaultSignature(id) {
+    return this.fetch(`/api/users/me/signatures/${id}`, { method: "PUT", body: JSON.stringify({ makeDefault: true }) }).then(r => r.signature);
+  },
+  renameMySignature(id, label) {
+    return this.fetch(`/api/users/me/signatures/${id}`, { method: "PUT", body: JSON.stringify({ label }) }).then(r => r.signature);
+  },
+  deleteMySignature(id) { return this.fetch(`/api/users/me/signatures/${id}`, { method: "DELETE" }); },
+  async mySignatureBlob(id) {
+    try {
+      const res = await this.fetch(`/api/users/me/signatures/${id}/image`, { raw: true });
+      return URL.createObjectURL(await res.blob());
+    } catch { return null; }
+  },
+
   setMySignature(dataUrl) {
     return this.fetch("/api/users/me/signature", {
       method: "PUT", body: JSON.stringify({ dataUrl })
@@ -210,8 +229,11 @@ export const api = {
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
-  approveRequest(id, instant) {
-    return this.fetch(`/api/requests/${id}/approve`, { method: "POST", body: JSON.stringify({ instant: !!instant }) });
+  approveRequest(id, instant, signatureId = null) {
+    return this.fetch(`/api/requests/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ instant: !!instant, ...(signatureId ? { signatureId } : {}) }),
+    });
   },
   batchApproveRequests(ids, instant) {
     return this.fetch("/api/requests/batch-approve", { method: "POST", body: JSON.stringify({ ids, instant: !!instant }) });

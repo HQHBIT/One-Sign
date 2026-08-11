@@ -869,12 +869,31 @@ router.post("/:id/unlock/verify", authRequired, async (req, res, next) => {
 // signing logic. It reads the acting signer from req.user / req.userRow, so the
 // assist route calls it with an executive-shaped req (see routes/assist.js) —
 // keeping one single code path for all approvals.
+// The signer may pick WHICH of their signatures to stamp (body.signatureId).
+// Resolved once, by overwriting req.userRow.signature_path in place: every
+// downstream site — stamping, applied_signature_path, the step-signer record —
+// reads that field, so none of the ~18 call sites can miss the choice. With no
+// signatureId the default (users.signature_path) applies, which is also the
+// auto-selection when a user has only one signature.
+async function applyChosenSignature(req) {
+  const sid = req.body?.signatureId;
+  if (!sid) return null;
+  const row = await queryOne(
+    "SELECT * FROM user_signatures WHERE id = ? AND user_id = ?", [String(sid), req.user.id]);
+  if (!row) return "That signature does not exist";
+  req.userRow.signature_path = row.file_path;
+  req.userRow.signature_aspect = row.aspect;
+  return null;
+}
+
 export async function approveRequestHandler(req, res, next) {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
     if (row.status !== "pending") return res.status(400).json({ error: "Not pending" });
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+    const sigErr = await applyChosenSignature(req);
+    if (sigErr) return res.status(400).json({ error: sigErr });
 
     // You cannot sign what you are not currently permitted to see.
     if (row.confidential) {
@@ -1064,6 +1083,9 @@ async function approveWorkflowStep({ req, res, row, signer }) {
 router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+    // One chosen signature applies to the whole batch.
+    const sigErr = await applyChosenSignature(req);
+    if (sigErr) return res.status(400).json({ error: sigErr });
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
     if (ids.length === 0) return res.status(400).json({ error: "ids required" });
 

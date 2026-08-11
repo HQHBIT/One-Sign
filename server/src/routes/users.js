@@ -324,33 +324,185 @@ router.delete("/:id", authRequired, requireRole("admin"), async (req, res, next)
 });
 
 // ---------- my signature ----------
+// A signature image from either a multipart file or a dataUrl → {buffer, ext},
+// or null when neither is usable. Shared by the single- and multi-signature routes.
+function parseSignatureUpload(req) {
+  const buf = req.file?.buffer;
+  if (buf) {
+    const mt = (req.file.mimetype || "").toLowerCase();
+    return { buffer: buf, ext: mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png" };
+  }
+  const dataUrlField = req.body?.dataUrl;
+  if (dataUrlField && dataUrlField.startsWith("data:image/")) {
+    const match = /^data:image\/(png|jpeg|jpg);base64,(.+)$/.exec(dataUrlField);
+    if (!match) return null;
+    return { buffer: Buffer.from(match[2], "base64"), ext: match[1] === "jpeg" ? "jpg" : match[1] };
+  }
+  return null;
+}
+
+// Keep user_signatures in step whenever something writes users.signature_path
+// directly (the classic pad, the admin setter, bulk upload): the DEFAULT row
+// mirrors it, created on first touch. Without this the picker would show a
+// stale image for the very signature the system stamps.
+async function syncDefaultRow(userId, fileName, aspect) {
+  const def = await queryOne("SELECT id FROM user_signatures WHERE user_id = ? AND is_default = 1", [userId]);
+  if (def) {
+    await execute("UPDATE user_signatures SET file_path = ?, aspect = ? WHERE id = ?", [fileName, aspect, def.id]);
+  } else {
+    await execute(
+      "INSERT INTO user_signatures (id, user_id, label, file_path, aspect, is_default, created_at) VALUES (?, ?, 'My signature', ?, ?, 1, ?)",
+      [uid("sig"), userId, fileName, aspect, Date.now()]);
+  }
+}
+
 router.put("/me/signature", authRequired, upload.single("signature"), async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const buf = req.file?.buffer;
-    const dataUrlField = req.body?.dataUrl;
-    let buffer = null, ext = "png";
-
-    if (buf) {
-      buffer = buf;
-      const mt = (req.file.mimetype || "").toLowerCase();
-      ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
-    } else if (dataUrlField && dataUrlField.startsWith("data:image/")) {
-      const match = /^data:image\/(png|jpeg|jpg);base64,(.+)$/.exec(dataUrlField);
-      if (!match) return res.status(400).json({ error: "Invalid dataUrl" });
-      ext = match[1] === "jpeg" ? "jpg" : match[1];
-      buffer = Buffer.from(match[2], "base64");
-    } else {
-      return res.status(400).json({ error: "signature file or dataUrl required" });
-    }
+    const parsed = parseSignatureUpload(req);
+    if (!parsed) return res.status(400).json({ error: "signature file or dataUrl required" });
 
     await fs.mkdir(SIG_DIR, { recursive: true });
-    const fileName = `${userId}.${ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), buffer);
-    const dims = readImageSize(buffer);
+    const fileName = `${userId}.${parsed.ext}`;
+    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const dims = readImageSize(parsed.buffer);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
     await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, userId]);
+    await syncDefaultRow(userId, fileName, aspect);
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- my signatures (multiple, tagged) ----------
+// users.signature_path stays the DEFAULT; these routes manage the named set the
+// approver picks from at signing time.
+const MAX_SIGNATURES = 5;
+
+// The user's signature rows — migrating a legacy single signature into the
+// table on first read, so nobody starts from zero.
+async function listSignatureRows(userId) {
+  let rows = await query("SELECT * FROM user_signatures WHERE user_id = ? ORDER BY created_at ASC, id ASC", [userId]);
+  if (rows.length === 0) {
+    const u = await queryOne("SELECT signature_path, signature_aspect FROM users WHERE id = ?", [userId]);
+    if (u?.signature_path) {
+      await execute(
+        "INSERT INTO user_signatures (id, user_id, label, file_path, aspect, is_default, created_at) VALUES (?, ?, 'My signature', ?, ?, 1, ?)",
+        [uid("sig"), userId, u.signature_path, u.signature_aspect ?? null, Date.now()]);
+      rows = await query("SELECT * FROM user_signatures WHERE user_id = ? ORDER BY created_at ASC, id ASC", [userId]);
+    }
+  }
+  return rows;
+}
+
+const shapeSignature = (r) => ({
+  id: r.id, label: r.label, aspect: r.aspect == null ? null : Number(r.aspect),
+  isDefault: !!Number(r.is_default), createdAt: Number(r.created_at),
+});
+
+router.get("/me/signatures", authRequired, async (req, res, next) => {
+  try {
+    res.json({ signatures: (await listSignatureRows(req.user.id)).map(shapeSignature) });
+  } catch (e) { next(e); }
+});
+
+router.post("/me/signatures", authRequired, upload.single("signature"), async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const label = String(req.body?.label || "").trim().slice(0, 60);
+    if (!label) return res.status(400).json({ error: "Give this signature a name tag" });
+    const parsed = parseSignatureUpload(req);
+    if (!parsed) return res.status(400).json({ error: "signature file or dataUrl required" });
+
+    const rows = await listSignatureRows(userId);   // migrates the legacy one first
+    if (rows.length >= MAX_SIGNATURES) {
+      return res.status(400).json({ error: `You can keep up to ${MAX_SIGNATURES} signatures — delete one first` });
+    }
+    if (rows.some(r => r.label.toLowerCase() === label.toLowerCase())) {
+      return res.status(400).json({ error: "You already have a signature with that name" });
+    }
+
+    const sigId = uid("sig");
+    await fs.mkdir(SIG_DIR, { recursive: true });
+    const fileName = `${userId}.${sigId}.${parsed.ext}`;
+    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const dims = readImageSize(parsed.buffer);
+    const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
+
+    // The very first signature is automatically the default — "if the user has
+    // a single sign it gets selected by default" starts here.
+    const isFirst = rows.length === 0;
+    await execute(
+      "INSERT INTO user_signatures (id, user_id, label, file_path, aspect, is_default, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [sigId, userId, label, fileName, aspect, isFirst ? 1 : 0, Date.now()]);
+    if (isFirst) {
+      await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, userId]);
+    }
+    const row = await queryOne("SELECT * FROM user_signatures WHERE id = ?", [sigId]);
+    res.json({ signature: shapeSignature(row) });
+  } catch (e) { next(e); }
+});
+
+router.put("/me/signatures/:sid", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM user_signatures WHERE id = ? AND user_id = ?", [req.params.sid, req.user.id]);
+    if (!row) return res.status(404).json({ error: "Signature not found" });
+
+    const label = req.body?.label != null ? String(req.body.label).trim().slice(0, 60) : null;
+    if (label != null) {
+      if (!label) return res.status(400).json({ error: "The name tag cannot be empty" });
+      const clash = await queryOne(
+        "SELECT 1 AS ok FROM user_signatures WHERE user_id = ? AND id <> ? AND LOWER(label) = LOWER(?)",
+        [req.user.id, row.id, label]);
+      if (clash) return res.status(400).json({ error: "You already have a signature with that name" });
+      await execute("UPDATE user_signatures SET label = ? WHERE id = ?", [label, row.id]);
+    }
+    if (req.body?.makeDefault === true) {
+      await execute("UPDATE user_signatures SET is_default = 0 WHERE user_id = ?", [req.user.id]);
+      await execute("UPDATE user_signatures SET is_default = 1 WHERE id = ?", [row.id]);
+      // The default IS users.signature_path — legacy stamping paths follow it.
+      await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [row.file_path, row.aspect, req.user.id]);
+    }
+    const fresh = await queryOne("SELECT * FROM user_signatures WHERE id = ?", [row.id]);
+    res.json({ signature: shapeSignature(fresh) });
+  } catch (e) { next(e); }
+});
+
+router.delete("/me/signatures/:sid", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM user_signatures WHERE id = ? AND user_id = ?", [req.params.sid, req.user.id]);
+    if (!row) return res.status(404).json({ error: "Signature not found" });
+
+    await execute("DELETE FROM user_signatures WHERE id = ?", [row.id]);
+
+    if (Number(row.is_default) === 1) {
+      // Promote the newest remaining signature, or clear the user's signature
+      // entirely — hasSignature flows from users.signature_path.
+      const nextDef = await queryOne(
+        "SELECT * FROM user_signatures WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", [req.user.id]);
+      if (nextDef) {
+        await execute("UPDATE user_signatures SET is_default = 1 WHERE id = ?", [nextDef.id]);
+        await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [nextDef.file_path, nextDef.aspect, req.user.id]);
+      } else {
+        await execute("UPDATE users SET signature_path = NULL, signature_aspect = NULL WHERE id = ?", [req.user.id]);
+      }
+    }
+
+    // Remove the image only when nothing references it any more. Signed PDFs
+    // already carry the stamped pixels, so past documents are unaffected.
+    const stillUsed = await queryOne("SELECT 1 AS ok FROM user_signatures WHERE user_id = ? AND file_path = ?", [req.user.id, row.file_path]);
+    const u = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.user.id]);
+    if (!stillUsed && u?.signature_path !== row.file_path) {
+      await fs.unlink(path.join(SIG_DIR, row.file_path)).catch(() => {});
+    }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+router.get("/me/signatures/:sid/image", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT file_path FROM user_signatures WHERE id = ? AND user_id = ?", [req.params.sid, req.user.id]);
+    if (!row) return res.status(404).end();
+    res.sendFile(path.join(SIG_DIR, row.file_path));
   } catch (e) { next(e); }
 });
 
@@ -371,6 +523,7 @@ router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("
     const dims = readImageSize(buf);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
     await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, targetId]);
+    await syncDefaultRow(targetId, fileName, aspect);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -400,6 +553,7 @@ router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array
       const dims = readImageSize(f.buffer);
       const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
       await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, user.id]);
+      await syncDefaultRow(user.id, fileName, aspect);
       matched.push({ email, userId: user.id });
     }
     res.json({ matched: matched.length, results: matched });
