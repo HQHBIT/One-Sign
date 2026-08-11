@@ -103,23 +103,67 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     return () => clearTimeout(t);
   }, [directQuery, mode]);
 
-  const handleFile = e => {
-    const f = e.target.files?.[0]; if (!f) return;
+  // Several files at once switch the form into the batch flow — each document
+  // becomes its own request, so tracking, reminders and reports stay per-document.
+  const [docs, setDocs] = useState([]); // [{name, base64, ext, blob, teamId, markers: []}]
+  const MAX_DOCS = 10;
+
+  const validFile = (f, errs) => {
     const ext = f.name.split(".").pop().toLowerCase();
-    if (!["pdf", "xlsx", "xls"].includes(ext)) { notify("Only PDF or Excel files supported", "error"); return; }
-    if (f.size > 14 * 1024 * 1024) { notify("File must be under 14 MB", "error"); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setFile({ name: f.name, base64: reader.result, type: f.type, ext, blob: f });
-      setDocRotation(0);
-      setMarkers([]);
-      setWorkflow(presetWorkflow ? presetSteps() : []); // keep the saved route across file (re)loads
-      setPlacingSlot(null);
-      setDirectSigners([]);
-      setSelfMarks([]); setSelfPlacing(null);
-      setSignerDateFields([]); setSignerDatePlacing(false);
-    };
-    reader.readAsDataURL(f);
+    if (!["pdf", "xlsx", "xls"].includes(ext)) { errs.push(`${f.name}: only PDF or Excel`); return null; }
+    if (f.size > 14 * 1024 * 1024) { errs.push(`${f.name}: over 14 MB`); return null; }
+    return ext;
+  };
+  const readDoc = (f) => new Promise(resolve => {
+    const r = new FileReader();
+    r.onload = () => resolve({
+      name: f.name, base64: r.result, type: f.type, blob: f,
+      ext: f.name.split(".").pop().toLowerCase() === "pdf" ? "pdf" : "xlsx",
+      teamId: "", markers: [],
+    });
+    r.readAsDataURL(f);
+  });
+
+  const handleFile = async e => {
+    const list = [...(e.target.files || [])];
+    e.target.value = ""; // so re-picking the same file fires again
+    if (!list.length) return;
+    const errs = [];
+    const valid = list.filter(f => validFile(f, errs));
+    if (errs.length) notify(errs.join(" · "), "error");
+    if (!valid.length) return;
+
+    // A saved workflow routes ONE document; the batch flow is single-approver.
+    if (valid.length > 1 && presetWorkflow) {
+      notify("A saved workflow takes one document — using the first file", "error");
+      valid.length = 1;
+    }
+
+    if (valid.length === 1 && docs.length === 0) {
+      const f = valid[0];
+      const ext = f.name.split(".").pop().toLowerCase();
+      const reader = new FileReader();
+      reader.onload = () => {
+        setFile({ name: f.name, base64: reader.result, type: f.type, ext, blob: f });
+        setDocRotation(0);
+        setMarkers([]);
+        setWorkflow(presetWorkflow ? presetSteps() : []); // keep the saved route across file (re)loads
+        setPlacingSlot(null);
+        setDirectSigners([]);
+        setSelfMarks([]); setSelfPlacing(null);
+        setSignerDateFields([]); setSignerDatePlacing(false);
+      };
+      reader.readAsDataURL(f);
+      return;
+    }
+
+    const loaded = await Promise.all(valid.map(readDoc));
+    setFile(null);
+    setDocs(prev => {
+      const next = [...prev, ...loaded];
+      if (next.length > MAX_DOCS) notify(`Up to ${MAX_DOCS} documents per batch`, "error");
+      return next.slice(0, MAX_DOCS);
+    });
   };
 
   // Rotate the document 90° clockwise per tap (0→90→180→270→0). Markers re-flow
@@ -479,21 +523,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     } finally { setBusy(false); }
   };
 
-  return (
-    <div>
-      <BackHeader back={onDone} title="Make a new request" />
-      <div className="card p-4 mt-6 sm:mt-8">
-        <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">How this works</div>
-        <ol className="grid sm:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 text-xs sm:text-sm opacity-80">
-          <li className="flex gap-2"><span className="font-mono opacity-50">01</span> Upload the document.</li>
-          <li className="flex gap-2"><span className="font-mono opacity-50">02</span> Choose single approver or multi-step workflow.</li>
-          <li className="flex gap-2"><span className="font-mono opacity-50">03</span> Place each signer's box where it should appear.</li>
-          <li className="flex gap-2"><span className="font-mono opacity-50">04</span> Submit. Each signer is notified in turn.</li>
-        </ol>
-      </div>
-      <div className="space-y-6 mt-6 min-w-0">
-
-          {/* 0. type */}
+  // Shared by the single-document form and the batch flow.
+  const typeSection = (
           <Section n="00" title="Request type" desc="Classifying the request lets approvers batch-process documents of the same kind.">
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {REQUEST_TYPES.map(t => {
@@ -530,15 +561,46 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               </label>
             )}
           </Section>
+  );
+
+  // ---------- BATCH: several documents in one go ----------
+  if (docs.length > 0) {
+    return (
+      <MultiDocFlow
+        docs={docs} setDocs={setDocs} teams={teams} typeSection={typeSection}
+        addRequest={addRequest} notify={notify} onDone={onDone}
+        requestType={requestType} confidential={confidential}
+        onAddFiles={handleFile} maxDocs={MAX_DOCS}
+        onStartOver={() => setDocs([])}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <BackHeader back={onDone} title="Make a new request" />
+      <div className="card p-4 mt-6 sm:mt-8">
+        <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">How this works</div>
+        <ol className="grid sm:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 text-xs sm:text-sm opacity-80">
+          <li className="flex gap-2"><span className="font-mono opacity-50">01</span> Upload one document — or several at once.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">02</span> Choose single approver or multi-step workflow.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">03</span> Place each signer's box where it should appear.</li>
+          <li className="flex gap-2"><span className="font-mono opacity-50">04</span> Submit. Each signer is notified in turn.</li>
+        </ol>
+      </div>
+      <div className="space-y-6 mt-6 min-w-0">
+
+          {/* 0. type */}
+          {typeSection}
 
           {/* 1. upload (every request type, including leave, uploads its own document) */}
-          <Section n="01" title="Upload document" desc="PDF or Excel (.xlsx) up to 14 MB.">
+          <Section n="01" title="Upload documents" desc="PDF or Excel (.xlsx) up to 14 MB each. Pick several files to send a batch.">
             {!file ? (
               <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
                 <Upload size={24} className="opacity-50 mb-3" />
-                <div className="font-medium">Click to select a file</div>
-                <div className="text-xs opacity-60 mt-1">PDF · XLSX</div>
-                <input type="file" className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
+                <div className="font-medium">Click to select one or more files</div>
+                <div className="text-xs opacity-60 mt-1">PDF · XLSX — up to {MAX_DOCS} at once</div>
+                <input type="file" multiple className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
               </label>
             ) : (
               <div className="card p-5 flex items-center gap-4">
@@ -941,6 +1003,189 @@ function AddSignerControl({ team, existing, onAdd }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+//   BATCH — several documents in one submission.
+//   ------------------------------------------------------------
+//   Each document becomes its own request through the existing create API, so
+//   tracking, reminders, reports and the approver's tools stay per-document —
+//   including batch approve (checkboxes on Pending approvals) and rejecting
+//   any single document on its own.
+// ============================================================
+function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, onDone, requestType, confidential, onAddFiles, maxDocs, onStartOver }) {
+  const [routing, setRouting] = useState(null);   // null | "same" | "different"
+  const [teamAll, setTeamAll] = useState("");
+  const [active, setActive] = useState(0);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+
+  const doc = docs[Math.min(active, docs.length - 1)];
+
+  const removeDoc = (i) => {
+    setDocs(prev => prev.filter((_, k) => k !== i));
+    setActive(a => Math.max(0, Math.min(i <= a ? a - 1 : a, docs.length - 2)));
+  };
+
+  const patchDoc = (i, patch) => setDocs(prev => prev.map((d, k) => k === i ? { ...d, ...patch } : d));
+
+  // ---- placement on the active document ----
+  const markers = (doc?.markers || []).map((m, i) => ({
+    id: "mm-" + i, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h,
+    color: "#B8894A", label: "Approver sign #" + (i + 1),
+  }));
+  const idx = (id) => { const m = /^mm-(\d+)$/.exec(id || ""); return m ? Number(m[1]) : -1; };
+  const onAddMarker = (page, x, y, w, h) =>
+    patchDoc(active, { markers: [...doc.markers, { page, x, y, w, h }] });
+  const onUpdateMarker = (id, patch) => {
+    const i = idx(id); if (i < 0) return;
+    patchDoc(active, { markers: doc.markers.map((m, k) => k === i ? { ...m, ...patch } : m) });
+  };
+  const onDeleteMarker = (id) => {
+    const i = idx(id); if (i < 0) return;
+    patchDoc(active, { markers: doc.markers.filter((_, k) => k !== i) });
+  };
+
+  const teamFor = (d) => routing === "same" ? teamAll : d.teamId;
+  const docReady = (d) => d.markers.length > 0 && !!teamFor(d);
+  const allReady = routing && docs.length > 0 && docs.every(docReady);
+  const notReadyCount = docs.filter(d => !docReady(d)).length;
+
+  const teamOptions = teams.map(t => {
+    const names = teamSigners(t).map(a => a.name).join(", ");
+    return { id: t.id, label: names ? t.name + " — " + names : t.name };
+  });
+  const teamPicker = (value, onChange) => (
+    <select value={value} onChange={e => onChange(e.target.value)} className="w-full sm:w-auto text-sm" style={{ minWidth: 260 }}>
+      <option value="">Choose the approving team…</option>
+      {teamOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+    </select>
+  );
+
+  // ---- submit: one request per document; failures stay in the queue ----
+  const submit = async () => {
+    setBusy(true);
+    const failed = [];
+    const okIdx = new Set();
+    for (let i = 0; i < docs.length; i++) {
+      const d = docs[i];
+      setProgress("Sending " + (i + 1) + " of " + docs.length + "…");
+      try {
+        await addRequest({
+          file: d.blob, targetTeamId: teamFor(d), marker: d.markers,
+          note, requestType, confidential,
+        });
+        okIdx.add(i);
+      } catch (e) { failed.push(d.name + ": " + (e.message || "failed")); }
+    }
+    setProgress("");
+    setBusy(false);
+    if (failed.length === 0) {
+      notify(docs.length + " request" + (docs.length === 1 ? "" : "s") + " sent", "success");
+      onDone();
+    } else {
+      // Successful ones leave the queue; the rest stay so they can be resent.
+      setDocs(prev => prev.filter((_, i) => !okIdx.has(i)));
+      setActive(0);
+      notify("Sent " + okIdx.size + " of " + docs.length + ". Still here — " + failed.join(" · "), "error");
+    }
+  };
+
+  return (
+    <div>
+      <BackHeader back={onDone} title="Make a new request" step={docs.length + " document" + (docs.length === 1 ? "" : "s")} />
+      <div className="space-y-6 mt-6 min-w-0">
+        {typeSection}
+
+        {/* 01 — the batch */}
+        <Section n="01" title={"Documents (" + docs.length + "/" + maxDocs + ")"} desc="Each document becomes its own request with its own tracking.">
+          <div className="flex flex-wrap items-center gap-2">
+            {docs.map((d, i) => (
+              <div key={i}
+                className={"card px-3 py-2 flex items-center gap-2 cursor-pointer " + (i === active ? "ring-2" : "")}
+                style={{ backgroundColor: i === active ? "rgba(184,137,74,.08)" : undefined }}
+                onClick={() => setActive(i)}>
+                {d.ext === "pdf" ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
+                <span className="text-sm truncate" style={{ maxWidth: 180 }}>{d.name}</span>
+                {docReady(d)
+                  ? <span className="text-[10px] font-mono" style={{ color: "var(--c-forest)" }}>✓ {d.markers.length}</span>
+                  : <span className="text-[10px] opacity-50 font-mono">{d.markers.length || "–"}</span>}
+                <button className="btn-ghost !p-0.5" title="Remove this document"
+                  onClick={e => { e.stopPropagation(); removeDoc(i); }}><X size={12} /></button>
+              </div>
+            ))}
+            {docs.length < maxDocs && (
+              <label className="card px-3 py-2 flex items-center gap-2 cursor-pointer tile-hover" style={{ borderStyle: "dashed" }}>
+                <Plus size={14} className="opacity-60" /><span className="text-sm opacity-70">Add more</span>
+                <input type="file" multiple className="hidden" accept=".pdf,.xlsx,.xls" onChange={onAddFiles} />
+              </label>
+            )}
+            <button className="btn-ghost text-xs" onClick={onStartOver}>Start over</button>
+          </div>
+        </Section>
+
+        {/* 02 — the question: one approver for everything, or per document? */}
+        <Section n="02" title="Who approves these documents?" desc="Will the batch go to a single approver, or a different one per document?">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <button onClick={() => setRouting("same")}
+              className={"card p-4 text-left tile-hover " + (routing === "same" ? "ring-2" : "")}
+              style={{ borderLeft: "4px solid var(--c-gold)", backgroundColor: routing === "same" ? "rgba(184,137,74,.08)" : undefined }}>
+              <div className="text-sm font-medium flex items-center gap-1.5"><Building2 size={14} /> A single approver for all</div>
+              <div className="text-xs opacity-60 mt-0.5">Pick the approving team once — then just place the signature boxes on each document.</div>
+            </button>
+            <button onClick={() => setRouting("different")}
+              className={"card p-4 text-left tile-hover " + (routing === "different" ? "ring-2" : "")}
+              style={{ borderLeft: "4px solid #0F1A2E", backgroundColor: routing === "different" ? "rgba(15,26,46,.05)" : undefined }}>
+              <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={14} /> A different approver per document</div>
+              <div className="text-xs opacity-60 mt-0.5">Choose an approving team for each document as you place its boxes.</div>
+            </button>
+          </div>
+          {routing === "same" && (
+            <div className="mt-3">{teamPicker(teamAll, setTeamAll)}</div>
+          )}
+        </Section>
+
+        {/* 03 — placement, one document at a time */}
+        {routing && doc && (
+          <Section n="03" title={"Place the signature boxes — " + doc.name}
+            desc={"Document " + Math.min(active + 1, docs.length) + " of " + docs.length + ". Click-drag on the document; every drag adds another box."}>
+            {routing === "different" && (
+              <div className="mb-3">{teamPicker(doc.teamId, v => patchDoc(active, { teamId: v }))}</div>
+            )}
+            <Suspense fallback={<ViewerFallback />}>
+              <DocPreview key={active + "-" + doc.name} file={doc} markers={markers} editable
+                fixedBox={{ w: 22, h: 6 }}
+                onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+            </Suspense>
+            <div className="flex items-center justify-between mt-3 text-xs">
+              <button className="btn-ghost" disabled={active === 0} onClick={() => setActive(a => a - 1)}>&lsaquo; Previous document</button>
+              <span className="opacity-60">{doc.markers.length} box{doc.markers.length === 1 ? "" : "es"} on this document</span>
+              <button className="btn-ghost" disabled={active >= docs.length - 1} onClick={() => setActive(a => a + 1)}>Next document &rsaquo;</button>
+            </div>
+          </Section>
+        )}
+
+        {/* 04 — note + send */}
+        {routing && (
+          <Section n="04" title="Send the batch" desc="One note goes on every request in this batch.">
+            <input type="text" value={note} onChange={e => setNote(e.target.value)} maxLength={300}
+              placeholder="Optional note for the approver(s)…" className="w-full mb-3" />
+            {!allReady && (
+              <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.10)", color: "#8B6914" }}>
+                {notReadyCount} document{notReadyCount === 1 ? " still needs" : "s still need"} a team and at least one signature box.
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button className="btn-primary" disabled={!allReady || busy} onClick={submit}>
+                <Send size={14} /> {busy ? (progress || "Sending…") : "Send " + docs.length + " request" + (docs.length === 1 ? "" : "s")}
+              </button>
+            </div>
+          </Section>
+        )}
+      </div>
     </div>
   );
 }
