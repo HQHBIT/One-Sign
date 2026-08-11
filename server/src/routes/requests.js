@@ -640,7 +640,11 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     conn.release();
   }
 
-  await notifyNextSigner(id, file.originalname, req.user.name);
+  // The batch flow defers per-document notices and sends ONE summary email per
+  // signer afterwards (POST /notify-batch) — otherwise a 10-document batch means
+  // 10 back-to-back emails to the same person.
+  const deferNotify = req.body?.deferNotify === "true" || req.body?.deferNotify === true;
+  if (!deferNotify) await notifyNextSigner(id, file.originalname, req.user.name);
   const row = await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
   res.json({ request: await hydrateRequest(row) });
 }
@@ -859,6 +863,64 @@ router.post("/:id/unlock/verify", authRequired, async (req, res, next) => {
     await execute("UPDATE confidential_unlocks SET consumed_at = ?, window_ends_at = ? WHERE id = ?", [now, endsAt, rec.id]);
     await logAccess(req, row.id, "unlock_ok");
     res.json({ ok: true, windowEndsAt: endsAt, windowMs: UNLOCK_WINDOW_MS });
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /notify-batch — one summary notice per signer ----------
+// Called by the batch flow after its requests are created with deferNotify.
+// Groups the caller's OWN pending requests by whoever signs next and sends each
+// signer a single email listing every document by the name the requestor
+// uploaded — with the same Review button — instead of one email per document.
+router.post("/notify-batch", authRequired, async (req, res, next) => {
+  try {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).filter(Boolean).slice(0, 20);
+    if (ids.length === 0) return res.status(400).json({ error: "ids required" });
+
+    const ph = ids.map(() => "?").join(",");
+    // Only the raiser may trigger notices, and only for still-pending requests —
+    // this endpoint can announce someone's OWN batch, nothing else.
+    const rows = await query(
+      `SELECT * FROM requests WHERE id IN (${ph}) AND requestor_id = ? AND status = 'pending'`,
+      [...ids, req.user.id]);
+
+    const bySigner = new Map(); // user_id -> [{ row, signer }]
+    for (const row of rows) {
+      const signer = await getNextPendingSigner(row.id);
+      if (!signer) continue;
+      if (!bySigner.has(signer.user_id)) bySigner.set(signer.user_id, []);
+      bySigner.get(signer.user_id).push(row);
+    }
+
+    const sends = [];
+    for (const [signerId, docs] of bySigner) {
+      const u = await queryOne("SELECT * FROM users WHERE id = ?", [signerId]);
+      if (!u) continue;
+      if (docs.length === 1) {
+        // A one-document "batch" reads exactly like the classic notice.
+        const row = docs[0];
+        sends.push(notifyUser({
+          user: u, requestId: row.id, template: "new_request",
+          ctx: {
+            approverName: u.name, requestorName: req.user.name,
+            fileName: row.file_name, confidential: !!row.confidential, requestId: row.id,
+          },
+        }));
+      } else {
+        // Confidential names never travel by email — the batch prompt applies to
+        // every document, so the whole list redacts together.
+        const fileNames = docs.map(d => d.confidential ? "Confidential document" : d.file_name);
+        sends.push(notifyUser({
+          user: u, requestId: docs[0].id, template: "new_request_batch",
+          ctx: {
+            approverName: u.name, requestorName: req.user.name,
+            count: docs.length, fileNames,
+            confidential: docs.every(d => !!d.confidential),
+          },
+        }));
+      }
+    }
+    await Promise.allSettled(sends);
+    res.json({ notified: bySigner.size, requests: rows.length });
   } catch (e) { next(e); }
 });
 

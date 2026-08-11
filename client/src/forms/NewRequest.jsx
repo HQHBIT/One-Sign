@@ -1110,20 +1110,31 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
     setBusy(true);
     const failed = [];
     const okIdx = new Set();
+    const createdIds = [];
     for (let i = 0; i < docs.length; i++) {
       const d = docs[i];
       setProgress("Sending " + (i + 1) + " of " + docs.length + "…");
       try {
         const person = approverFor(d);
-        await addRequest({
+        // deferNotify: the per-document email is held back; after the loop one
+        // summary email per signer lists every document by name.
+        const r = await addRequest({
           file: d.blob, direct: true,
           signers: [{ userId: person.userId,
             boxes: d.markers.map(m => ({ page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h })),
             dateFields: [] }],
-          note, requestType, confidential,
+          note, requestType, confidential, deferNotify: true,
         });
+        if (r?.request?.id) createdIds.push(r.request.id);
         okIdx.add(i);
       } catch (e) { failed.push(d.name + ": " + (e.message || "failed")); }
+    }
+    // One summary notice per signer, listing their documents by name. If this
+    // fails the requests still exist and show in the approver's Awaiting list —
+    // only the notification is lost, so warn rather than fail the batch.
+    if (createdIds.length > 0) {
+      try { await api.notifyBatch(createdIds); }
+      catch { notify("Requests sent, but the notification email may not have gone out", "error"); }
     }
     setProgress("");
     setBusy(false);

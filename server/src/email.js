@@ -421,6 +421,33 @@ const templates = {
     ].join("\n"),
   }),
 
+  // A batch routed to one signer: every document listed by the name the
+  // requestor uploaded, one Review button. Confidential batches arrive with the
+  // names already redacted and switch to count-only wording.
+  new_request_batch: (c) => ({
+    subject: c.confidential
+      ? `${c.count} confidential documents need your signature`
+      : `${c.count} documents need your signature`,
+    html: layout({
+      preheader: `${c.requestorName || "A colleague"} sent ${c.count} documents for your signature`,
+      pillHtml: pill(c.confidential ? "Confidential" : "Signature requested", "pending"),
+      heading: `${c.count} documents need your signature`,
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.requestorName || "A colleague")}</strong> has sent you <strong>${esc(String(c.count))}</strong> documents to review and sign${c.confidential ? ". Their names are not included in this email." : ":"}`) +
+        (c.confidential ? "" : details((c.fileNames || []).map((n, i) => ({ label: `${i + 1}.`, value: n })))) +
+        button("Review & sign", requestUrl(c), "gold") +
+        caption("Each document is reviewed and signed on its own — you can approve them together from Pending approvals, or act on any one individually."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.requestorName || "A colleague"} has sent you ${c.count} documents to review and sign${c.confidential ? "." : ":"}`,
+      ...(c.confidential ? [] : (c.fileNames || []).map((n, i) => `  ${i + 1}. ${n}`)), ``,
+      `Review & sign: ${requestUrl(c)}`, ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   confidential_new_request: (c) => ({
     subject: `A confidential document needs your signature`,
     html: layout({

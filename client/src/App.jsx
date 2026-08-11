@@ -311,8 +311,9 @@ export default function App() {
     setUser(me.user);
   };
   const createRequest = async payload => {
-    await api.createRequest(payload);
+    const r = await api.createRequest(payload);
     await refresh(user);
+    return r;   // the batch flow needs the created ids for its summary notice
   };
   const sendReminder = async id => {
     try { await api.remindRequest(id); notify("Reminder sent", "success"); await refresh(user); }

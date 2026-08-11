@@ -209,7 +209,7 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation, confidential }) {
+  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation, confidential, deferNotify }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (rotation) fd.append("rotation", String(rotation));
@@ -224,7 +224,12 @@ export const api = {
     if (note) fd.append("note", note);
     if (requestType) fd.append("requestType", requestType);
     if (confidential) fd.append("confidential", "true");
+    if (deferNotify) fd.append("deferNotify", "true");
     return this.fetch("/api/requests", { method: "POST", body: fd });
+  },
+  // After a deferred batch: one summary email per signer, every document named.
+  notifyBatch(ids) {
+    return this.fetch("/api/requests/notify-batch", { method: "POST", body: JSON.stringify({ ids }) });
   },
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour

@@ -19,6 +19,11 @@ function inAppText(template, ctx = {}) {
   switch (template) {
     case "new_request":
       return { title: `New signature request: ${f}`, body: `${ctx.requestorName || "Someone"} sent "${f}" for your signature.` };
+    case "new_request_batch":
+      return {
+        title: `${ctx.count} documents need your signature`,
+        body: `${ctx.requestorName || "Someone"} sent: ${(ctx.fileNames || []).join(", ")}`,
+      };
     case "your_turn":
       return {
         title: `Your signature is next: ${f}`,
