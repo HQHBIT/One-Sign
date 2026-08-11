@@ -1015,9 +1015,60 @@ function AddSignerControl({ team, existing, onAdd }) {
 //   including batch approve (checkboxes on Pending approvals) and rejecting
 //   any single document on its own.
 // ============================================================
-function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, onDone, requestType, confidential, onAddFiles, maxDocs, onStartOver }) {
+// A debounced directory search that resolves to ONE person — the batch flow
+// routes to people, not teams, so any user can be the approver (matching the
+// any-role-approver rule set earlier). Excludes the caller server-side.
+function UserPick({ value, onPick, onClear, placeholder }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const query = q.trim();
+    if (query.length < 2) { setResults([]); setSearching(false); return; }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try { setResults(await api.searchUsers(query)); }
+      catch { setResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  if (value) {
+    return (
+      <div className="card px-3 py-2 inline-flex items-center gap-2" style={{ backgroundColor: "rgba(184,137,74,.08)" }}>
+        <span className="text-sm font-medium">{value.name}</span>
+        <span className="text-xs opacity-50">{value.email}</span>
+        <button className="btn-ghost !p-0.5" title="Choose someone else" onClick={onClear}><X size={12} /></button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ maxWidth: 420 }}>
+      <input type="text" value={q} onChange={e => setQ(e.target.value)} className="w-full text-sm"
+        placeholder={placeholder || "Search any user by name or email (min 2 characters)…"} />
+      {searching && <div className="text-xs opacity-50 px-1 mt-1">Searching…</div>}
+      {!searching && q.trim().length >= 2 && results.length === 0 && (
+        <div className="text-xs opacity-50 px-1 mt-1">No users found.</div>
+      )}
+      {results.length > 0 && (
+        <div className="card mt-1 divide-y" style={{ borderColor: "var(--c-ink-08)" }}>
+          {results.map(u => (
+            <button key={u.id} className="w-full text-left px-3 py-2 text-sm hover:opacity-80 flex items-center justify-between gap-2"
+              onClick={() => { onPick({ userId: u.id, name: u.name, email: u.email }); setQ(""); setResults([]); }}>
+              <span className="font-medium truncate">{u.name}</span>
+              <span className="text-xs opacity-50 truncate">{u.email}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, requestType, confidential, onAddFiles, maxDocs, onStartOver }) {
   const [routing, setRouting] = useState(null);   // null | "same" | "different"
-  const [teamAll, setTeamAll] = useState("");
+  const [approverAll, setApproverAll] = useState(null); // {userId, name, email}
   const [active, setActive] = useState(0);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1049,21 +1100,10 @@ function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, o
     patchDoc(active, { markers: doc.markers.filter((_, k) => k !== i) });
   };
 
-  const teamFor = (d) => routing === "same" ? teamAll : d.teamId;
-  const docReady = (d) => d.markers.length > 0 && !!teamFor(d);
+  const approverFor = (d) => routing === "same" ? approverAll : d.approver;
+  const docReady = (d) => d.markers.length > 0 && !!(approverFor(d) && approverFor(d).userId);
   const allReady = routing && docs.length > 0 && docs.every(docReady);
   const notReadyCount = docs.filter(d => !docReady(d)).length;
-
-  const teamOptions = teams.map(t => {
-    const names = teamSigners(t).map(a => a.name).join(", ");
-    return { id: t.id, label: names ? t.name + " — " + names : t.name };
-  });
-  const teamPicker = (value, onChange) => (
-    <select value={value} onChange={e => onChange(e.target.value)} className="w-full sm:w-auto text-sm" style={{ minWidth: 260 }}>
-      <option value="">Choose the approving team…</option>
-      {teamOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-    </select>
-  );
 
   // ---- submit: one request per document; failures stay in the queue ----
   const submit = async () => {
@@ -1074,8 +1114,12 @@ function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, o
       const d = docs[i];
       setProgress("Sending " + (i + 1) + " of " + docs.length + "…");
       try {
+        const person = approverFor(d);
         await addRequest({
-          file: d.blob, targetTeamId: teamFor(d), marker: d.markers,
+          file: d.blob, direct: true,
+          signers: [{ userId: person.userId,
+            boxes: d.markers.map(m => ({ page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h })),
+            dateFields: [] }],
           note, requestType, confidential,
         });
         okIdx.add(i);
@@ -1128,23 +1172,25 @@ function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, o
         </Section>
 
         {/* 02 — the question: one approver for everything, or per document? */}
-        <Section n="02" title="Who approves these documents?" desc="Will the batch go to a single approver, or a different one per document?">
+        <Section n="02" title="Who approves these documents?" desc="Will the batch go to a single approver, or a different one per document? Search by name or email — any user can approve.">
           <div className="grid sm:grid-cols-2 gap-3">
             <button onClick={() => setRouting("same")}
               className={"card p-4 text-left tile-hover " + (routing === "same" ? "ring-2" : "")}
               style={{ borderLeft: "4px solid var(--c-gold)", backgroundColor: routing === "same" ? "rgba(184,137,74,.08)" : undefined }}>
               <div className="text-sm font-medium flex items-center gap-1.5"><Building2 size={14} /> A single approver for all</div>
-              <div className="text-xs opacity-60 mt-0.5">Pick the approving team once — then just place the signature boxes on each document.</div>
+              <div className="text-xs opacity-60 mt-0.5">Pick one person once — then just place the signature boxes on each document.</div>
             </button>
             <button onClick={() => setRouting("different")}
               className={"card p-4 text-left tile-hover " + (routing === "different" ? "ring-2" : "")}
               style={{ borderLeft: "4px solid #0F1A2E", backgroundColor: routing === "different" ? "rgba(15,26,46,.05)" : undefined }}>
               <div className="text-sm font-medium flex items-center gap-1.5"><GitBranch size={14} /> A different approver per document</div>
-              <div className="text-xs opacity-60 mt-0.5">Choose an approving team for each document as you place its boxes.</div>
+              <div className="text-xs opacity-60 mt-0.5">Choose a person for each document as you place its boxes.</div>
             </button>
           </div>
           {routing === "same" && (
-            <div className="mt-3">{teamPicker(teamAll, setTeamAll)}</div>
+            <div className="mt-3">
+              <UserPick value={approverAll} onPick={setApproverAll} onClear={() => setApproverAll(null)} />
+            </div>
           )}
         </Section>
 
@@ -1153,7 +1199,12 @@ function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, o
           <Section n="03" title={"Place the signature boxes — " + doc.name}
             desc={"Document " + Math.min(active + 1, docs.length) + " of " + docs.length + ". Click-drag on the document; every drag adds another box."}>
             {routing === "different" && (
-              <div className="mb-3">{teamPicker(doc.teamId, v => patchDoc(active, { teamId: v }))}</div>
+              <div className="mb-3">
+                <UserPick value={doc.approver || null}
+                  onPick={p => patchDoc(active, { approver: p })}
+                  onClear={() => patchDoc(active, { approver: null })}
+                  placeholder={"Who signs " + doc.name + "? Search by name or email…"} />
+              </div>
             )}
             <Suspense fallback={<ViewerFallback />}>
               <DocPreview key={active + "-" + doc.name} file={doc} markers={markers} editable
@@ -1175,7 +1226,7 @@ function MultiDocFlow({ docs, setDocs, teams, typeSection, addRequest, notify, o
               placeholder="Optional note for the approver(s)…" className="w-full mb-3" />
             {!allReady && (
               <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.10)", color: "#8B6914" }}>
-                {notReadyCount} document{notReadyCount === 1 ? " still needs" : "s still need"} a team and at least one signature box.
+                {notReadyCount} document{notReadyCount === 1 ? " still needs" : "s still need"} an approver and at least one signature box.
               </div>
             )}
             <div className="flex justify-end">
