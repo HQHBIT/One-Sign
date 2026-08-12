@@ -596,10 +596,10 @@ function Shell(props) {
     else setNeedsSig(false);
   }, [user.id, user.role, user.hasSignature]);
 
-  // High-contrast display: flip on the server (the choice follows the user
-  // across phone and web), then re-read the profile so the overlay reacts.
-  const toggleDarkMode = async () => {
-    try { await api.setMyDarkMode(!user.darkModeOn); await props.refreshUser?.(); }
+  // Display mode: null = normal, or one of the three dark variants. Stored on
+  // the server so the choice follows the user across phone and web.
+  const setDisplayMode = async (variant) => {
+    try { await api.setMyDarkMode(!!variant, variant || null); await props.refreshUser?.(); }
     catch (e) { notify(e.message || "Could not switch the display", "error"); }
   };
 
@@ -611,15 +611,24 @@ function Shell(props) {
           spreadsheets included, on any screen size. pointer-events: none, so
           it never intercepts a tap; z-index above every drawer and modal. */}
       {user.darkModeOn && (
-        <div aria-hidden="true" data-invert-layer style={{
-          position: "fixed", inset: 0, background: "#fff",
-          mixBlendMode: "difference", pointerEvents: "none", zIndex: 2147483000,
+        <div aria-hidden="true" data-invert-layer data-variant={user.darkModeVariant} style={{
+          position: "fixed", inset: 0, pointerEvents: "none", zIndex: 2147483000,
+          ...(user.darkModeVariant === "natural"
+            // Dark with familiar colours: invert flips luminance, the half-turn
+            // hue rotation puts the hues roughly back where they were.
+            ? { backdropFilter: "invert(1) hue-rotate(180deg)", WebkitBackdropFilter: "invert(1) hue-rotate(180deg)" }
+            : user.darkModeVariant === "grayscale"
+            // No hue at all: every kind of colour-blindness sees the same
+            // picture — everything is distinguished by brightness alone.
+            ? { backdropFilter: "invert(1) grayscale(1) contrast(1.2)", WebkitBackdropFilter: "invert(1) grayscale(1) contrast(1.2)" }
+            // The strongest flip — the original difference-blend inversion.
+            : { background: "#fff", mixBlendMode: "difference" }),
         }} />
       )}
       <TopBar user={user} logout={logout}
         notifs={props.notifs} onOpenNotification={props.onOpenNotification}
         onMarkAllNotifsRead={props.onMarkAllNotifsRead} onToggleEmailNotifs={props.onToggleEmailNotifs}
-        onToggleDarkMode={user.darkModeAllowed ? toggleDarkMode : null}
+        onSetDisplayMode={user.darkModeAllowed ? setDisplayMode : null}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
         onBiometric={() => setBioOpen(true)}

@@ -11,7 +11,7 @@ function ago(ts) {
 }
 const NOTIF_ICONS = { new_request: FileText, approved: CheckCircle, rejected: XCircle, reminder: Clock };
 
-export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onToggleDarkMode, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
+export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onSetDisplayMode, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver", executive: "Executive", executive_assistant: "Executive Assistant" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
@@ -197,21 +197,38 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
                     </span>
                   </button>
                 )}
-                {/* Only rendered when the admin has granted this account the
-                    high-contrast display — the feature is per-user, not global. */}
-                {onToggleDarkMode && user.darkModeAllowed && (
-                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
-                    title="Inverts the whole screen — white becomes black — for easier reading, documents included."
-                    onClick={() => onToggleDarkMode()}>
-                    <Moon size={15} className="opacity-70 shrink-0" />
-                    <span className="flex-1">High-contrast display</span>
-                    <span className="relative inline-flex items-center shrink-0" aria-hidden="true"
-                      style={{ width: 34, height: 18, borderRadius: 999, transition: "background .15s",
-                        backgroundColor: user.darkModeOn ? "#2D5F2F" : "rgba(15,26,46,.18)" }}>
-                      <span style={{ position: "absolute", top: 2, left: user.darkModeOn ? 18 : 2,
-                        width: 14, height: 14, borderRadius: 999, backgroundColor: "#FAF7F0", transition: "left .15s" }} />
-                    </span>
-                  </button>
+                {/* Display modes — only when the admin has granted this account
+                    the feature. Three dark variants so the user picks whichever
+                    reads best; Greyscale removes colour entirely for
+                    colour-blind-safe viewing. */}
+                {onSetDisplayMode && user.darkModeAllowed && (
+                  <div className="px-4 py-2.5" role="group" aria-label="Display mode">
+                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5 flex items-center gap-1.5">
+                      <Moon size={11} /> Display mode
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {[
+                        { v: null, label: "Normal", hint: "The standard bright display" },
+                        { v: "natural", label: "Dark", hint: "Dark background, familiar colours" },
+                        { v: "invert", label: "Inverted", hint: "The strongest black-to-white flip" },
+                        { v: "grayscale", label: "Greyscale", hint: "No colour at all — reads the same for every kind of colour-blindness" },
+                      ].map(o => {
+                        const active = o.v === null ? !user.darkModeOn : (user.darkModeOn && user.darkModeVariant === o.v);
+                        return (
+                          <button key={o.label} role="menuitem" title={o.hint}
+                            onClick={() => onSetDisplayMode(o.v)}
+                            className="text-xs px-2 py-1.5 rounded-md text-left font-medium"
+                            style={{
+                              border: active ? "2px solid #B8894A" : "1px solid rgba(15,26,46,.15)",
+                              backgroundColor: active ? "rgba(184,137,74,.10)" : "transparent",
+                              color: "var(--c-ink, #0F1A2E)",
+                            }}>
+                            {o.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
                 {onHelp && (
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}

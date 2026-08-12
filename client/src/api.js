@@ -174,8 +174,8 @@ export const api = {
   },
 
   // -------- high-contrast (inverted) display --------
-  setMyDarkMode(on) {
-    return this.fetch("/api/users/me/dark-mode", { method: "PUT", body: JSON.stringify({ on }) });
+  setMyDarkMode(on, variant = null) {
+    return this.fetch("/api/users/me/dark-mode", { method: "PUT", body: JSON.stringify({ on, ...(variant ? { variant } : {}) }) });
   },
   setDarkModeAccess(userId, allowed) {
     return this.fetch(`/api/users/${userId}/dark-mode-access`, { method: "PUT", body: JSON.stringify({ allowed }) });

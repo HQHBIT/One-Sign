@@ -516,7 +516,16 @@ router.put("/me/dark-mode", authRequired, async (req, res, next) => {
       return res.status(403).json({ error: "High-contrast display has not been enabled for your account — ask your administrator" });
     }
     const on = req.body?.on === true || req.body?.on === "true" ? 1 : 0;
-    await execute("UPDATE users SET dark_mode_on = ? WHERE id = ?", [on, req.user.id]);
+    // Three dark variants; the user picks whichever reads best for them.
+    // 'grayscale' removes hue entirely, so any colour-vision deficiency sees
+    // the same picture — everything is distinguished by brightness alone.
+    const VARIANTS = ["natural", "invert", "grayscale"];
+    const variant = VARIANTS.includes(req.body?.variant) ? req.body.variant : null;
+    if (variant) {
+      await execute("UPDATE users SET dark_mode_on = ?, dark_mode_variant = ? WHERE id = ?", [on, variant, req.user.id]);
+    } else {
+      await execute("UPDATE users SET dark_mode_on = ? WHERE id = ?", [on, req.user.id]);
+    }
     res.json({ ok: true, on: !!on });
   } catch (e) { next(e); }
 });

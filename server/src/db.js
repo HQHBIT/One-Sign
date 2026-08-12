@@ -330,6 +330,7 @@ async function runSchema() {
   // (dark_mode_on), and the choice follows them across phone and web.
   await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_allowed TINYINT(1) NOT NULL DEFAULT 0`);
   await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_on TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_variant VARCHAR(16) NOT NULL DEFAULT 'invert'`);
 
   // A user may keep several signatures (e.g. official + initials), each with a
   // label the approver picks from at signing time. users.signature_path stays
@@ -604,6 +605,7 @@ export async function hydrateUser(row) {
     emailNotifications: row.email_notifications == null ? true : !!Number(row.email_notifications),
     darkModeAllowed: !!Number(row.dark_mode_allowed),
     darkModeOn: !!Number(row.dark_mode_allowed) && !!Number(row.dark_mode_on),
+    darkModeVariant: row.dark_mode_variant || "invert",
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

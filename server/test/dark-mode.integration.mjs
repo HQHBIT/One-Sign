@@ -38,6 +38,15 @@ ck(r.status === 200 && r.body.on === true, "user switches it on");
 me = await J(await fetch(B + "/api/auth/me", { headers: H("u_dm_x") }));
 ck(me.body.user?.darkModeOn === true, "…and it persists on the profile");
 
+// 4b. the user picks a variant; it persists, and junk variants are ignored
+r = await J(await fetch(B + "/api/users/me/dark-mode", { method: "PUT", headers: H("u_dm_x"), body: JSON.stringify({ on: true, variant: "grayscale" }) }));
+ck(r.status === 200, "user picks the greyscale (colour-blind-safe) variant");
+me = await J(await fetch(B + "/api/auth/me", { headers: H("u_dm_x") }));
+ck(me.body.user?.darkModeVariant === "grayscale", "…and the variant persists on the profile");
+r = await J(await fetch(B + "/api/users/me/dark-mode", { method: "PUT", headers: H("u_dm_x"), body: JSON.stringify({ on: true, variant: "sepia" }) }));
+me = await J(await fetch(B + "/api/auth/me", { headers: H("u_dm_x") }));
+ck(me.body.user?.darkModeVariant === "grayscale", "an unknown variant is ignored, not stored");
+
 // 5. revoking also switches the display back off — never stranded
 r = await J(await fetch(B + "/api/users/u_dm_x/dark-mode-access", { method: "PUT", headers: H("u_dm_adm"), body: JSON.stringify({ allowed: false }) }));
 ck(r.status === 200, "admin revokes");
