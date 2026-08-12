@@ -132,6 +132,25 @@ const u2 = await queryOne("SELECT signature_path FROM users WHERE id='u_sg_a'");
 const defRow = await queryOne("SELECT file_path FROM user_signatures WHERE id=?", [newDef.id]);
 ck(u2.signature_path === defRow.file_path, "users.signature_path follows the promotion");
 
+// ---------- 10. SECURITY: signature images are owner-or-admin only ----------
+// Being signed in must NOT allow harvesting other people's signatures — the
+// exact forgery risk this system exists to prevent. Foreign requests get the
+// same 404 an absent signature produces (no probing oracle).
+await execute("DELETE FROM users WHERE id='u_sg_adm'");
+await execute("INSERT INTO users (id,email,password_hash,name,role,created_at,active) VALUES ('u_sg_adm','u_sg_adm@hqhb.in',?,'Sig Admin','admin',?,1)", [bcrypt.hashSync("x", 4), Date.now()]);
+
+r = { status: (await fetch(B + "/api/users/u_sg_a/signature", { headers: { Authorization: "Bearer " + signToken("u_sg_b") } })).status };
+ck(r.status === 404, "*** another APPROVER cannot fetch my signature image *** (" + r.status + ")");
+r = { status: (await fetch(B + "/api/users/u_sg_a/signature", { headers: { Authorization: "Bearer " + signToken("u_sg_r") } })).status };
+ck(r.status === 404, "*** a REQUESTOR cannot fetch an approver's signature image *** (" + r.status + ")");
+r = { status: (await fetch(B + "/api/users/u_sg_a/signature", { headers: { Authorization: "Bearer " + signToken("u_sg_a") } })).status };
+ck(r.status === 200, "the owner still fetches their own (" + r.status + ")");
+r = { status: (await fetch(B + "/api/users/u_sg_a/signature", { headers: { Authorization: "Bearer " + signToken("u_sg_adm") } })).status };
+ck(r.status === 200, "the admin still fetches it for the Signatures page (" + r.status + ")");
+r = { status: (await fetch(B + "/api/users/u_sg_nonexistent/signature", { headers: { Authorization: "Bearer " + signToken("u_sg_b") } })).status };
+ck(r.status === 404, "foreign and nonexistent are indistinguishable (both 404)");
+await execute("DELETE FROM users WHERE id='u_sg_adm'");
+
 console.log(fail.length ? `\n${fail.length} check(s) failed` : "\nMULTIPLE SIGNATURES E2E PASSED");
 await clean();
 process.exit(fail.length ? 1 : 0);

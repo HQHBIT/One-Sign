@@ -568,9 +568,18 @@ router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("
   } catch (e) { next(e); }
 });
 
-// ---------- get signature image (authenticated) ----------
+// ---------- get signature image (owner or admin ONLY) ----------
+// A signature image is the single most forgeable artefact this system stores.
+// Being signed in is NOT enough to fetch someone else's — that would let any
+// user harvest every signature in the organisation by iterating ids. Only the
+// owner (previews, self-sign) and the admin (Signatures page) may read one.
+// Everyone else gets the same 404 an absent signature produces, so the
+// endpoint cannot even be used to probe who has a signature on file. Stamping
+// other people's signatures onto documents happens purely server-side and
+// never needed this endpoint.
 router.get("/:id/signature", authRequired, async (req, res, next) => {
   try {
+    if (req.params.id !== req.user.id && req.user.role !== "admin") return res.status(404).end();
     const row = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.params.id]);
     if (!row?.signature_path) return res.status(404).end();
     res.sendFile(path.join(SIG_DIR, row.signature_path));

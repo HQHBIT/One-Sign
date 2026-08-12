@@ -75,7 +75,10 @@ ck(c.status === 200, "request created (" + c.status + ")");
 ck(await readUntil("data: changed", 10000),
    "*** the approver's stream received 'changed' without any polling ***");
 
-reader.cancel().catch(() => {});
+// Close the stream and let its socket fully unwind before exit — otherwise
+// libuv trips a teardown assertion on Windows tearing down a live handle.
+await reader.cancel().catch(() => {});
+await new Promise(r => setTimeout(r, 150));
 console.log(fail.length ? `\n${fail.length} check(s) failed` : "\nLIVE UPDATES E2E PASSED");
 await clean();
 for (const u of ["u_ev_r", "u_ev_a"]) await fs.unlink(path.join(SIGS, u + ".png")).catch(() => {});
