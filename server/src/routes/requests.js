@@ -15,6 +15,7 @@ import {
   readMaybe, newUnlockCode, maskEmail
 } from "../confidential.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
+import { pingUser, pingAdmins } from "../events.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
@@ -1411,6 +1412,24 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", "executive_ass
       "UPDATE request_step_signers SET status = 'rejected' WHERE status = 'pending' AND step_id IN (SELECT id FROM request_steps WHERE request_id = ?)",
       [row.id]
     );
+
+    // Nobody is "notified" of a withdrawal, so notifyUser doesn't run here —
+    // but every screen showing this request must still drop it live: assigned
+    // signers, any claiming approver, the target team's authority holders.
+    try {
+      const parties = new Set();
+      if (row.approver_id) parties.add(row.approver_id);
+      for (const s of await query(
+        "SELECT sg.user_id FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id WHERE st.request_id = ?",
+        [row.id])) parties.add(s.user_id);
+      if (row.target_team_id) {
+        for (const a of await query("SELECT user_id FROM signing_authority WHERE team_id = ?", [row.target_team_id])) {
+          parties.add(a.user_id);
+        }
+      }
+      parties.forEach(pingUser);
+      pingAdmins();
+    } catch { /* live updates must never block the action */ }
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });

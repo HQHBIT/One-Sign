@@ -8,6 +8,7 @@
 // ============================================================
 import { execute, queryOne } from "./db.js";
 import { sendEmail, confidentialTemplate } from "./email.js";
+import { pingUser, pingAdmins } from "./events.js";
 
 const uid = (p = "n") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
@@ -53,6 +54,10 @@ export async function notifyUser({ user, template, ctx = {}, requestId = null })
       [uid(), row.id, template, title.slice(0, 250), body ? body.slice(0, 480) : null, requestId || ctx.requestId || null, Date.now()]
     );
   } catch (e) { console.error("[notify] in-app insert failed", e.message); }
+
+  // Live update: the recipient's open sessions re-fetch instead of waiting for
+  // a manual refresh; admin dashboards follow all activity.
+  try { pingUser(row.id); pingAdmins(); } catch { /* never blocks the flow */ }
 
   // Email: only when the recipient hasn't turned it off (default = on).
   const emailOn = row.email_notifications == null || Number(row.email_notifications) === 1;

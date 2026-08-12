@@ -327,6 +327,37 @@ export default function App() {
     }
     catch (e) { notify(e.message, "error"); }
   };
+  // ---- live updates (SSE) ----
+  // One EventSource per session: the server sends a tiny "changed" whenever a
+  // request or notification touches this user, and the client re-runs its
+  // normal refresh — no manual reloading. Bursts (a 10-document batch) are
+  // coalesced by a short debounce. Tickets expire, so reconnection fetches a
+  // fresh one rather than relying on EventSource's built-in retry.
+  useEffect(() => {
+    if (!user) return;
+    let es = null, closed = false, debounce = null, retryTimer = null;
+    const scheduleRefresh = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => refresh(user), 400);
+    };
+    const connect = async () => {
+      try {
+        const { ticket } = await api.eventsTicket();
+        if (closed) return;
+        es = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
+        es.onmessage = (ev) => { if (ev.data === "changed") scheduleRefresh(); };
+        es.onerror = () => {
+          es?.close();
+          if (!closed) retryTimer = setTimeout(connect, 5000);
+        };
+      } catch {
+        if (!closed) retryTimer = setTimeout(connect, 10000);
+      }
+    };
+    connect();
+    return () => { closed = true; clearTimeout(debounce); clearTimeout(retryTimer); es?.close(); };
+  }, [user?.id]);
+
   // ---- in-app notifications ----
   const openNotification = async (n) => {
     if (!n.read) {

@@ -173,6 +173,11 @@ export const api = {
     });
   },
 
+  // -------- live updates (SSE) --------
+  // EventSource cannot send headers, so the stream is opened with a
+  // short-lived ticket fetched over the normal authenticated channel.
+  eventsTicket() { return this.fetch("/api/events/ticket", { method: "POST" }); },
+
   // -------- high-contrast (inverted) display --------
   setMyDarkMode(on, variant = null) {
     return this.fetch("/api/users/me/dark-mode", { method: "PUT", body: JSON.stringify({ on, ...(variant ? { variant } : {}) }) });
