@@ -31,7 +31,13 @@ export function rateLimit({ windowMs, max, keyBy = null, message = "Too many att
   return (req, res, next) => {
     const now = Date.now();
     sweep(now);
-    const ip = (req.ip || req.socket?.remoteAddress || "unknown").toString();
+    // Behind Cloudflare, req.ip resolves to a rotating edge IP, which would
+    // scatter the buckets and defeat the limit. CF-Connecting-IP is Cloudflare's
+    // authoritative client IP and is stable per real client. Fall back to req.ip
+    // for local/dev. (Origin-to-Cloudflare-only lockdown, which stops a direct
+    // hit spoofing this header, is an owner-side nginx control.)
+    const ip = (req.headers["cf-connecting-ip"] || req.headers["x-real-ip"]
+      || req.ip || req.socket?.remoteAddress || "unknown").toString();
     const extra = keyBy ? String(keyBy(req) || "") : "";
     const key = `${req.baseUrl}${req.path}|${ip}|${extra}`;
 

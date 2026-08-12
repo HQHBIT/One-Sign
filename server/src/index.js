@@ -32,10 +32,13 @@ const PORT = parseInt(process.env.PORT || "5001", 10);
 // hard-configured value — which on prod had been the box's internal IP,
 // leaking it in every CORS header.
 const PUBLIC_ORIGIN = "https://signflow.umooriqtesadiyah.org";
-const ALLOWED_ORIGINS = new Set([
-  PUBLIC_ORIGIN,
-  process.env.CLIENT_ORIGIN || "http://localhost:5173",
-]);
+// Only https origins and localhost dev are ever allowed. A CLIENT_ORIGIN that is
+// a bare IP (prod's was set to the box's own internal IP:port) is refused, so it
+// can never be reflected back in a CORS header regardless of the env value.
+const okOrigin = (o) => /^https:\/\//.test(o) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o);
+const ALLOWED_ORIGINS = new Set(
+  [PUBLIC_ORIGIN, process.env.CLIENT_ORIGIN || "http://localhost:5173"].filter(okOrigin)
+);
 
 async function main() {
   try {
