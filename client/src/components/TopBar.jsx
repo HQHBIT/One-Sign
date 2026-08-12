@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon } from "lucide-react";
 
 // Relative "2h ago"-style stamp for the notification list.
 function ago(ts) {
@@ -11,7 +11,7 @@ function ago(ts) {
 }
 const NOTIF_ICONS = { new_request: FileText, approved: CheckCircle, rejected: XCircle, reminder: Clock };
 
-export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
+export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onToggleDarkMode, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver", executive: "Executive", executive_assistant: "Executive Assistant" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
@@ -193,6 +193,22 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
                       style={{ width: 34, height: 18, borderRadius: 999, transition: "background .15s",
                         backgroundColor: user.emailNotifications !== false ? "#2D5F2F" : "rgba(15,26,46,.18)" }}>
                       <span style={{ position: "absolute", top: 2, left: user.emailNotifications !== false ? 18 : 2,
+                        width: 14, height: 14, borderRadius: 999, backgroundColor: "#FAF7F0", transition: "left .15s" }} />
+                    </span>
+                  </button>
+                )}
+                {/* Only rendered when the admin has granted this account the
+                    high-contrast display — the feature is per-user, not global. */}
+                {onToggleDarkMode && user.darkModeAllowed && (
+                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                    title="Inverts the whole screen — white becomes black — for easier reading, documents included."
+                    onClick={() => onToggleDarkMode()}>
+                    <Moon size={15} className="opacity-70 shrink-0" />
+                    <span className="flex-1">High-contrast display</span>
+                    <span className="relative inline-flex items-center shrink-0" aria-hidden="true"
+                      style={{ width: 34, height: 18, borderRadius: 999, transition: "background .15s",
+                        backgroundColor: user.darkModeOn ? "#2D5F2F" : "rgba(15,26,46,.18)" }}>
+                      <span style={{ position: "absolute", top: 2, left: user.darkModeOn ? 18 : 2,
                         width: 14, height: 14, borderRadius: 999, backgroundColor: "#FAF7F0", transition: "left .15s" }} />
                     </span>
                   </button>

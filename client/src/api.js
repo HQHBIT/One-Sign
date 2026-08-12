@@ -173,6 +173,14 @@ export const api = {
     });
   },
 
+  // -------- high-contrast (inverted) display --------
+  setMyDarkMode(on) {
+    return this.fetch("/api/users/me/dark-mode", { method: "PUT", body: JSON.stringify({ on }) });
+  },
+  setDarkModeAccess(userId, allowed) {
+    return this.fetch(`/api/users/${userId}/dark-mode-access`, { method: "PUT", body: JSON.stringify({ allowed }) });
+  },
+
   // -------- my signatures (multiple, tagged) --------
   mySignatures() { return this.fetch("/api/users/me/signatures").then(r => r.signatures); },
   addMySignature({ dataUrl, label }) {

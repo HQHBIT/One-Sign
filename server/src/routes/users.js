@@ -506,6 +506,37 @@ router.get("/me/signatures/:sid/image", authRequired, async (req, res, next) => 
   } catch (e) { next(e); }
 });
 
+// ---------- high-contrast (inverted) display ----------
+// The user's own switch. Refused unless the admin has granted access — the
+// feature is per-user by design, not global.
+router.put("/me/dark-mode", authRequired, async (req, res, next) => {
+  try {
+    const me = await queryOne("SELECT dark_mode_allowed FROM users WHERE id = ?", [req.user.id]);
+    if (!Number(me?.dark_mode_allowed)) {
+      return res.status(403).json({ error: "High-contrast display has not been enabled for your account — ask your administrator" });
+    }
+    const on = req.body?.on === true || req.body?.on === "true" ? 1 : 0;
+    await execute("UPDATE users SET dark_mode_on = ? WHERE id = ?", [on, req.user.id]);
+    res.json({ ok: true, on: !!on });
+  } catch (e) { next(e); }
+});
+
+// The admin's per-user gate. Revoking also switches the display back to normal,
+// so a revoked user is never stranded in a mode they can no longer control.
+router.put("/:id/dark-mode-access", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const target = await queryOne("SELECT id FROM users WHERE id = ?", [req.params.id]);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const allowed = req.body?.allowed === true || req.body?.allowed === "true" ? 1 : 0;
+    if (allowed) {
+      await execute("UPDATE users SET dark_mode_allowed = 1 WHERE id = ?", [target.id]);
+    } else {
+      await execute("UPDATE users SET dark_mode_allowed = 0, dark_mode_on = 0 WHERE id = ?", [target.id]);
+    }
+    res.json({ ok: true, allowed: !!allowed });
+  } catch (e) { next(e); }
+});
+
 // ---------- admin set signature for a user ----------
 router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("signature"), async (req, res, next) => {
   try {

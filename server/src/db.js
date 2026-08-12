@@ -325,6 +325,12 @@ async function runSchema() {
   // Per-user toggle: receive workflow emails or not (in-app always arrives).
   await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
 
+  // High-contrast (inverted) display for low-vision users. The ADMIN grants
+  // access per user (dark_mode_allowed); the user then flips it on or off
+  // (dark_mode_on), and the choice follows them across phone and web.
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_allowed TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_on TINYINT(1) NOT NULL DEFAULT 0`);
+
   // A user may keep several signatures (e.g. official + initials), each with a
   // label the approver picks from at signing time. users.signature_path stays
   // the DEFAULT and is kept in sync, so every legacy path — stamping, previews,
@@ -596,6 +602,8 @@ export async function hydrateUser(row) {
     // email yet — drives the one-time "enter your work email" prompt.
     needsWorkEmail: (row.auth_provider === "oneaccess") && Number(row.work_email_set) === 0,
     emailNotifications: row.email_notifications == null ? true : !!Number(row.email_notifications),
+    darkModeAllowed: !!Number(row.dark_mode_allowed),
+    darkModeOn: !!Number(row.dark_mode_allowed) && !!Number(row.dark_mode_on),
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),

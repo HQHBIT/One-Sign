@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -596,11 +596,30 @@ function Shell(props) {
     else setNeedsSig(false);
   }, [user.id, user.role, user.hasSignature]);
 
+  // High-contrast display: flip on the server (the choice follows the user
+  // across phone and web), then re-read the profile so the overlay reacts.
+  const toggleDarkMode = async () => {
+    try { await api.setMyDarkMode(!user.darkModeOn); await props.refreshUser?.(); }
+    catch (e) { notify(e.message || "Could not switch the display", "error"); }
+  };
+
   return (
     <>
+      {/* Whole-screen inversion for low-vision reading: a difference blend
+          against white turns every pixel underneath into its opposite — white
+          pages become black, dark text becomes light — documents, PDFs and
+          spreadsheets included, on any screen size. pointer-events: none, so
+          it never intercepts a tap; z-index above every drawer and modal. */}
+      {user.darkModeOn && (
+        <div aria-hidden="true" data-invert-layer style={{
+          position: "fixed", inset: 0, background: "#fff",
+          mixBlendMode: "difference", pointerEvents: "none", zIndex: 2147483000,
+        }} />
+      )}
       <TopBar user={user} logout={logout}
         notifs={props.notifs} onOpenNotification={props.onOpenNotification}
         onMarkAllNotifsRead={props.onMarkAllNotifsRead} onToggleEmailNotifs={props.onToggleEmailNotifs}
+        onToggleDarkMode={user.darkModeAllowed ? toggleDarkMode : null}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
         onBiometric={() => setBioOpen(true)}
@@ -3008,6 +3027,18 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
     try { await api.createUser(data); notify("User added", "success"); await saveUsers(); return true; }
     catch (e) { notify(e.message, "error"); return false; }
   };
+
+  // Grant or revoke the high-contrast (inverted) display for one user. The
+  // feature is per-user by design; revoking also switches their screen back.
+  const toggleDarkAccess = async (u) => {
+    try {
+      await api.setDarkModeAccess(u.id, !u.darkModeAllowed);
+      notify(u.darkModeAllowed
+        ? `High-contrast display revoked for ${u.name}`
+        : `High-contrast display allowed for ${u.name} — they'll find the switch in their profile menu`, "success");
+      await saveUsers();
+    } catch (e) { notify(e.message, "error"); }
+  };
   const remove = async (id, name) => {
     const ok = await confirm({
       title: `Delete ${name || "this user"}?`,
@@ -3208,6 +3239,13 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                     title="Reset password — choose a new password or auto-generate">
                     <KeyRound size={13} />
                   </button>
+                  <button className={u.darkModeAllowed ? "opacity-100" : "opacity-40 hover:opacity-100"}
+                    onClick={() => toggleDarkAccess(u)}
+                    title={u.darkModeAllowed
+                      ? "High-contrast display: ALLOWED — click to revoke"
+                      : "Allow the high-contrast (inverted) display for this user"}>
+                    <Moon size={13} style={u.darkModeAllowed ? { color: "var(--c-gold)" } : undefined} />
+                  </button>
                 </>
               )}
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
@@ -3245,6 +3283,11 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
                       onClick={() => setResetTarget(u)}
                       title="Reset password">
                       <KeyRound size={13} />
+                    </button>
+                    <button className={u.darkModeAllowed ? "opacity-100" : "opacity-40 hover:opacity-100"}
+                      onClick={() => toggleDarkAccess(u)}
+                      title={u.darkModeAllowed ? "High-contrast display: ALLOWED — tap to revoke" : "Allow high-contrast display"}>
+                      <Moon size={13} style={u.darkModeAllowed ? { color: "var(--c-gold)" } : undefined} />
                     </button>
                   </>
                 )}
