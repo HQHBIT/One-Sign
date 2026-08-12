@@ -7,6 +7,13 @@ import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
 import { validateRegistration } from "../registrationValidation.js";
+import { rateLimit, byEmail } from "../ratelimit.js";
+
+// Abuse controls. Login/OTP are keyed by IP+email so one attacker can't lock
+// out an unrelated user, and are generous enough not to trip real users.
+const loginLimit = rateLimit({ windowMs: 15 * 60_000, max: 10, keyBy: byEmail, message: "Too many sign-in attempts. Please wait a few minutes and try again." });
+const registerLimit = rateLimit({ windowMs: 60 * 60_000, max: 5, message: "Too many registrations from this network. Please try again later." });
+const otpLimit = rateLimit({ windowMs: 15 * 60_000, max: 6, keyBy: byEmail, message: "Too many attempts. Please wait a few minutes and try again." });
 import {
   oneAccessEnabled, localLoginEnabled, loginRedirectUrl,
   verifyOneAccessToken, fetchOneAccessProfile, toLocalIdentity,
@@ -149,13 +156,17 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
 }
 
-router.post("/login", async (req, res, next) => {
+router.post("/login", loginLimit, async (req, res, next) => {
   try {
     if (!localLoginEnabled()) {
       return res.status(403).json({ error: "Password sign-in is disabled. Please sign in with oneAccess." });
     }
     const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    // Type-check BEFORE any string method — an object like {"$gt":""} used to
+    // reach email.trim() and crash with a 500 that leaked the error text.
+    if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
 
     const row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email.trim()]);
     if (!row || !bcrypt.compareSync(password, row.password_hash)) {
@@ -252,7 +263,7 @@ router.post("/change-password", authRequired, async (req, res, next) => {
 // the plaintext. Intentionally returns the same 200 response whether the email
 // exists or not — this prevents account enumeration via response timing /
 // response shape. Logs server-side either way for the admin's email log.
-router.post("/forgot-password", async (req, res, next) => {
+router.post("/forgot-password", otpLimit, async (req, res, next) => {
   try {
     const { email } = req.body || {};
     if (!email || typeof email !== "string") {
@@ -286,7 +297,7 @@ router.post("/forgot-password", async (req, res, next) => {
 // Creates a PENDING registration. The user is not created and cannot sign in
 // until an admin approves it. Rejects duplicate emails (existing user OR a
 // pending registration) so people don't queue twice.
-router.post("/register", async (req, res, next) => {
+router.post("/register", registerLimit, async (req, res, next) => {
   try {
     const v = validateRegistration(req.body);
     if (!v.ok) return res.status(400).json({ error: v.error });
@@ -318,7 +329,7 @@ router.post("/register", async (req, res, next) => {
 // real address. (The old anti-enumeration "always ok" silently dropped every
 // mismatched request — users saw "submitted" but nothing reached the admin.)
 // One pending reset per user.
-router.post("/request-reset", async (req, res, next) => {
+router.post("/request-reset", otpLimit, async (req, res, next) => {
   try {
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
@@ -349,7 +360,7 @@ router.post("/request-reset", async (req, res, next) => {
 // Emails a fresh 6-digit code (10-min expiry). Always returns ok — never reveals
 // whether the email belongs to an account (anti-enumeration) — and won't resend
 // within a 45s cooldown to avoid inbox spam.
-router.post("/forgot-password/send-otp", async (req, res, next) => {
+router.post("/forgot-password/send-otp", otpLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
@@ -376,7 +387,7 @@ router.post("/forgot-password/send-otp", async (req, res, next) => {
 // POST /api/auth/forgot-password/verify-otp  body: { email, otp, newPassword }
 // Verifies the code and sets the new password immediately. The self-chosen password
 // is NOT copied into the admin-visible last_temp_password — IT stays out of the loop.
-router.post("/forgot-password/verify-otp", async (req, res, next) => {
+router.post("/forgot-password/verify-otp", otpLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const code = String(req.body?.otp || "").trim();

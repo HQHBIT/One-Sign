@@ -8,8 +8,14 @@ const uid = () => `t_${Date.now().toString(36)}_${Math.random().toString(36).sli
 router.get("/", authRequired, async (req, res, next) => {
   try {
     const rows = await query("SELECT id, name FROM teams ORDER BY name");
+    // A requestor needs a signer's id (to route to them), name, and signature
+    // aspect (to size the box); email disambiguates duplicate names in the
+    // picker. `role` is org-structure detail with no role in that decision, so
+    // it is sent to admins only — least privilege on the directory.
+    const isAdmin = req.user.role === "admin";
     const shape = (u) => ({
-      id: u.user_id, name: u.name, email: u.email, role: u.role,
+      id: u.user_id, name: u.name, email: u.email,
+      ...(isAdmin ? { role: u.role } : {}),
       hasSignature: !!u.signature_path,
       signatureAspect: u.signature_aspect != null ? Number(u.signature_aspect) : null
     });

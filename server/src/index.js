@@ -27,7 +27,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.resolve(__dirname, "../../client/dist");
 
 const PORT = parseInt(process.env.PORT || "5001", 10);
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
+// Allowed browser origins. The public site is always allowed; CLIENT_ORIGIN adds
+// the dev origin (or any extra) via env. This replaces echoing a single
+// hard-configured value — which on prod had been the box's internal IP,
+// leaking it in every CORS header.
+const PUBLIC_ORIGIN = "https://signflow.umooriqtesadiyah.org";
+const ALLOWED_ORIGINS = new Set([
+  PUBLIC_ORIGIN,
+  process.env.CLIENT_ORIGIN || "http://localhost:5173",
+]);
 
 async function main() {
   try {
@@ -40,7 +48,29 @@ async function main() {
   }
 
   const app = express();
-  app.use(cors({ origin: CLIENT_ORIGIN, credentials: false }));
+  // One front proxy (nginx/Cloudflare) sits ahead of us, so trust exactly one
+  // hop — this makes req.ip the real client for rate limiting without letting a
+  // client forge X-Forwarded-For to dodge it.
+  app.set("trust proxy", 1);
+  // Don't advertise the framework.
+  app.disable("x-powered-by");
+
+  // Security headers on every response. No external dependency; conservative so
+  // nothing breaks. (CSP is deliberately omitted — a wrong policy would break
+  // the SPA; nginx is the right place for it once tuned.)
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    next();
+  });
+
+  app.use(cors({
+    // Reflect only known origins; never emit the server's own address.
+    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.has(origin) ? (origin || PUBLIC_ORIGIN) : false),
+    credentials: false,
+  }));
   app.use(express.json({ limit: "5mb" }));
   app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
@@ -78,9 +108,14 @@ async function main() {
   }
 
   app.use((err, req, res, next) => {
-    console.error("[error]", err);
+    console.error("[error]", err);          // full detail stays server-side
     if (res.headersSent) return next(err);
-    res.status(err.status || 500).json({ error: err.message || "Server error" });
+    const status = err.status || 500;
+    // Only deliberate 4xx errors (thrown with a .status) may show their message.
+    // An unexpected 500 returns a generic string so raw library errors — SQL
+    // bind failures, type crashes — never reach the client.
+    const body = status < 500 && err.message ? err.message : "Something went wrong. Please try again.";
+    res.status(status).json({ error: body });
   });
 
   app.listen(PORT, () => {
@@ -90,7 +125,7 @@ async function main() {
       "║           HQHB · SignFlow · API server (MySQL)           ║",
       "╚══════════════════════════════════════════════════════════╝",
       `  ▸ http://localhost:${PORT}/api`,
-      `  ▸ CORS origin: ${CLIENT_ORIGIN}`,
+      `  ▸ CORS origins: ${[...ALLOWED_ORIGINS].join(", ")}`,
       `  ▸ SendGrid: ${process.env.SENDGRID_API_KEY ? "LIVE" : "logged only (set SENDGRID_API_KEY to enable)"}`,
       "",
       "  Seeded accounts:",
