@@ -1297,6 +1297,13 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
 function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
+  // One scroller only: the drawer. The page behind keeps its position but
+  // stops scrolling (and stops showing its scrollbar) until the drawer closes.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
   const [leaveStyles, setLeaveStyles] = useState(null);
   // Confidential documents load only inside a live unlock window. `locked` puts
   // the code prompt up; `windowEndsAt` drives the countdown and re-locks at 0.
@@ -1377,7 +1384,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
             </div>
           ) : file ? (
             <Suspense fallback={<ViewerFallback />}>
-              <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
@@ -1824,6 +1831,12 @@ function VoiceNote({ requestId }) {
 
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
+  // Same single-scroller rule as PreviewDrawer.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
   const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");

@@ -8,7 +8,7 @@
 //   second mode.
 // ============================================================
 import { useState, useEffect, useRef } from "react";
-import { RefreshCw, LogOut, Check, X, Star, Trash2 } from "lucide-react";
+import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react";
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
@@ -335,7 +335,13 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
         ) : (
           <div>
-            <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="text-sm" />
+            {/* A styled link instead of the browser's bare "Choose File" control. */}
+            <label className="inline-flex items-center gap-1.5 cursor-pointer text-sm font-medium underline underline-offset-2"
+              style={{ color: "#8B6914" }}>
+              <Upload size={14} /> {uploaded ? "Choose a different image…" : "Choose an image from this device…"}
+              <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="hidden" />
+            </label>
+            <div className="text-xs opacity-50 mt-1">PNG or JPEG — it will be auto-cropped to the signature.</div>
             {uploaded && (
               <div className="mt-4 card p-4" style={{ backgroundColor: "var(--c-paper)" }}>
                 <img src={uploaded} alt="signature" style={{ maxHeight: 100, maxWidth: "100%", objectFit: "contain", display: "block", margin: "0 auto" }} />
