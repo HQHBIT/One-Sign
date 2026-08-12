@@ -15,7 +15,7 @@ import {
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
-import { UnlockModal, UnlockCountdown, ConfidentialBadge, ConfidentialPrompt } from "./components/UnlockGate.jsx";
+import { UnlockModal, ConfidentialBadge } from "./components/UnlockGate.jsx";
 import { useBackHandler, useEscapeKey, useScrollLock } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
@@ -1019,32 +1019,13 @@ function RequestorView(props) {
   // pending requests (authority, not role, confers the right to sign).
   const awaitingMySig = requests.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
 
-  // Starting a new request asks, once and up front, whether the document is
-  // confidential — a decision point rather than a checkbox that can be missed.
-  // Skipped entirely when the server holds no key, so nobody is prompted for a
-  // choice the backend cannot honour.
-  const [askConfidential, setAskConfidential] = useState(false);
-  const [newConfidential, setNewConfidential] = useState(false);
-  const [confAvailable, setConfAvailable] = useState(false);
-  useEffect(() => {
-    api.authConfig().then(c => setConfAvailable(!!c.confidentialEnabled)).catch(() => setConfAvailable(false));
-  }, []);
-  const openNew = (type = null) => {
-    setNewType(type);
-    setNewConfidential(false);
-    if (confAvailable) { setAskConfidential(true); return; }   // the form opens once they choose
-    setTab("new");
-  };
-  const chooseConfidential = (yes) => {
-    setNewConfidential(yes);
-    setAskConfidential(false);
-    setTab("new");
-  };
+  // Confidential is chosen via the checkbox inside the form (Section 00) —
+  // the up-front popup was removed at the owner's request (2026-08-12).
+  const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
-    defaultConfidential={newConfidential}
-    onDone={() => { setNewType(null); setPresetTpl(null); setNewConfidential(false); setTab("home"); }} />;
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={props.notify} back={() => setTab("home")} />;
@@ -1106,7 +1087,6 @@ function RequestorView(props) {
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
-      {askConfidential && <ConfidentialPrompt onChoose={chooseConfidential} />}
       {rejectedCount > 0 && (
         <div className="mt-8">
           <button className="btn-ghost text-sm" onClick={() => setTab("rejected")}>
@@ -1301,10 +1281,9 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
   // drawer is open (the page scroller is <html>, so both elements are locked).
   useScrollLock();
   const [leaveStyles, setLeaveStyles] = useState(null);
-  // Confidential documents load only inside a live unlock window. `locked` puts
-  // the code prompt up; `windowEndsAt` drives the countdown and re-locks at 0.
+  // Confidential documents load only after the viewer enters their code; once
+  // unlocked they stay open (the timed re-lock was removed at owner request).
   const [locked, setLocked] = useState(!!req.confidential);
-  const [windowEndsAt, setWindowEndsAt] = useState(null);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
@@ -1320,20 +1299,13 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
       } catch (e) {
-        // The window may have lapsed between unlocking and loading — ask again
-        // rather than showing a blank drawer.
-        if (e.needsUnlock) { setLocked(true); setWindowEndsAt(null); }
+        if (e.needsUnlock) setLocked(true);
         else console.error(e);
       }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [req.id, req.hasSignedFile, locked]);
 
-  // When the window lapses the document is pulled from view immediately — the
-  // bytes are already in the browser, so this is about not leaving it on screen.
-  const relock = useCallback(() => {
-    setFile(null); setWindowEndsAt(null); setLocked(true);
-  }, []);
 
   const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams);
 
@@ -1358,7 +1330,6 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0">
             {req.confidential && <ConfidentialBadge />}
-            {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
             {/* Take the document away right here — the approved email deep-links
                 into this drawer, so the download mustn't require backing out to
                 hunt for the row in a list. The buttons carry their own rules
@@ -1376,7 +1347,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
               <div className="text-sm font-medium">This document is locked</div>
-              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it for 2 minutes.</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it.</div>
             </div>
           ) : file ? (
             <Suspense fallback={<ViewerFallback />}>
@@ -1395,7 +1366,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
       </div>
       {locked && (
         <UnlockModal requestId={req.id}
-          onUnlocked={endsAt => { setWindowEndsAt(endsAt); setLocked(false); }}
+          onUnlocked={() => setLocked(false)}
           onCancel={onClose} />
       )}
     </div>
@@ -1414,27 +1385,9 @@ function ApproverView(props) {
   // "Awaiting your approval" sits first on the home screen; this opens the
   // review drawer for an item directly from there.
   const [quickOpenId, setQuickOpenId] = useState(null);
-  // Starting a new request asks, once and up front, whether the document is
-  // confidential — a decision point rather than a checkbox that can be missed.
-  // Skipped entirely when the server holds no key, so nobody is prompted for a
-  // choice the backend cannot honour.
-  const [askConfidential, setAskConfidential] = useState(false);
-  const [newConfidential, setNewConfidential] = useState(false);
-  const [confAvailable, setConfAvailable] = useState(false);
-  useEffect(() => {
-    api.authConfig().then(c => setConfAvailable(!!c.confidentialEnabled)).catch(() => setConfAvailable(false));
-  }, []);
-  const openNew = (type = null) => {
-    setNewType(type);
-    setNewConfidential(false);
-    if (confAvailable) { setAskConfidential(true); return; }   // the form opens once they choose
-    setTab("new");
-  };
-  const chooseConfidential = (yes) => {
-    setNewConfidential(yes);
-    setAskConfidential(false);
-    setTab("new");
-  };
+  // Confidential is chosen via the checkbox inside the form (Section 00) —
+  // the up-front popup was removed at the owner's request (2026-08-12).
+  const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSigned = r => iSignedInWorkflow(r, user.id);
@@ -1459,8 +1412,7 @@ function ApproverView(props) {
   const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSigned(r)));
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
-    defaultConfidential={newConfidential}
-    onDone={() => { setNewType(null); setPresetTpl(null); setNewConfidential(false); setTab("home"); }} />;
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
   if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
@@ -1521,7 +1473,6 @@ function ApproverView(props) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
-      {askConfidential && <ConfidentialPrompt onChoose={chooseConfidential} />}
 
       {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
@@ -1837,11 +1788,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
-  // Confidential documents need a live unlock window before they can be read —
-  // and the server refuses to APPROVE without one too, so the gate has to be
-  // cleared before the approve buttons can do anything.
+  // Confidential documents need the code before they can be read — and the
+  // server refuses to APPROVE without a verified unlock too. Once unlocked the
+  // document stays open (the timed re-lock was removed at owner request).
   const [locked, setLocked] = useState(!!req.confidential);
-  const [windowEndsAt, setWindowEndsAt] = useState(null);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
@@ -1857,14 +1807,13 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
       } catch (e) {
-        if (e.needsUnlock) { setLocked(true); setWindowEndsAt(null); }
+        if (e.needsUnlock) setLocked(true);
         else console.error(e);
       }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [req.id, req.hasSignedFile, locked]);
 
-  const relock = useCallback(() => { setFile(null); setWindowEndsAt(null); setLocked(true); }, []);
 
   // ---- which of my signatures to stamp ----
   // The default (or only) one is pre-selected; a picker appears only when the
@@ -1978,7 +1927,6 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {req.confidential && <ConfidentialBadge />}
-            {windowEndsAt && <UnlockCountdown endsAt={windowEndsAt} onExpire={relock} />}
             {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
@@ -2121,7 +2069,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
       )}
       {locked && (
         <UnlockModal requestId={req.id}
-          onUnlocked={endsAt => { setWindowEndsAt(endsAt); setLocked(false); }}
+          onUnlocked={() => setLocked(false)}
           onCancel={onClose} />
       )}
     </div>

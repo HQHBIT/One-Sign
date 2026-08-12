@@ -180,7 +180,7 @@ r = await fetch(`${B}/api/requests/${id}/unlock/verify`, {
   method: "POST", headers: { ...auth("u_ca"), "Content-Type": "application/json" }, body: JSON.stringify({ code: KNOWN }) });
 ck(r.status === 200, "the right code is accepted (" + r.status + ")");
 const win = await r.json();
-ck(win.windowMs === 120000, "the window is 2 minutes, got " + win.windowMs);
+ck(win.windowMs > 300 * 24 * 60 * 60 * 1000, "a verified unlock does not time out (window ~1 year), got " + win.windowMs);
 
 // ---------- 6. inside the window the document opens and decrypts correctly ----------
 r = await fetch(`${B}/api/requests/${id}/file`, { headers: auth("u_ca") });
@@ -206,10 +206,12 @@ ck(!signedOnDisk.subarray(0, 5).toString().includes("%PDF"), "signed copy is not
 const leftovers = (await fs.readdir(SIGNED)).filter(f => f.startsWith(id) && !f.endsWith(".enc"));
 ck(leftovers.length === 0, "no plaintext signed file was left behind: " + JSON.stringify(leftovers));
 
-// ---------- 8. the window expires ----------
+// ---------- 8. a force-expired window still locks (mechanism intact) ----------
+// The timed re-lock is gone, but the gate itself must still hold if a window
+// is ever ended (e.g. by a future revoke feature or manual intervention).
 await execute("UPDATE confidential_unlocks SET window_ends_at=? WHERE request_id=?", [Date.now() - 1, id]);
 r = await fetch(`${B}/api/requests/${id}/signed`, { headers: auth("u_ca") });
-ck(r.status === 403, "*** once the 60s lapses the document locks again *** (" + r.status + ")");
+ck(r.status === 403, "an ended window locks the document again (" + r.status + ")");
 
 // the requestor CAN download now that it is fully signed — after unlocking
 const cr = await queryOne("SELECT * FROM confidential_unlocks WHERE request_id=? AND user_id='u_cr' ORDER BY issued_at DESC LIMIT 1", [id]);

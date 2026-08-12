@@ -1,31 +1,25 @@
 // ============================================================
-//   Confidential unlock — the code prompt and the 60-second countdown.
+//   Confidential unlock — the one-time code prompt.
 //   ------------------------------------------------------------
-//   A confidential document is only served while the viewer holds a live
-//   window. This asks for the emailed code, then counts the window down and
-//   tells the parent when it lapses so the document can be blanked.
+//   A confidential document is served only after its viewer enters the code
+//   emailed to them. Once unlocked it stays open — the timed re-lock was
+//   removed at the owner's request (2026-08-12).
 // ============================================================
 import { useState, useEffect, useRef } from "react";
 import { Lock, ShieldCheck, X } from "lucide-react";
 import { api } from "../api.js";
 
-// mm:ss for the remaining window.
-const clock = (ms) => {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-};
-
-/**
- * Asks for the code and reports the granted window upward.
- *   onUnlocked(windowEndsAt) — the document may now be loaded
- *   onCancel()               — the viewer backed out
- */
 // Both drawers close when their backdrop is clicked, and this modal mounts
 // INSIDE that backdrop — so every click here must stop propagating, or tapping
 // the code input bubbles up and closes the whole drawer under the user.
 const trapClicks = (e) => e.stopPropagation();
 
-export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
+/**
+ * Asks for the emailed code and tells the parent once it verifies.
+ *   onUnlocked() — the document may now be loaded
+ *   onCancel()  — the viewer backed out
+ */
+export function UnlockModal({ requestId, onUnlocked, onCancel }) {
   const [stage, setStage] = useState("sending");   // sending | enter | verifying
   const [sentTo, setSentTo] = useState("");
   const [code, setCode] = useState("");
@@ -55,8 +49,8 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
     if (!/^\d{6}$/.test(code)) { setErr("Enter the 6-digit code"); return; }
     setStage("verifying"); setErr("");
     try {
-      const r = await api.verifyUnlockCode(requestId, code);
-      onUnlocked(r.windowEndsAt);
+      await api.verifyUnlockCode(requestId, code);
+      onUnlocked();
     } catch (e2) {
       setErr(e2.message || "Incorrect code");
       setCode("");
@@ -81,8 +75,7 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
         ) : (
           <form onSubmit={verify}>
             <p className="text-sm opacity-70 mt-2 mb-4">
-              A 6-digit code has been sent to <strong>{sentTo}</strong>. The document stays open for
-              {" "}<strong>2 minutes</strong> once unlocked.
+              A 6-digit code has been sent to <strong>{sentTo}</strong>. Enter it to open the document.
             </p>
             <input
               ref={inputRef} value={code} inputMode="numeric" autoComplete="one-time-code"
@@ -112,73 +105,6 @@ export function UnlockModal({ requestId, onUnlocked, onCancel, notify }) {
 }
 
 /**
- * Asked once, when starting a new request: is this document confidential?
- * A decision point rather than a checkbox buried in the form, so the requestor
- * makes the choice knowingly and sees what it costs the approver.
- *   onChoose(true|false) — proceed to the form with confidential on or off
- */
-export function ConfidentialPrompt({ onChoose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,26,46,.55)" }} onClick={trapClicks}>
-      <div className="card p-6 w-full max-w-md" style={{ backgroundColor: "var(--c-cream)" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <Lock size={17} style={{ color: "var(--c-gold)" }} />
-          <h3 className="font-display text-xl">Is this a confidential document?</h3>
-        </div>
-
-        <p className="text-sm opacity-75 mb-3">
-          If you proceed, <strong>the approver will need MFA through an OTP in order to view your
-          document</strong> — a 6-digit code is emailed to them, and the document stays open for
-          2 minutes once they enter it.
-        </p>
-        <ul className="text-xs opacity-70 mb-5 space-y-1.5 pl-4" style={{ listStyle: "disc" }}>
-          <li>The file is stored encrypted.</li>
-          <li>IT support cannot view or recover it — not even to help you.</li>
-          <li>It cannot be printed, and only you can download it once it is fully signed.</li>
-        </ul>
-
-        <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-          <button className="btn-ghost" onClick={() => onChoose(false)}>Cancel</button>
-          <button className="btn-primary" onClick={() => onChoose(true)}>
-            <Lock size={14} /> Yes, Proceed
-          </button>
-        </div>
-        <p className="text-[11px] opacity-50 mt-3 text-center sm:text-right">
-          Cancel continues as a normal request.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/** The live countdown pill. Calls onExpire once the window lapses. */
-export function UnlockCountdown({ endsAt, onExpire }) {
-  const [left, setLeft] = useState(() => endsAt - Date.now());
-  const fired = useRef(false);
-  useEffect(() => {
-    fired.current = false;
-    const t = setInterval(() => {
-      const ms = endsAt - Date.now();
-      setLeft(ms);
-      if (ms <= 0 && !fired.current) { fired.current = true; onExpire?.(); }
-    }, 250);
-    return () => clearInterval(t);
-  }, [endsAt, onExpire]);
-
-  const urgent = left <= 15000;
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono"
-      style={{
-        backgroundColor: urgent ? "rgba(155,44,44,.12)" : "rgba(184,137,74,.14)",
-        color: urgent ? "var(--c-rust-deep)" : "var(--c-gold-deep, #8B6914)",
-      }}
-      title="This confidential document locks again when the timer runs out">
-      <Lock size={11} /> {clock(left)}
-    </span>
-  );
-}
-
-/**
  * The word "Confidential" wherever the request appears — rows and drawer
  * headers. Replaced the diagonal on-document watermark at the owner's request
  * (2026-08-10): the label moved off the document and onto the request.
@@ -187,7 +113,7 @@ export function ConfidentialBadge() {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full shrink-0 text-[10px] font-semibold tracking-wider uppercase"
       style={{ backgroundColor: "rgba(184,137,74,.16)", color: "#8B6914" }}
-      title="Confidential — encrypted, and a fresh code is needed to open it">
+      title="Confidential — encrypted, and a one-time code is needed to open it">
       <Lock size={10} /> Confidential
     </span>
   );

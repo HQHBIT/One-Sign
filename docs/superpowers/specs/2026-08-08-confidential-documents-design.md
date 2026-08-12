@@ -54,7 +54,7 @@ email. This is why Phase 2 uses a user-chosen passphrase rather than a code.
 |---|---|---|
 | Key custody | Server-held, in `CONFIDENTIAL_KEY` env var | Phase 1 scope; Phase 2 moves it to the user. |
 | Step-up factor | Emailed 6-digit code only | Owner's choice. Passkey step-up was offered and declined; it remains available for Phase 2. |
-| Unlock window | 120 seconds (raised from 60 on 2026-08-10) | Owner's choice. The original 60s kept expiring mid-read in real use — the flagged risk materialised — and was doubled at the owner's request. |
+| Unlock window | Removed (2026-08-12; was 60s, then 120s) | Owner's choice, after both timed windows proved disruptive in real use. A verified unlock now stays open; each viewer still proves themselves once with their own emailed code, and every view/sign/download is still audit-logged. |
 | Download | Requestor only, and only once `status = 'approved'` | A downloaded copy escapes every control here. |
 | Printing | Disabled entirely for confidential documents | Printing is a copy. |
 | Executive Assistants | Excluded, even with `can_view` delegated | Widening the circle undermines the guarantee. |
@@ -176,8 +176,8 @@ prompt rather than a generic failure.
 
 Approving requires a live window too — you cannot sign what you are not currently permitted to see.
 
-**The clock starts at verification**, immediately before the document loads, so the window is
-120 seconds of actual visibility rather than being partly consumed by the email round trip.
+**No timed re-lock** (since 2026-08-12): once verified, the unlock stays open for that viewer.
+The first open of a document still demands the viewer's own one-time code.
 
 **The requestor is not exempt.** Re-opening their own confidential document later requires a code
 just as an approver does — otherwise the guarantee is only as strong as the raiser's session.
@@ -264,7 +264,7 @@ password manager before the feature is switched on. This is the operational cost
 | `CONFIDENTIAL_KEY` absent | Toggle hidden; `confidential=true` rejected with a clear error. Existing confidential documents return 503, never plaintext. |
 | Wrong or rotated key | GCM tag check fails; 500 with "Could not open this document". Never a partial or garbled file. |
 | Code expired (5 min) | 400 `code_expired`; client offers resend. |
-| Window expired (120 s) | 403 `locked`; viewer blanks, client offers a new code. |
+| Window force-ended (no timer since 2026-08-12) | 403 `locked`; the client offers a new code. |
 | 5 failed attempts | Row is dead; a new code must be issued. Logged as `unlock_fail`. |
 | More than 5 codes / 15 min | 429. |
 | Legacy plaintext file | `readMaybe` returns it unchanged — no migration needed. |
