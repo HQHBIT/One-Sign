@@ -16,7 +16,7 @@ import {
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
 import { UnlockModal, UnlockCountdown, ConfidentialBadge, ConfidentialPrompt } from "./components/UnlockGate.jsx";
-import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
+import { useBackHandler, useEscapeKey, useScrollLock } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
 
@@ -1297,13 +1297,9 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
 function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
-  // One scroller only: the drawer. The page behind keeps its position but
-  // stops scrolling (and stops showing its scrollbar) until the drawer closes.
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // One scroller only: the drawer. The website scrollbar disappears while the
+  // drawer is open (the page scroller is <html>, so both elements are locked).
+  useScrollLock();
   const [leaveStyles, setLeaveStyles] = useState(null);
   // Confidential documents load only inside a live unlock window. `locked` puts
   // the code prompt up; `windowEndsAt` drives the countdown and re-locks at 0.
@@ -1832,11 +1828,7 @@ function VoiceNote({ requestId }) {
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
   // Same single-scroller rule as PreviewDrawer.
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  useScrollLock();
   const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
