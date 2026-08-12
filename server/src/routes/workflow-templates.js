@@ -36,16 +36,38 @@ async function hydrateTemplate(row) {
     const team = await queryOne("SELECT id, name FROM teams WHERE id = ?", [st.teamId]);
     const signers = [];
     for (const uidStr of st.signers) {
-      const u = await queryOne("SELECT id, name, role, active, signature_path FROM users WHERE id = ?", [uidStr]);
-      const auth = u ? await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [uidStr, st.teamId]) : null;
+      const u = await queryOne("SELECT id, name, role, active, team_id, signature_path FROM users WHERE id = ?", [uidStr]);
+      // A legitimate signer for a TEAM STEP is exactly who the builder offered:
+      // someone who holds signing authority for the team, OR is a member of it
+      // (the fallback when the team has no designated approver). Requiring
+      // authority alone was stricter than both the builder and the approval
+      // step — which only needs the assigned person to sign — so it flagged
+      // perfectly workable workflows. This mirrors teamSigners() on the client.
+      const active = u && (u.active == null || Number(u.active) === 1);
+      const hasAuth = u ? await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [uidStr, st.teamId]) : null;
+      const isMember = u && u.team_id === st.teamId;
+      const linked = !!(hasAuth || isMember);
+
+      // A specific reason when something is off, so the UI can say what to fix
+      // instead of a vague "needs attention".
+      let reason = null;
+      if (!u) reason = "This user no longer exists — remove them from the step.";
+      else if (!active) reason = `${u.name} has been deactivated — remove or replace them.`;
+      else if (!linked) reason = `${u.name} is no longer on ${team?.name || "this team"} — add them to the team (or grant signing authority), or pick someone else.`;
+
       signers.push({
         userId: uidStr,
         name: u?.name || "(removed user)",
         hasSignature: !!u?.signature_path,
-        valid: !!(u && (u.active == null || Number(u.active) === 1) && auth),
+        valid: !!(active && linked),
+        reason,
       });
     }
-    out.push({ teamId: st.teamId, teamName: team?.name || "(removed team)", teamValid: !!team, signers });
+    out.push({
+      teamId: st.teamId, teamName: team?.name || "(removed team)", teamValid: !!team,
+      reason: team ? null : "This team has been deleted — pick a different team for this step.",
+      signers,
+    });
   }
   return {
     id: row.id, name: row.name, steps: out,

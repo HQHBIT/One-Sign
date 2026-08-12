@@ -1002,7 +1002,9 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                     </div>
                     <div className="flex gap-2 shrink-0">
                       <button className="btn-primary text-xs" disabled={!t.valid}
-                        title={t.valid ? "Attach a document to this workflow" : "Contains removed or unauthorised entries — edit it first"}
+                        title={t.valid ? "Attach a document to this workflow"
+                          : (t.steps.flatMap(s => [s.reason, ...s.signers.map(g => g.reason)]).filter(Boolean)[0]
+                             || "Something in this route needs fixing — edit it first")}
                         onClick={() => onUse(t)}>
                         <FilePlus size={12} /> Use with a document
                       </button>
@@ -1017,7 +1019,12 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                         <span className="pill" style={{ backgroundColor: `${STEP_COLORS[i % STEP_COLORS.length]}1A`, color: STEP_COLORS[i % STEP_COLORS.length] }}>
                           {s.teamName}: {s.signers.map(g => g.name.split(" ")[0]).join(", ")}
                         </span>
-                        {(!s.teamValid || s.signers.some(g => !g.valid)) && <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>needs attention</span>}
+                        {(!s.teamValid || s.signers.some(g => !g.valid)) && (
+                          <span className="pill" title={[s.reason, ...s.signers.map(g => g.reason)].filter(Boolean).join(" · ")}
+                            style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>
+                            {[s.reason, ...s.signers.map(g => g.reason)].filter(Boolean)[0] || "needs attention"}
+                          </span>
+                        )}
                       </span>
                     ))}
                   </div>
