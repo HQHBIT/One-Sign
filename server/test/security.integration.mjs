@@ -73,6 +73,33 @@ ck(r.headers.get("x-content-type-options") === "nosniff", "X-Content-Type-Option
 ck(r.headers.get("x-frame-options") === "DENY", "X-Frame-Options: DENY");
 ck((r.headers.get("strict-transport-security") || "").includes("max-age="), "HSTS present");
 
+// ---------- reject-voice IDOR: participants only, others get 404 ----------
+{
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  await execute("DELETE FROM requests WHERE id = 'r_sec_voice'");
+  await execute("DELETE FROM users WHERE id = 'u_sec_stranger'");
+  await execute("INSERT INTO users (id,email,password_hash,name,role,created_at,active) VALUES ('u_sec_stranger','u_sec_stranger@hqhb.in',?,'Sec Stranger','approver',?,1)", [bcrypt.hashSync("x", 4), now]);
+  const cols = await queryOne("SHOW COLUMNS FROM requests WHERE Field = 'file_type'").catch(() => null);
+  await execute(
+    `INSERT INTO requests (id, requestor_id, approver_id, file_name, file_path, ${cols ? "file_type, " : ""}status, created_at, rejected_at, reject_reason, reject_voice_path)
+     VALUES ('r_sec_voice','u_sec_r','u_sec_adm','v.pdf','v.pdf',${cols ? "'pdf'," : ""}'rejected',?,?,'no','sec-voice.webm')`, [now, now]);
+  const vdir = path.join("server", "uploads", "voicenotes");
+  await fs.mkdir(vdir, { recursive: true });
+  await fs.writeFile(path.join(vdir, "sec-voice.webm"), Buffer.from("webm"));
+
+  let rr = await fetch(B + "/api/requests/r_sec_voice/reject-voice", { headers: { Authorization: "Bearer " + signToken("u_sec_stranger") } });
+  ck(rr.status === 404, "*** a non-participant CANNOT play a rejection voice note (404, same as nonexistent) ***");
+  rr = await fetch(B + "/api/requests/r_sec_voice/reject-voice", { headers: { Authorization: "Bearer " + signToken("u_sec_r") } });
+  ck(rr.status === 200, "…the requestor still can (200)");
+  rr = await fetch(B + "/api/requests/nope/reject-voice", { headers: { Authorization: "Bearer " + signToken("u_sec_stranger") } });
+  ck(rr.status === 404, "…and a nonexistent id looks identical (no probing oracle)");
+
+  await execute("DELETE FROM requests WHERE id = 'r_sec_voice'");
+  await execute("DELETE FROM users WHERE id = 'u_sec_stranger'");
+  await fs.unlink(path.join(vdir, "sec-voice.webm")).catch(() => {});
+}
+
 // ---------- LOW-002: CORS never echoes an arbitrary/internal origin ----------
 r = await fetch(B + "/api/health", { headers: { Origin: "http://65.1.2.157:3101" } });
 const acao = r.headers.get("access-control-allow-origin") || "";

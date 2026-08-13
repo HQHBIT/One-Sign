@@ -1353,12 +1353,14 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
   } catch (e) { next(e); }
 });
 
-// Play back the rejection voice note (authenticated; requestor, signers, admin
-// all reach this through the app UI).
+// Play back the rejection voice note — participants only (requestor, the
+// request's signers, admin), same rule as the document itself. Anyone else gets
+// the same 404 as a nonexistent id, so ids can't even be probed.
 router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
   try {
-    const row = await queryOne("SELECT reject_voice_path FROM requests WHERE id = ?", [req.params.id]);
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row?.reject_voice_path) return res.status(404).end();
+    if (!(await authoriseAccess(req.user, row))) return res.status(404).end();
     const type = row.reject_voice_path.endsWith(".m4a") ? "audio/mp4"
       : row.reject_voice_path.endsWith(".ogg") ? "audio/ogg" : "audio/webm";
     res.setHeader("Content-Type", type);
