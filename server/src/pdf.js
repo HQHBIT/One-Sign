@@ -27,6 +27,36 @@ export function placeInRotatedPage(page, box) {
   }
 }
 
+// Shrinks a placed box to the largest rectangle with the IMAGE's own aspect that
+// still fits inside it, centred — i.e. CSS `object-fit: contain`. The marker box is
+// a bounding box, not a target: a signature is never stretched to fill it, so the
+// handwriting keeps its real proportions no matter what shape the requestor drew.
+// (The client preview has always used objectFit:"contain"; before this, the stamped
+// output disagreed with the preview it was previewing.)
+//
+// `place` is the output of placeInRotatedPage — width/height live in the box's OWN
+// pre-rotation frame — so the centring offset is rotated into page space the same
+// way drawDateInBox does it. That keeps this composable with rotated pages.
+export function fitContain(place, imgWidth, imgHeight) {
+  const { x, y, width, height, rotate } = place;
+  if (!(imgWidth > 0) || !(imgHeight > 0)) return place;
+  const scale = Math.min(width / imgWidth, height / imgHeight);
+  const w = imgWidth * scale;
+  const h = imgHeight * scale;
+  const dx = (width - w) / 2;
+  const dy = (height - h) / 2;
+  const ang = (typeof rotate === "object" ? rotate.angle : rotate) || 0;
+  const rad = (ang * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  return {
+    x: x + (dx * cos - dy * sin),
+    y: y + (dx * sin + dy * cos),
+    width: w,
+    height: h,
+    rotate
+  };
+}
+
 export async function stampPdf({ srcPath, signaturePath, marker, outName }) {
   return stampPdfMulti({
     srcPath,
@@ -83,10 +113,11 @@ export async function stampPdfMultiBytes({ srcBytes, stamps }) {
       continue;
     }
 
-    // Signature fills the exact rectangle the requestor placed — no caption line.
-    // The signing date, when wanted, is stamped separately in its own date box.
+    // The signature is fitted INSIDE the rectangle the requestor placed, keeping its
+    // own aspect — no caption line. The signing date, when wanted, is stamped
+    // separately in its own date box.
     const sigImg = await embed(s.signaturePath);
-    page.drawImage(sigImg, place);
+    page.drawImage(sigImg, fitContain(place, sigImg.width, sigImg.height));
   }
 
   return await pdf.save();
@@ -232,7 +263,7 @@ export async function applySelfMarks(pdfBytes, marks) {
       drawDateInBox(page, font, String(m.text || ""), place);
     } else if (m.signaturePath) {
       const img = await embed(m.signaturePath);
-      page.drawImage(img, place);
+      page.drawImage(img, fitContain(place, img.width, img.height));
     }
   }
 

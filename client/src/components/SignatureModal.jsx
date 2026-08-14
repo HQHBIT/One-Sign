@@ -12,6 +12,18 @@ import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react"
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
+import { cutoutSignature, CUTOUT_DEFAULTS } from "../lib/signatureCutout.js";
+
+// A checkerboard behind the preview, plus a dark swatch beside it. Transparency
+// that is subtly wrong — a pale halo, a square of leftover paper — is invisible
+// on a light background and obvious on a dark one, so we always show both.
+const CHECKER = {
+  backgroundImage:
+    "linear-gradient(45deg,rgba(15,26,46,.10) 25%,transparent 25%,transparent 75%,rgba(15,26,46,.10) 75%)," +
+    "linear-gradient(45deg,rgba(15,26,46,.10) 25%,transparent 25%,transparent 75%,rgba(15,26,46,.10) 75%)",
+  backgroundSize: "14px 14px",
+  backgroundPosition: "0 0, 7px 7px"
+};
 
 // ------------------------------------------------------------
 // The user's saved signatures: thumbnail, name tag, default star, delete.
@@ -99,6 +111,12 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
+  // ---- uploaded-image background removal ----
+  const [removeBg, setRemoveBg] = useState(true);
+  const [strength, setStrength] = useState(CUTOUT_DEFAULTS.strength);
+  const [inkDarkness, setInkDarkness] = useState(CUTOUT_DEFAULTS.inkDarkness);
+  const [cutPreview, setCutPreview] = useState(null); // { dataUrl, lowContrast, tooSmall }
+  const [cutErr, setCutErr] = useState("");
   const [empty, setEmpty] = useState(true);
   const drawingRef = useRef(false);
   const pointsRef = useRef([]);
@@ -234,8 +252,29 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
 
   const handleUpload = e => {
     const f = e.target.files?.[0]; if (!f) return;
-    const r = new FileReader(); r.onload = () => setUploaded(r.result); r.readAsDataURL(f);
+    const r = new FileReader();
+    r.onload = () => {
+      setUploaded(r.result);
+      setCutPreview(null); setCutErr("");
+      setStrength(CUTOUT_DEFAULTS.strength);
+      setInkDarkness(CUTOUT_DEFAULTS.inkDarkness);
+    };
+    r.readAsDataURL(f);
   };
+
+  // Live cutout preview. Computed on a downscaled proxy so dragging a slider
+  // stays responsive on a 12-megapixel phone photo; the full-resolution pass
+  // only runs once, on save.
+  useEffect(() => {
+    if (mode !== "upload" || !uploaded || !removeBg) { setCutPreview(null); return; }
+    let dead = false;
+    const timer = setTimeout(() => {
+      cutoutSignature(uploaded, { maxDim: 600, strength, inkDarkness })
+        .then(r => { if (!dead) { setCutPreview(r); setCutErr(""); } })
+        .catch(() => { if (!dead) { setCutPreview(null); setCutErr("Could not process that image — it will be saved as-is."); } });
+    }, 120);
+    return () => { dead = true; clearTimeout(timer); };
+  }, [mode, uploaded, removeBg, strength, inkDarkness]);
 
   // Trimmed dataUrl from whichever mode is active, delivered to `deliver`.
   const produceDataUrl = (deliver) => {
@@ -245,8 +284,18 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
       deliver((trimmed || canvasRef.current).toDataURL("image/png"));
     } else {
       if (!uploaded) return;
-      // For uploaded files, trim transparent / near-white edges so the signature fills
-      // the marker box without surrounding whitespace.
+      // Background removal runs here at FULL resolution — the on-screen preview
+      // used a downscaled proxy for responsiveness, so this is the first time
+      // the real pixels go through. Falls back to the original on any failure
+      // rather than losing the user's upload.
+      if (removeBg) {
+        cutoutSignature(uploaded, { strength, inkDarkness })
+          .then(r => deliver(r.dataUrl))
+          .catch(() => deliver(uploaded));
+        return;
+      }
+      // Background removal off: trim transparent / near-white edges only, so the
+      // signature still fills the marker box without surrounding whitespace.
       const img = new Image();
       img.onload = () => {
         const c = document.createElement("canvas");
@@ -341,11 +390,74 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
               <Upload size={14} /> {uploaded ? "Choose a different image…" : "Choose an image from this device…"}
               <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="hidden" />
             </label>
-            <div className="text-xs opacity-50 mt-1">PNG or JPEG — it will be auto-cropped to the signature.</div>
+            <div className="text-xs opacity-50 mt-1">
+              PNG or JPEG — a photo of your signature on paper is fine. The paper is removed automatically.
+            </div>
+
             {uploaded && (
-              <div className="mt-4 card p-4" style={{ backgroundColor: "var(--c-paper)" }}>
-                <img src={uploaded} alt="signature" style={{ maxHeight: 100, maxWidth: "100%", objectFit: "contain", display: "block", margin: "0 auto" }} />
-              </div>
+              <>
+                <label className="flex items-center gap-2 mt-4 text-xs cursor-pointer">
+                  <input type="checkbox" checked={removeBg} onChange={e => setRemoveBg(e.target.checked)} />
+                  <span className="font-medium">Remove the background</span>
+                  <span className="opacity-50">— turn off if your image is already transparent</span>
+                </label>
+
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <div>
+                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Original</div>
+                    <div className="card p-2 flex items-center justify-center" style={{ backgroundColor: "var(--c-paper)", height: 96 }}>
+                      <img src={uploaded} alt="Uploaded signature" style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
+                      {removeBg ? "Background removed" : "Saved as-is"}
+                    </div>
+                    <div className="card p-2 flex items-center justify-center" style={{ ...CHECKER, height: 96 }}>
+                      <img src={(removeBg ? cutPreview?.dataUrl : null) || uploaded} alt="Processed signature"
+                        style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* The honest test. Leftover paper reads as a pale box here. */}
+                <div className="mt-2">
+                  <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">On a dark background</div>
+                  <div className="card p-2 flex items-center justify-center" style={{ backgroundColor: "#0F1A2E", height: 72 }}>
+                    <img src={(removeBg ? cutPreview?.dataUrl : null) || uploaded} alt="Signature on dark"
+                      style={{ maxHeight: 56, maxWidth: "100%", objectFit: "contain" }} />
+                  </div>
+                </div>
+
+                {removeBg && (
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <label className="text-xs">
+                      <span className="opacity-60">Cleanup strength</span>
+                      <input type="range" min="0" max="1" step="0.05" value={strength}
+                        onChange={e => setStrength(Number(e.target.value))} className="w-full" />
+                    </label>
+                    <label className="text-xs">
+                      <span className="opacity-60">Ink darkness</span>
+                      <input type="range" min="0" max="1" step="0.05" value={inkDarkness}
+                        onChange={e => setInkDarkness(Number(e.target.value))} className="w-full" />
+                    </label>
+                  </div>
+                )}
+
+                {removeBg && cutPreview?.lowContrast && (
+                  <div className="text-xs mt-2 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+                    This image has very little contrast between the ink and the paper. Try a brighter, flatter photo — or raise the ink darkness.
+                  </div>
+                )}
+                {removeBg && cutPreview?.tooSmall && (
+                  <div className="text-xs mt-2 opacity-60">
+                    This image is small, so it may look soft on the document. A larger photo will stamp more crisply.
+                  </div>
+                )}
+                {cutErr && (
+                  <div className="text-xs mt-2 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{cutErr}</div>
+                )}
+              </>
             )}
           </div>
         )}
