@@ -19,3 +19,15 @@ server/keys/
 # Locally generated CONFIDENTIAL_KEY, en route to the password manager.
 # Must never be committed — it decrypts every confidential document.
 confidential-key.txt
+
+# Ad-hoc API scratch scripts. These get written with real credentials in the
+# request body while poking at a running server — never commit them.
+/test.js
+
+# Claude Code local machine config + agent worktrees (a full second checkout).
+.claude/worktrees/
+.claude/launch.json
+.claude/settings.json
+
+# Word lock files left behind while a .docx is open.
+~$*.docx
