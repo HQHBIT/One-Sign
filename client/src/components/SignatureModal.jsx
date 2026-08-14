@@ -12,7 +12,7 @@ import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react"
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
-import { cutoutSignature, CUTOUT_DEFAULTS } from "../lib/signatureCutout.js";
+import { cutoutSignature, CUTOUT_DEFAULTS, SAVE_MAX_DIM } from "../lib/signatureCutout.js";
 
 // A checkerboard behind the preview, plus a dark swatch beside it. Transparency
 // that is subtly wrong — a pale halo, a square of leftover paper — is invisible
@@ -29,7 +29,7 @@ const CHECKER = {
 // The user's saved signatures: thumbnail, name tag, default star, delete.
 // Shown in manage mode only — first-login and admin capture stay single-shot.
 // ------------------------------------------------------------
-function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, armedId }) {
+function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, armedId }) {
   if (!sigs.length) return null;
   return (
     <div className="mb-4">
@@ -45,6 +45,15 @@ function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, armedId }) {
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium truncate">{s.label}</div>
               {s.isDefault && <div className="text-[10px] tracking-wider uppercase" style={{ color: "#8B6914" }}>Default</div>}
+              {/* We removed this signature's paper background without being asked,
+                  so say so plainly and keep the way back one click away. */}
+              {s.canRestoreOriginal && (
+                <div className="text-[10px] opacity-60 mt-0.5">
+                  Background removed
+                  <button className="underline ml-1.5" disabled={busy} onClick={() => onRestore?.(s)}
+                    title="Put the original image back, paper and all">undo</button>
+                </div>
+              )}
             </div>
             {!s.isDefault && (
               <button className="btn-ghost text-xs" disabled={busy} onClick={() => onDefault(s)}
@@ -284,12 +293,13 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
       deliver((trimmed || canvasRef.current).toDataURL("image/png"));
     } else {
       if (!uploaded) return;
-      // Background removal runs here at FULL resolution — the on-screen preview
-      // used a downscaled proxy for responsiveness, so this is the first time
-      // the real pixels go through. Falls back to the original on any failure
-      // rather than losing the user's upload.
+      // The real save pass. The on-screen preview ran on a small proxy for
+      // responsiveness; this is the first time the full pixels go through.
+      // Capped at SAVE_MAX_DIM — a signature stamps around 60mm wide, so more
+      // than this is bytes nobody sees. Falls back to the original on any
+      // failure rather than losing the user's upload.
       if (removeBg) {
-        cutoutSignature(uploaded, { strength, inkDarkness })
+        cutoutSignature(uploaded, { maxDim: SAVE_MAX_DIM, strength, inkDarkness })
           .then(r => deliver(r.dataUrl))
           .catch(() => deliver(uploaded));
         return;
@@ -332,6 +342,12 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
     catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   };
+  const restoreOriginal = async (s) => {
+    setBusy(true); setErr("");
+    try { await api.restoreSignatureOriginal(s.id); await loadSigs(); onChanged?.(); }
+    catch (e) { setErr(e.message || "Could not restore the original"); }
+    finally { setBusy(false); }
+  };
   const [armedDelete, setArmedDelete] = useState(null);
   const removeSig = async (s) => {
     if (armedDelete !== s.id) { setArmedDelete(s.id); setTimeout(() => setArmedDelete(null), 2500); return; }
@@ -360,7 +376,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
         )}
 
-        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} armedId={armedDelete} />}
+        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} armedId={armedDelete} />}
         {manage && err && (
           <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
         )}

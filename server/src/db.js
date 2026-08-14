@@ -348,6 +348,16 @@ async function runSchema() {
     CONSTRAINT fk_us_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // Signatures uploaded before background removal existed have their paper baked
+  // into the stored PNG, so they stamp as an opaque rectangle of someone's
+  // notebook. They are cleaned once, on their owner's next sign-in.
+  //   bg_cleaned    — processed (cleaned, or inspected and found already clean)
+  //   original_path — the pre-clean file, kept so the change is reversible
+  //   bg_cleaned_at — when it happened; with original_path this IS the audit trail
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN bg_cleaned TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN original_path VARCHAR(255) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN bg_cleaned_at BIGINT DEFAULT NULL`);
+
   // ---------- confidential documents ----------
   // The file is stored encrypted (see confidential.js) and the IT Admin is
   // locked out in code. Viewing needs a fresh emailed code and lasts 60s.

@@ -198,6 +198,17 @@ export const api = {
     return this.fetch(`/api/users/me/signatures/${id}`, { method: "PUT", body: JSON.stringify({ label }) }).then(r => r.signature);
   },
   deleteMySignature(id) { return this.fetch(`/api/users/me/signatures/${id}`, { method: "DELETE" }); },
+  // One-time background clean of a signature saved before the cutout existed.
+  // Pass { dataUrl } with the cleaned image, or { skip: true } when it was
+  // inspected and left alone — either way it is not looked at again.
+  markSignatureBackground(id, body) {
+    return this.fetch(`/api/users/me/signatures/${id}/background`,
+      { method: "POST", body: JSON.stringify(body || {}) }).then(r => r.signature);
+  },
+  restoreSignatureOriginal(id) {
+    return this.fetch(`/api/users/me/signatures/${id}/background/revert`,
+      { method: "POST", body: "{}" }).then(r => r.signature);
+  },
   async mySignatureBlob(id) {
     try {
       const res = await this.fetch(`/api/users/me/signatures/${id}/image`, { raw: true });

@@ -41,6 +41,7 @@ import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
 import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
+import { autoCleanStoredSignatures } from "./lib/autoCleanSignatures.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
@@ -626,6 +627,14 @@ function Shell(props) {
     if ((user.role === "requestor" || user.role === "approver" || user.role === "executive") && !user.hasSignature) setNeedsSig(true);
     else setNeedsSig(false);
   }, [user.id, user.role, user.hasSignature]);
+
+  // One-time repair of signatures saved before background removal existed: they
+  // still have their paper baked in and stamp as an opaque box over documents.
+  // Deliberately detached — it must never delay or block getting into the app.
+  useEffect(() => {
+    if (!user.hasSignature) return;
+    autoCleanStoredSignatures(notify).catch(() => { /* retried next sign-in */ });
+  }, [user.id, user.hasSignature]);
 
   // Display mode: null = normal, or one of the three dark variants. Stored on
   // the server so the choice follows the user across phone and web.

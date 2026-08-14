@@ -397,11 +397,97 @@ async function listSignatureRows(userId) {
 const shapeSignature = (r) => ({
   id: r.id, label: r.label, aspect: r.aspect == null ? null : Number(r.aspect),
   isDefault: !!Number(r.is_default), createdAt: Number(r.created_at),
+  // bgCleaned: this signature has been through background removal (or was
+  // inspected and left alone), so the client's one-time pass skips it.
+  bgCleaned: !!Number(r.bg_cleaned),
+  bgCleanedAt: r.bg_cleaned_at == null ? null : Number(r.bg_cleaned_at),
+  // The pre-clean file is still on disk, so the change can be undone.
+  canRestoreOriginal: !!r.original_path,
 });
 
 router.get("/me/signatures", authRequired, async (req, res, next) => {
   try {
     res.json({ signatures: (await listSignatureRows(req.user.id)).map(shapeSignature) });
+  } catch (e) { next(e); }
+});
+
+// ---------- one-time background clean of signatures already on file ----------
+// Signatures saved before background removal existed keep their paper, so they
+// stamp as an opaque rectangle over the document. The client runs the cutout on
+// its owner's next sign-in and posts the result here.
+//
+// The pre-clean file is NEVER deleted. Together with bg_cleaned_at it is both
+// the record that this happened and the undo, which matters because the user
+// did not ask for it.
+router.post("/me/signatures/:sid/background", authRequired, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const row = await queryOne("SELECT * FROM user_signatures WHERE id = ? AND user_id = ?",
+      [req.params.sid, userId]);
+    if (!row) return res.status(404).json({ error: "Signature not found" });
+    // Already settled — never clean the same signature twice.
+    if (Number(row.bg_cleaned)) return res.json({ signature: shapeSignature(row) });
+
+    // `skip` means the client inspected it and left it alone: already
+    // transparent, or the image could not be processed. Marking it stops the
+    // pass retrying the same image on every future sign-in.
+    if (req.body?.skip || !req.body?.dataUrl) {
+      await execute("UPDATE user_signatures SET bg_cleaned = 1 WHERE id = ?", [row.id]);
+      return res.json({ signature: shapeSignature({ ...row, bg_cleaned: 1 }) });
+    }
+
+    const parsed = parseSignatureUpload(req);
+    if (!parsed) return res.status(400).json({ error: "dataUrl required" });
+
+    await fs.mkdir(SIG_DIR, { recursive: true });
+    const fileName = `${userId}.${row.id}.clean.${parsed.ext}`;
+    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const dims = readImageSize(parsed.buffer);
+    const aspect = dims && dims.height > 0 ? dims.width / dims.height : row.aspect;
+
+    const originalPath = row.original_path || row.file_path;
+    await execute(
+      `UPDATE user_signatures
+          SET file_path = ?, aspect = ?, original_path = ?, bg_cleaned = 1, bg_cleaned_at = ?
+        WHERE id = ?`,
+      [fileName, aspect, originalPath, Date.now(), row.id]);
+    // users.signature_path is the path every legacy caller stamps from, so the
+    // default row has to stay in step or the clean would never take effect.
+    if (Number(row.is_default)) {
+      await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?",
+        [fileName, aspect, userId]);
+    }
+    console.log(`[signature] background cleaned for user=${userId} sig=${row.id}; original kept as ${originalPath}`);
+    res.json({ signature: shapeSignature(await queryOne("SELECT * FROM user_signatures WHERE id = ?", [row.id])) });
+  } catch (e) { next(e); }
+});
+
+// Undo — puts the original file back. bg_cleaned stays 1 so the next sign-in
+// does not immediately clean it all over again.
+router.post("/me/signatures/:sid/background/revert", authRequired, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const row = await queryOne("SELECT * FROM user_signatures WHERE id = ? AND user_id = ?",
+      [req.params.sid, userId]);
+    if (!row) return res.status(404).json({ error: "Signature not found" });
+    if (!row.original_path) return res.status(400).json({ error: "There is no earlier version to restore" });
+
+    let aspect = row.aspect;
+    try {
+      const dims = readImageSize(await fs.readFile(path.join(SIG_DIR, row.original_path)));
+      if (dims && dims.height > 0) aspect = dims.width / dims.height;
+    } catch { /* unreadable original — keep the recorded aspect */ }
+
+    await execute(
+      `UPDATE user_signatures
+          SET file_path = ?, aspect = ?, original_path = NULL, bg_cleaned = 1, bg_cleaned_at = NULL
+        WHERE id = ?`,
+      [row.original_path, aspect, row.id]);
+    if (Number(row.is_default)) {
+      await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?",
+        [row.original_path, aspect, userId]);
+    }
+    res.json({ signature: shapeSignature(await queryOne("SELECT * FROM user_signatures WHERE id = ?", [row.id])) });
   } catch (e) { next(e); }
 });
 
@@ -431,8 +517,12 @@ router.post("/me/signatures", authRequired, upload.single("signature"), async (r
     // The very first signature is automatically the default — "if the user has
     // a single sign it gets selected by default" starts here.
     const isFirst = rows.length === 0;
+    // bg_cleaned = 1: this image came through the capture modal, where the user
+    // saw the background-removal preview and either accepted it or deliberately
+    // switched it off. Either way it's their decision — the auto-clean pass must
+    // not come along later and overrule it.
     await execute(
-      "INSERT INTO user_signatures (id, user_id, label, file_path, aspect, is_default, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO user_signatures (id, user_id, label, file_path, aspect, is_default, created_at, bg_cleaned) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
       [sigId, userId, label, fileName, aspect, isFirst ? 1 : 0, Date.now()]);
     if (isFirst) {
       await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, userId]);

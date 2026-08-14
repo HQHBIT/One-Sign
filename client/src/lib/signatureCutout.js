@@ -23,6 +23,12 @@
 
 export const CUTOUT_DEFAULTS = { strength: 0.5, inkDarkness: 0.5 };
 
+// A signature is stamped at roughly 60mm wide. Even at 600dpi that is ~1400px,
+// so anything beyond this is bytes nobody ever sees — and a raw 12-megapixel
+// phone photo can otherwise push the saved data URL past the server's 5mb body
+// limit. Applied on every save path.
+export const SAVE_MAX_DIM = 1600;
+
 // Below this paper↔ink separation (0-441 in RGB distance) the image has too
 // little contrast to separate reliably — usually a dark photo or a pencil
 // signature. We still produce a result, but the caller warns the user.
@@ -231,6 +237,13 @@ function toCanvas(img, maxDim) {
   c.height = Math.max(1, Math.round(nh * scale));
   c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
   return c;
+}
+
+// Pixels of an image, optionally downscaled — used to inspect a stored
+// signature (isOpaqueBackground) without running the whole pipeline on it.
+export function imageDataOf(img, maxDim) {
+  const c = toCanvas(img, maxDim);
+  return c.getContext("2d").getImageData(0, 0, c.width, c.height);
 }
 
 // Crops to the ink with a little breathing room. Runs AFTER the cutout, so it
