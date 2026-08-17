@@ -8,7 +8,7 @@
 //   second mode.
 // ============================================================
 import { useState, useEffect, useRef } from "react";
-import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react";
+import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload, Eraser } from "lucide-react";
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
@@ -29,7 +29,7 @@ const CHECKER = {
 // The user's saved signatures: thumbnail, name tag, default star, delete.
 // Shown in manage mode only — first-login and admin capture stay single-shot.
 // ------------------------------------------------------------
-function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, armedId }) {
+function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, onFix, armedId }) {
   if (!sigs.length) return null;
   return (
     <div className="mb-4">
@@ -55,6 +55,13 @@ function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, arm
                 </div>
               )}
             </div>
+            {/* The automatic pass runs once and silently, and when it declines to
+                act it says nothing. This is the way to ask for it directly, see
+                the result, and adjust it. */}
+            <button className="btn-ghost text-xs" disabled={busy} onClick={() => onFix?.(s)}
+              title="Open this signature and remove its paper background">
+              <Eraser size={12} /> Fix background
+            </button>
             {!s.isDefault && (
               <button className="btn-ghost text-xs" disabled={busy} onClick={() => onDefault(s)}
                 title="Used when you don't pick one at signing time">
@@ -126,6 +133,10 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
   const [inkDarkness, setInkDarkness] = useState(CUTOUT_DEFAULTS.inkDarkness);
   const [cutPreview, setCutPreview] = useState(null); // { dataUrl, lowContrast, tooSmall }
   const [cutErr, setCutErr] = useState("");
+  // Set when the user is cleaning a signature ALREADY on file (rather than
+  // adding a new one) — saving then replaces that signature's image in place.
+  const [fixingSig, setFixingSig] = useState(null);
+  const fixUrlRef = useRef(null);
   const [empty, setEmpty] = useState(true);
   const drawingRef = useRef(false);
   const pointsRef = useRef([]);
@@ -324,6 +335,21 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
 
   // Manage mode: adding stays in the modal so several can be added in one sitting.
   const addToSet = () => produceDataUrl(async (dataUrl) => {
+    // Cleaning one already on file replaces its image rather than adding a row.
+    // force: the automatic pass may have already marked this signature settled,
+    // and an explicit request from the user has to win over that.
+    if (fixingSig) {
+      setBusy(true); setErr("");
+      try {
+        await api.markSignatureBackground(fixingSig.id, { dataUrl, force: true });
+        cancelFix();
+        setMode("draw");
+        await loadSigs();
+        onChanged?.();
+      } catch (e) { setErr(e.message || "Could not save the cleaned signature"); }
+      finally { setBusy(false); }
+      return;
+    }
     const label = tag.trim() || (sigs.length === 0 ? "My signature" : "");
     if (!label) { setErr("Give this signature a name tag first"); return; }
     setBusy(true); setErr("");
@@ -342,6 +368,33 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
     catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   };
+  // Loads a stored signature into the upload panel so it runs through exactly
+  // the same preview, sliders and save path as a fresh upload — no separate
+  // code path to keep in step, and the user sees the result before committing.
+  const fixBackground = async (s) => {
+    setBusy(true); setErr("");
+    try {
+      const url = await api.mySignatureBlob(s.id);
+      if (!url) { setErr("Could not load that signature"); return; }
+      if (fixUrlRef.current) URL.revokeObjectURL(fixUrlRef.current);
+      fixUrlRef.current = url;
+      setFixingSig(s);
+      setMode("upload");
+      setUploaded(url);
+      setRemoveBg(true);
+      setCutPreview(null); setCutErr("");
+      setStrength(CUTOUT_DEFAULTS.strength);
+      setInkDarkness(CUTOUT_DEFAULTS.inkDarkness);
+    } catch (e) { setErr(e.message || "Could not load that signature"); }
+    finally { setBusy(false); }
+  };
+
+  const cancelFix = () => {
+    if (fixUrlRef.current) { URL.revokeObjectURL(fixUrlRef.current); fixUrlRef.current = null; }
+    setFixingSig(null); setUploaded(null); setCutPreview(null); setCutErr("");
+  };
+  useEffect(() => () => { if (fixUrlRef.current) URL.revokeObjectURL(fixUrlRef.current); }, []);
+
   const restoreOriginal = async (s) => {
     setBusy(true); setErr("");
     try { await api.restoreSignatureOriginal(s.id); await loadSigs(); onChanged?.(); }
@@ -376,7 +429,14 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
         )}
 
-        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} armedId={armedDelete} />}
+        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} onFix={fixBackground} armedId={armedDelete} />}
+        {manage && fixingSig && (
+          <div className="text-xs mb-3 px-3 py-2 rounded flex items-center gap-2" style={{ backgroundColor: "rgba(184,137,74,.12)" }}>
+            <Eraser size={12} />
+            <span>Cleaning <b>{fixingSig.label}</b> — check the preview below, then save to replace it.</span>
+            <button className="underline ml-auto" onClick={() => { cancelFix(); setMode("draw"); }}>cancel</button>
+          </div>
+        )}
         {manage && err && (
           <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
         )}
@@ -488,7 +548,12 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
           <div className="flex flex-wrap items-center gap-2 justify-end">
             {onCancel && <button className="btn-ghost" onClick={onCancel}>{manage ? "Done" : "Cancel"}</button>}
-            {manage ? (
+            {manage ? (fixingSig ? (
+              <button className="btn-primary" onClick={addToSet} disabled={busy || !uploaded}
+                title={`Replace ${fixingSig.label} with the cleaned version`}>
+                <Check size={14} /> {busy ? "Saving…" : "Save cleaned signature"}
+              </button>
+            ) : (
               <>
                 <input type="text" value={tag} onChange={e => { setTag(e.target.value); setErr(""); }}
                   placeholder={sigs.length === 0 ? "Name tag (e.g. Official)" : "Name tag — required"}
@@ -499,7 +564,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
                   <Check size={14} /> {busy ? "Saving…" : "Add signature"}
                 </button>
               </>
-            ) : (
+            )) : (
               <button className="btn-primary" onClick={save} disabled={mode === "draw" ? empty : !uploaded}>
                 <Check size={14} /> Save signature
               </button>

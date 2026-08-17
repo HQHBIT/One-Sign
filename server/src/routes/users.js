@@ -425,8 +425,11 @@ router.post("/me/signatures/:sid/background", authRequired, async (req, res, nex
     const row = await queryOne("SELECT * FROM user_signatures WHERE id = ? AND user_id = ?",
       [req.params.sid, userId]);
     if (!row) return res.status(404).json({ error: "Signature not found" });
-    // Already settled — never clean the same signature twice.
-    if (Number(row.bg_cleaned)) return res.json({ signature: shapeSignature(row) });
+    // Already settled — the automatic pass never cleans the same signature twice.
+    // `force` is the user asking for it explicitly from the manager, which must
+    // work whatever the pass decided earlier.
+    const forced = req.body?.force === true || req.body?.force === "true";
+    if (Number(row.bg_cleaned) && !forced) return res.json({ signature: shapeSignature(row) });
 
     // `skip` means the client inspected it and left it alone: already
     // transparent, or the image could not be processed. Marking it stops the

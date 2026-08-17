@@ -33,19 +33,33 @@ export async function autoCleanStoredSignatures(notify) {
   if (ran) return 0;
   ran = true;
 
+  // This pass is invisible, so when it declines to act it leaves no trace and
+  // the signature simply stays dirty with no explanation. Log every decision:
+  // it is the only evidence available when someone reports "it didn't work".
+  const log = (sigId, decision, extra) =>
+    console.info(`[signature-clean] ${sigId}: ${decision}`, extra ?? "");
+
   let cleaned = 0;
   try {
     const list = await api.mySignatures();
-    for (const sig of list.filter(s => !s.bgCleaned)) {
+    const todo = list.filter(s => !s.bgCleaned);
+    log("pass", `${list.length} signature(s), ${todo.length} not yet inspected`);
+
+    for (const sig of todo) {
       let url = null;
       try {
         url = await api.mySignatureBlob(sig.id);
-        if (!url) { await api.markSignatureBackground(sig.id, { skip: true }); continue; }
+        if (!url) {
+          log(sig.id, "skipped — image could not be fetched");
+          await api.markSignatureBackground(sig.id, { skip: true });
+          continue;
+        }
         const img = await loadImage(url);
 
         // Inspect a small proxy — deciding whether the paper is still there
         // does not need full resolution.
         if (!isOpaqueBackground(imageDataOf(img, 400))) {
+          log(sig.id, "skipped — background already transparent");
           await api.markSignatureBackground(sig.id, { skip: true });
           continue;
         }
@@ -54,22 +68,31 @@ export async function autoCleanStoredSignatures(notify) {
         // A cutout that removed essentially everything means the detection was
         // wrong for this image. Leave the original alone rather than replace a
         // usable signature with a blank one.
-        if (!result.dataUrl || result.width < 8 || result.height < 4 || result.lowContrast) {
+        if (!result.dataUrl || result.width < 8 || result.height < 4) {
+          log(sig.id, "skipped — cutout came back empty", { w: result.width, h: result.height });
+          await api.markSignatureBackground(sig.id, { skip: true });
+          continue;
+        }
+        if (result.lowContrast) {
+          log(sig.id, "skipped — ink and paper too close to separate safely");
           await api.markSignatureBackground(sig.id, { skip: true });
           continue;
         }
 
         await api.markSignatureBackground(sig.id, { dataUrl: result.dataUrl });
+        log(sig.id, "cleaned", { w: result.width, h: result.height });
         cleaned++;
-      } catch {
+      } catch (e) {
         // Network trouble: leave the flag unset so it is retried next sign-in.
         // Anything else has already been marked skipped above.
+        log(sig.id, "failed — will retry next sign-in", e?.message || e);
       } finally {
         if (url) URL.revokeObjectURL(url);
       }
     }
-  } catch {
-    return 0; // couldn't even list them — try again next sign-in
+  } catch (e) {
+    log("pass", "could not list signatures", e?.message || e);
+    return 0; // try again next sign-in
   }
 
   if (cleaned && notify) {
