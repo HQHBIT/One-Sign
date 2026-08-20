@@ -8,28 +8,16 @@
 //   second mode.
 // ============================================================
 import { useState, useEffect, useRef } from "react";
-import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload, Eraser } from "lucide-react";
+import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react";
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
-import { cutoutSignature, CUTOUT_DEFAULTS, SAVE_MAX_DIM } from "../lib/signatureCutout.js";
-
-// A checkerboard behind the preview, plus a dark swatch beside it. Transparency
-// that is subtly wrong — a pale halo, a square of leftover paper — is invisible
-// on a light background and obvious on a dark one, so we always show both.
-const CHECKER = {
-  backgroundImage:
-    "linear-gradient(45deg,rgba(15,26,46,.10) 25%,transparent 25%,transparent 75%,rgba(15,26,46,.10) 75%)," +
-    "linear-gradient(45deg,rgba(15,26,46,.10) 25%,transparent 25%,transparent 75%,rgba(15,26,46,.10) 75%)",
-  backgroundSize: "14px 14px",
-  backgroundPosition: "0 0, 7px 7px"
-};
 
 // ------------------------------------------------------------
 // The user's saved signatures: thumbnail, name tag, default star, delete.
 // Shown in manage mode only — first-login and admin capture stay single-shot.
 // ------------------------------------------------------------
-function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, onFix, armedId }) {
+function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, armedId }) {
   if (!sigs.length) return null;
   return (
     <div className="mb-4">
@@ -55,13 +43,6 @@ function SignatureList({ sigs, thumbs, busy, onDefault, onDelete, onRestore, onF
                 </div>
               )}
             </div>
-            {/* The automatic pass runs once and silently, and when it declines to
-                act it says nothing. This is the way to ask for it directly, see
-                the result, and adjust it. */}
-            <button className="btn-ghost text-xs" disabled={busy} onClick={() => onFix?.(s)}
-              title="Open this signature and remove its paper background">
-              <Eraser size={12} /> Fix background
-            </button>
             {!s.isDefault && (
               <button className="btn-ghost text-xs" disabled={busy} onClick={() => onDefault(s)}
                 title="Used when you don't pick one at signing time">
@@ -127,16 +108,6 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
   const canvasRef = useRef(null);
   const [mode, setMode] = useState("draw"); // draw | upload
   const [uploaded, setUploaded] = useState(null);
-  // ---- uploaded-image background removal ----
-  const [removeBg, setRemoveBg] = useState(true);
-  const [strength, setStrength] = useState(CUTOUT_DEFAULTS.strength);
-  const [inkDarkness, setInkDarkness] = useState(CUTOUT_DEFAULTS.inkDarkness);
-  const [cutPreview, setCutPreview] = useState(null); // { dataUrl, lowContrast, tooSmall }
-  const [cutErr, setCutErr] = useState("");
-  // Set when the user is cleaning a signature ALREADY on file (rather than
-  // adding a new one) — saving then replaces that signature's image in place.
-  const [fixingSig, setFixingSig] = useState(null);
-  const fixUrlRef = useRef(null);
   const [empty, setEmpty] = useState(true);
   const drawingRef = useRef(false);
   const pointsRef = useRef([]);
@@ -272,29 +243,8 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
 
   const handleUpload = e => {
     const f = e.target.files?.[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
-      setUploaded(r.result);
-      setCutPreview(null); setCutErr("");
-      setStrength(CUTOUT_DEFAULTS.strength);
-      setInkDarkness(CUTOUT_DEFAULTS.inkDarkness);
-    };
-    r.readAsDataURL(f);
+    const r = new FileReader(); r.onload = () => setUploaded(r.result); r.readAsDataURL(f);
   };
-
-  // Live cutout preview. Computed on a downscaled proxy so dragging a slider
-  // stays responsive on a 12-megapixel phone photo; the full-resolution pass
-  // only runs once, on save.
-  useEffect(() => {
-    if (mode !== "upload" || !uploaded || !removeBg) { setCutPreview(null); return; }
-    let dead = false;
-    const timer = setTimeout(() => {
-      cutoutSignature(uploaded, { maxDim: 600, strength, inkDarkness })
-        .then(r => { if (!dead) { setCutPreview(r); setCutErr(""); } })
-        .catch(() => { if (!dead) { setCutPreview(null); setCutErr("Could not process that image — it will be saved as-is."); } });
-    }, 120);
-    return () => { dead = true; clearTimeout(timer); };
-  }, [mode, uploaded, removeBg, strength, inkDarkness]);
 
   // Trimmed dataUrl from whichever mode is active, delivered to `deliver`.
   const produceDataUrl = (deliver) => {
@@ -304,19 +254,8 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
       deliver((trimmed || canvasRef.current).toDataURL("image/png"));
     } else {
       if (!uploaded) return;
-      // The real save pass. The on-screen preview ran on a small proxy for
-      // responsiveness; this is the first time the full pixels go through.
-      // Capped at SAVE_MAX_DIM — a signature stamps around 60mm wide, so more
-      // than this is bytes nobody sees. Falls back to the original on any
-      // failure rather than losing the user's upload.
-      if (removeBg) {
-        cutoutSignature(uploaded, { maxDim: SAVE_MAX_DIM, strength, inkDarkness })
-          .then(r => deliver(r.dataUrl))
-          .catch(() => deliver(uploaded));
-        return;
-      }
-      // Background removal off: trim transparent / near-white edges only, so the
-      // signature still fills the marker box without surrounding whitespace.
+      // For uploaded files, trim transparent / near-white edges so the signature
+      // fills the marker box without surrounding whitespace.
       const img = new Image();
       img.onload = () => {
         const c = document.createElement("canvas");
@@ -335,21 +274,6 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
 
   // Manage mode: adding stays in the modal so several can be added in one sitting.
   const addToSet = () => produceDataUrl(async (dataUrl) => {
-    // Cleaning one already on file replaces its image rather than adding a row.
-    // force: the automatic pass may have already marked this signature settled,
-    // and an explicit request from the user has to win over that.
-    if (fixingSig) {
-      setBusy(true); setErr("");
-      try {
-        await api.markSignatureBackground(fixingSig.id, { dataUrl, force: true });
-        cancelFix();
-        setMode("draw");
-        await loadSigs();
-        onChanged?.();
-      } catch (e) { setErr(e.message || "Could not save the cleaned signature"); }
-      finally { setBusy(false); }
-      return;
-    }
     const label = tag.trim() || (sigs.length === 0 ? "My signature" : "");
     if (!label) { setErr("Give this signature a name tag first"); return; }
     setBusy(true); setErr("");
@@ -368,33 +292,6 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
     catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   };
-  // Loads a stored signature into the upload panel so it runs through exactly
-  // the same preview, sliders and save path as a fresh upload — no separate
-  // code path to keep in step, and the user sees the result before committing.
-  const fixBackground = async (s) => {
-    setBusy(true); setErr("");
-    try {
-      const url = await api.mySignatureBlob(s.id);
-      if (!url) { setErr("Could not load that signature"); return; }
-      if (fixUrlRef.current) URL.revokeObjectURL(fixUrlRef.current);
-      fixUrlRef.current = url;
-      setFixingSig(s);
-      setMode("upload");
-      setUploaded(url);
-      setRemoveBg(true);
-      setCutPreview(null); setCutErr("");
-      setStrength(CUTOUT_DEFAULTS.strength);
-      setInkDarkness(CUTOUT_DEFAULTS.inkDarkness);
-    } catch (e) { setErr(e.message || "Could not load that signature"); }
-    finally { setBusy(false); }
-  };
-
-  const cancelFix = () => {
-    if (fixUrlRef.current) { URL.revokeObjectURL(fixUrlRef.current); fixUrlRef.current = null; }
-    setFixingSig(null); setUploaded(null); setCutPreview(null); setCutErr("");
-  };
-  useEffect(() => () => { if (fixUrlRef.current) URL.revokeObjectURL(fixUrlRef.current); }, []);
-
   const restoreOriginal = async (s) => {
     setBusy(true); setErr("");
     try { await api.restoreSignatureOriginal(s.id); await loadSigs(); onChanged?.(); }
@@ -429,14 +326,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
         )}
 
-        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} onFix={fixBackground} armedId={armedDelete} />}
-        {manage && fixingSig && (
-          <div className="text-xs mb-3 px-3 py-2 rounded flex items-center gap-2" style={{ backgroundColor: "rgba(184,137,74,.12)" }}>
-            <Eraser size={12} />
-            <span>Cleaning <b>{fixingSig.label}</b> — check the preview below, then save to replace it.</span>
-            <button className="underline ml-auto" onClick={() => { cancelFix(); setMode("draw"); }}>cancel</button>
-          </div>
-        )}
+        {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} armedId={armedDelete} />}
         {manage && err && (
           <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
         )}
@@ -466,74 +356,12 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
               <Upload size={14} /> {uploaded ? "Choose a different image…" : "Choose an image from this device…"}
               <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="hidden" />
             </label>
-            <div className="text-xs opacity-50 mt-1">
-              PNG or JPEG — a photo of your signature on paper is fine. The paper is removed automatically.
-            </div>
+            <div className="text-xs opacity-50 mt-1">PNG or JPEG — it will be auto-cropped to the signature.</div>
 
             {uploaded && (
-              <>
-                <label className="flex items-center gap-2 mt-4 text-xs cursor-pointer">
-                  <input type="checkbox" checked={removeBg} onChange={e => setRemoveBg(e.target.checked)} />
-                  <span className="font-medium">Remove the background</span>
-                  <span className="opacity-50">— turn off if your image is already transparent</span>
-                </label>
-
-                <div className="grid grid-cols-2 gap-2 mt-3">
-                  <div>
-                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Original</div>
-                    <div className="card p-2 flex items-center justify-center" style={{ backgroundColor: "var(--c-paper)", height: 96 }}>
-                      <img src={uploaded} alt="Uploaded signature" style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
-                      {removeBg ? "Background removed" : "Saved as-is"}
-                    </div>
-                    <div className="card p-2 flex items-center justify-center" style={{ ...CHECKER, height: 96 }}>
-                      <img src={(removeBg ? cutPreview?.dataUrl : null) || uploaded} alt="Processed signature"
-                        style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* The honest test. Leftover paper reads as a pale box here. */}
-                <div className="mt-2">
-                  <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">On a dark background</div>
-                  <div className="card p-2 flex items-center justify-center" style={{ backgroundColor: "#0F1A2E", height: 72 }}>
-                    <img src={(removeBg ? cutPreview?.dataUrl : null) || uploaded} alt="Signature on dark"
-                      style={{ maxHeight: 56, maxWidth: "100%", objectFit: "contain" }} />
-                  </div>
-                </div>
-
-                {removeBg && (
-                  <div className="grid grid-cols-2 gap-3 mt-3">
-                    <label className="text-xs">
-                      <span className="opacity-60">Cleanup strength</span>
-                      <input type="range" min="0" max="1" step="0.05" value={strength}
-                        onChange={e => setStrength(Number(e.target.value))} className="w-full" />
-                    </label>
-                    <label className="text-xs">
-                      <span className="opacity-60">Ink darkness</span>
-                      <input type="range" min="0" max="1" step="0.05" value={inkDarkness}
-                        onChange={e => setInkDarkness(Number(e.target.value))} className="w-full" />
-                    </label>
-                  </div>
-                )}
-
-                {removeBg && cutPreview?.lowContrast && (
-                  <div className="text-xs mt-2 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-                    This image has very little contrast between the ink and the paper. Try a brighter, flatter photo — or raise the ink darkness.
-                  </div>
-                )}
-                {removeBg && cutPreview?.tooSmall && (
-                  <div className="text-xs mt-2 opacity-60">
-                    This image is small, so it may look soft on the document. A larger photo will stamp more crisply.
-                  </div>
-                )}
-                {cutErr && (
-                  <div className="text-xs mt-2 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{cutErr}</div>
-                )}
-              </>
+              <div className="mt-4 card p-4" style={{ backgroundColor: "var(--c-paper)" }}>
+                <img src={uploaded} alt="signature" style={{ maxHeight: 100, maxWidth: "100%", objectFit: "contain", display: "block", margin: "0 auto" }} />
+              </div>
             )}
           </div>
         )}
@@ -548,12 +376,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
           </div>
           <div className="flex flex-wrap items-center gap-2 justify-end">
             {onCancel && <button className="btn-ghost" onClick={onCancel}>{manage ? "Done" : "Cancel"}</button>}
-            {manage ? (fixingSig ? (
-              <button className="btn-primary" onClick={addToSet} disabled={busy || !uploaded}
-                title={`Replace ${fixingSig.label} with the cleaned version`}>
-                <Check size={14} /> {busy ? "Saving…" : "Save cleaned signature"}
-              </button>
-            ) : (
+            {manage ? (
               <>
                 <input type="text" value={tag} onChange={e => { setTag(e.target.value); setErr(""); }}
                   placeholder={sigs.length === 0 ? "Name tag (e.g. Official)" : "Name tag — required"}
@@ -564,7 +387,7 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
                   <Check size={14} /> {busy ? "Saving…" : "Add signature"}
                 </button>
               </>
-            )) : (
+            ) : (
               <button className="btn-primary" onClick={save} disabled={mode === "draw" ? empty : !uploaded}>
                 <Check size={14} /> Save signature
               </button>
