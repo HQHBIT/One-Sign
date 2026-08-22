@@ -1,7 +1,7 @@
 # Multi-organisation SignFlow — design
 
 **Date:** 2026-08-22
-**Status:** approved in outline; two items pending confirmation (see Open items)
+**Status:** approved. Logo assets outstanding (see Open items)
 
 ## Problem
 
@@ -122,17 +122,25 @@ Each gets a test asserting a user of one organisation cannot see the other's row
 Each deploys and rolls back independently. Phase 2 without phase 1 would be a
 facade — a picker that gates nothing — so they ship in order.
 
+## Organisations
+
+| Slug | Name | Login methods |
+|---|---|---|
+| `hqhb` | HQHB | oneAccess + local password |
+| `waqf` | WAQF Department | local password only |
+
+**The IT Admin is global** — one administrator manages both organisations and sees
+both in every admin list. Organisation scoping therefore applies to non-admin
+queries; the admin list endpoints take an optional organisation filter for
+convenience rather than as a security boundary.
+
 ## Open items
 
-- **Is the existing IT Admin global?** The design assumes one administrator
-  managing both organisations. If each organisation needs its own administrator
-  who cannot see the other, every admin query changes.
-- **Waqf display name and slug.** Proposed: name "Waqf & Trust Department", slug
-  `waqf`. HQHB keeps slug `hqhb`.
-- **Logo assets.** HQHB's mark exists at `client/public/email/qh-logo.png` but at
+- **Logo assets.** HQHB's mark exists at `client/public/email/qh-logo.png`, but at
   128×127 it is too small for a landing tile and will look soft on a high-density
-  screen. The Waqf mark is not in the repository at all. Both are needed at 512px
-  or larger, or as SVG.
+  screen. The WAQF mark is not in the repository at all. Both are wanted at 512px
+  or larger, or as SVG — the WAQF seal especially, since its fine Arabic lettering
+  degrades badly when scaled up from a small raster.
 
 ## Out of scope
 

@@ -2,7 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { isEnabled as confidentialEnabled, keyStatus as confidentialKeyStatus } from "../confidential.js";
-import { queryOne, query, hydrateUser, execute } from "../db.js";
+import { queryOne, query, hydrateUser, execute, listOrganisations, getOrganisation } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
@@ -21,20 +21,44 @@ import {
 
 const router = Router();
 
+// The organisations the landing page offers. Public and unauthenticated by
+// necessity — it is what a visitor sees before they have any identity. It
+// deliberately exposes nothing but display data: no user counts, no domains,
+// nothing that distinguishes a populated organisation from an empty one.
+router.get("/organisations", async (req, res, next) => {
+  try {
+    res.json({ organisations: await listOrganisations() });
+  } catch (e) { next(e); }
+});
+
 // What the login screen should offer. Lets the client show the oneAccess button
 // and hide the local form once the cutover flag is flipped — no redeploy needed.
-router.get("/config", (req, res) => {
-  res.json({
-    oneAccessEnabled: oneAccessEnabled(),
-    localLoginEnabled: localLoginEnabled(),
-    oneAccessStartUrl: oneAccessEnabled() ? "/api/auth/oneaccess/start" : null,
-    // Whether this server holds a CONFIDENTIAL_KEY. When false the client hides
-    // the Confidential toggle rather than offering protection it cannot deliver.
-    confidentialEnabled: confidentialEnabled(),
-    // Diagnostic only — decoded byte length, never the key itself. A
-    // fail-closed feature is silent when misconfigured; this says why.
-    confidentialKey: confidentialKeyStatus(),
-  });
+//
+// `?org=<slug>` narrows this to one organisation's door. An unknown or inactive
+// slug falls back to the server-wide defaults rather than erroring, so a stale
+// bookmark still reaches a usable login form.
+router.get("/config", async (req, res, next) => {
+  try {
+    const org = req.query?.org ? await getOrganisation(String(req.query.org)) : null;
+    const orgActive = !!(org && org.active);
+    // Per-organisation permission ANDed with server capability: WAQF has
+    // allow_oneaccess = 0, so its door never offers SSO even where oneAccess is
+    // fully configured.
+    const ssoOn = oneAccessEnabled() && (!orgActive || org.allowOneAccess);
+    const localOn = localLoginEnabled() && (!orgActive || org.allowLocal);
+    res.json({
+      org: orgActive ? { id: org.id, name: org.name, logoPath: org.logoPath } : null,
+      oneAccessEnabled: ssoOn,
+      localLoginEnabled: localOn,
+      oneAccessStartUrl: ssoOn ? "/api/auth/oneaccess/start" : null,
+      // Whether this server holds a CONFIDENTIAL_KEY. When false the client hides
+      // the Confidential toggle rather than offering protection it cannot deliver.
+      confidentialEnabled: confidentialEnabled(),
+      // Diagnostic only — decoded byte length, never the key itself. A
+      // fail-closed feature is silent when misconfigured; this says why.
+      confidentialKey: confidentialKeyStatus(),
+    });
+  } catch (e) { next(e); }
 });
 
 // Bounce the browser to the oneAccess login page (redirect=<slug>).
@@ -161,7 +185,7 @@ router.post("/login", loginLimit, async (req, res, next) => {
     if (!localLoginEnabled()) {
       return res.status(403).json({ error: "Password sign-in is disabled. Please sign in with oneAccess." });
     }
-    const { email, password } = req.body || {};
+    const { email, password, org } = req.body || {};
     // Type-check BEFORE any string method — an object like {"$gt":""} used to
     // reach email.trim() and crash with a 500 that leaked the error text.
     if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
@@ -171,6 +195,19 @@ router.post("/login", loginLimit, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email.trim()]);
     if (!row || !bcrypt.compareSync(password, row.password_hash)) {
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+    // Each organisation has its own door: an account belonging to one cannot sign
+    // in through another's, which is the whole point of the landing picker.
+    //
+    // The failure is deliberately INDISTINGUISHABLE from a wrong password. Saying
+    // "wrong organisation" would confirm the address exists in the other one,
+    // which is precisely the enumeration the rest of this file avoids. The IT
+    // Admin is global and so is exempt.
+    if (typeof org === "string" && org && row.role !== "admin") {
+      const requested = await getOrganisation(org);
+      if (requested && requested.active && (row.org_id || "hqhb") !== requested.id) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
     }
     // A deactivated (merged-away) account can't sign in — its identity now lives
     // on the surviving @hqhb.in account.

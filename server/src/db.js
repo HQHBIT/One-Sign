@@ -70,8 +70,9 @@ export async function initDb() {
   console.log(`[db] MySQL connected → ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}`);
 }
 
-async function tryExec(sql) {
-  try { await pool.query(sql); }
+// `params` is optional — DDL never needs it, but a seeding INSERT does.
+async function tryExec(sql, params) {
+  try { await pool.query(sql, params); }
   catch (e) {
     const code = e?.code || "";
     const ignorable = [
@@ -530,6 +531,62 @@ async function runSchema() {
   await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_notify TINYINT(1) NOT NULL DEFAULT 0`);
   await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_dashboard TINYINT(1) NOT NULL DEFAULT 0`);
 
+  // ---------- organisations (multi-tenancy) ----------
+  // SignFlow serves more than one organisation. Each has its own people and its
+  // own login door; a member of one cannot sign in to another. The row id IS the
+  // URL slug — this table has a handful of rows that are referenced by name in
+  // URLs, so a separate opaque id would buy nothing.
+  await tryExec(`CREATE TABLE IF NOT EXISTS organisations (
+    id              VARCHAR(32)  NOT NULL PRIMARY KEY,
+    name            VARCHAR(120) NOT NULL,
+    logo_path       VARCHAR(255) DEFAULT NULL,
+    allow_oneaccess TINYINT(1)   NOT NULL DEFAULT 0,
+    allow_local     TINYINT(1)   NOT NULL DEFAULT 1,
+    active          TINYINT(1)   NOT NULL DEFAULT 1,
+    sort_order      INT          NOT NULL DEFAULT 0,
+    created_at      BIGINT       NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // allow_oneaccess is a per-organisation permission, not a guarantee: the login
+  // config endpoint ANDs it with oneAccessEnabled(), so an unconfigured server
+  // still offers only local login.
+  await tryExec(
+    `INSERT IGNORE INTO organisations (id, name, logo_path, allow_oneaccess, allow_local, active, sort_order, created_at)
+     VALUES ('hqhb', 'HQHB', '/org/hqhb.png', 1, 1, 1, 1, ?),
+            ('waqf', 'WAQF Department', '/org/waqf.png', 0, 1, 1, 2, ?)`,
+    [Date.now(), Date.now()]);
+
+  // Home organisation. DEFAULT 'hqhb' is a backstop only — every insert path sets
+  // it explicitly. Without a default, the many existing INSERTs that predate this
+  // column would start failing outright.
+  await tryExec(`ALTER TABLE users ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+  // A global user is selectable as an approver in OTHER organisations. It grants
+  // approval reach only — never the ability to sign in to, or browse, that space.
+  await tryExec(`ALTER TABLE users ADD COLUMN is_global TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE teams ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+  // Denormalised from the requestor: derivable by join, but every list query
+  // filters on it and the join is not worth paying each time.
+  await tryExec(`ALTER TABLE requests ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+
+  // Everything that existed before this feature belongs to HQHB.
+  await tryExec(`UPDATE users    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+  await tryExec(`UPDATE teams    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+  await tryExec(`UPDATE requests SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+
+  // A team name is unique WITHIN an organisation, not globally — otherwise only
+  // one of the two "IT" departments could exist. MySQL names the implicit index
+  // after the column, hence DROP INDEX `name`. Backfill above must come first, or
+  // the new key would be built over NULLs.
+  await tryExec(`ALTER TABLE teams DROP INDEX name`);
+  await tryExec(`ALTER TABLE teams ADD UNIQUE KEY uq_teams_org_name (org_id, name)`);
+
+  await tryExec(`ALTER TABLE users    ADD INDEX idx_users_org (org_id)`);
+  await tryExec(`ALTER TABLE users    ADD INDEX idx_users_global (is_global)`);
+  await tryExec(`ALTER TABLE requests ADD INDEX idx_requests_org (org_id)`);
+  await tryExec(`ALTER TABLE users    ADD CONSTRAINT fk_users_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
+  await tryExec(`ALTER TABLE teams    ADD CONSTRAINT fk_teams_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
+  await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_requests_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
+
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
 
@@ -592,6 +649,33 @@ async function seedIfEmpty() {
 // ============================================================
 //   Hydrators — shape rows for the API
 // ============================================================
+// The organisations a user may choose between on the landing page. Ordered for
+// display; inactive ones are hidden rather than deleted so their data survives.
+export async function listOrganisations({ includeInactive = false } = {}) {
+  const rows = await query(
+    `SELECT * FROM organisations ${includeInactive ? "" : "WHERE active = 1"} ORDER BY sort_order ASC, name ASC`
+  );
+  return rows.map(shapeOrganisation);
+}
+
+export async function getOrganisation(id) {
+  const row = await queryOne("SELECT * FROM organisations WHERE id = ?", [String(id || "")]);
+  return row ? shapeOrganisation(row) : null;
+}
+
+function shapeOrganisation(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    logoPath: r.logo_path || null,
+    // A permission, not a promise: the login-config endpoint ANDs this with
+    // oneAccessEnabled() so an unconfigured server still offers local only.
+    allowOneAccess: !!Number(r.allow_oneaccess),
+    allowLocal: !!Number(r.allow_local),
+    active: !!Number(r.active)
+  };
+}
+
 export async function hydrateUser(row) {
   if (!row) return null;
   const [auth] = await pool.execute("SELECT team_id FROM signing_authority WHERE user_id = ?", [row.id]);
@@ -600,6 +684,13 @@ export async function hydrateUser(row) {
     email: row.email,
     name: row.name,
     role: row.role,
+    // Home organisation. Every non-admin query scopes to this; it is also what a
+    // login attempt is checked against, so a member of one organisation cannot
+    // sign in through another's door.
+    orgId: row.org_id || "hqhb",
+    // Selectable as an approver in OTHER organisations. Approval reach only — it
+    // grants no ability to sign in to, or browse, that organisation.
+    isGlobal: !!Number(row.is_global),
     team: row.team_id,
     department: row.department || null,
     jamaat: row.jamaat || null,
