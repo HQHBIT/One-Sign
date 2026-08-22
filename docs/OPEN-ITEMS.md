@@ -1,0 +1,142 @@
+# Open items
+
+Running list of outstanding work. Updated 2026-08-22.
+
+---
+
+## Multi-organisation (in progress)
+
+Spec: `docs/superpowers/specs/2026-08-22-multi-organisation-design.md`
+Live: `a79c42c` — schema, seed data and login isolation are deployed. Every
+existing row is HQHB, so nothing has changed for anyone yet.
+
+### Phase 1 remainder — **do before any real WAQF user exists**
+
+- [ ] **Query-level organisation isolation.** `GET /users`, `GET /users/search`,
+      `GET /teams`, `GET /requests` and the reports still return every row
+      regardless of organisation. Harmless today because everything is HQHB;
+      the moment a WAQF requestor exists they would see HQHB's people and teams
+      in their pickers. This is the single most important outstanding item.
+- [ ] Set `org_id` explicitly on every insert path — user creation, team
+      creation, request creation — rather than leaning on the
+      `DEFAULT 'hqhb'` backstop, which exists only so pre-existing INSERTs
+      keep working.
+- [ ] Pin the oneAccess upsert to `hqhb`, so an SSO login can never mint a user
+      in another organisation.
+- [ ] Scope the oneAccess department→team resolution to HQHB
+      (`routes/auth.js`), or a department string could match a WAQF team.
+
+### Phase 2 — landing picker · **blocked on assets**
+
+- [ ] WAQF seal file. SVG strongly preferred: the fine Arabic lettering
+      degrades badly scaled up from a small raster.
+- [ ] A larger HQHB mark. The repo copy (`client/public/email/qh-logo.png`) is
+      128×127 and will look soft at tile size.
+- [ ] Landing page with one clickable logo tile per organisation; choice stored
+      in `localStorage` with a visible way to switch.
+- [ ] Client sends the organisation slug on login and calls
+      `/auth/config?org=`. The server side of both already exists and is tested.
+
+### Phase 3 — global users
+
+- [ ] Admin toggle for `users.is_global`.
+- [ ] Approver search returns current organisation **plus** global users.
+- [ ] Confirm the organisation filter on `GET /requests` does not exclude
+      cross-organisation requests a global user is a signer on — scoping applies
+      to browsing, never to participation.
+
+### Phase 4 — departments
+
+- [ ] Render teams organisation-prefixed ("HQHB — IT").
+- [ ] Department filter chips on approver queues.
+
+---
+
+## Signature and date rendering
+
+- [ ] **Date font matching the document.** Not started. Dates still stamp in
+      hardcoded Helvetica, navy, sized to fill the box, so they read as an
+      annotation rather than part of the document. Plan: detect the font
+      client-side with pdf.js, re-embed the PDF's own font server-side with
+      `@pdf-lib/fontkit` (hoisted at the repo root but **not declared in
+      `server/package.json`**). Needs a recursive walk of page `/Resources
+      /Font` through XObjects, because `bakeOrientation` re-embeds pages and
+      pushes fonts out of the page's own resource dictionary. Subset fonts can
+      omit digits, so glyphs must be verified before use.
+- [ ] `xlsx-sign.js` still stretches signatures via its `tl`/`br` anchors.
+      `fitContain()` fixed this for PDFs only.
+- [ ] Background removal is withdrawn from the UI (`bb60b7d`). The code and its
+      unit tests remain in the tree, unreferenced. **It was never once verified
+      against a real signature photograph** — that must happen before it is
+      re-enabled.
+
+Done and live: `fitContain()`, so signatures are no longer stretched out of
+proportion.
+
+---
+
+## S3 / RustFS storage — **on hold at the owner's request**
+
+Review complete; no code written. Findings:
+
+- The proposed module is CommonJS; the server is `"type": "module"`.
+- The presigned-redirect route must be dropped. It bypasses `authoriseAccess`,
+  the confidential unlock gate and `logAccess`, and returns **undecryptable
+  ciphertext** for confidential documents, which are encrypted before storage.
+- Its 10 MB cap conflicts with the 15 MB multer limit and the 14 MB client check.
+
+Decisions still needed: scope (all four storage areas or documents + signed
+first), whether to keep encrypting confidential files before upload
+(recommended — otherwise RustFS console access reads every one), confirmation
+that presigned URLs are dropped, a production bucket and credentials, and what
+backs the bucket up.
+
+---
+
+## Unresolved report: "1hr rejection" approver visibility
+
+Investigation paused mid-way. What was established:
+
+- The approver's own queues are computed correctly
+  (`pending.concat(pendingApproved)`), and both approve paths set `approver_id`,
+  so a request they signed does not vanish.
+- **Found:** the list query's team-authority clause matches only
+  `status = 'pending'` (`server/src/routes/requests.js:206`). A *second*
+  approver holding the same team's signing authority therefore loses sight of a
+  request once a colleague signs it. This may or may not be the reported
+  symptom.
+
+Needs a concrete description of what the approver actually saw.
+
+---
+
+## Test-suite health
+
+- [ ] Integration suites do not load dotenv. They need `node --env-file=.env`
+      and a running API on 5001; otherwise they fail with
+      `Access denied for user 'root'@'localhost'`.
+- [ ] `security.integration.mjs:87` and `events.integration.mjs` use
+      `path.join("server", "uploads", …)` — a path relative to the repo root,
+      but the suites run from `server/`, so they write to `server/server/…`.
+      The file never lands where the server looks. This is why
+      `security.integration` fails its *permissive* check; the actual security
+      assertion (a non-participant is blocked) passes.
+- [ ] Five pre-existing integration failures, all verified against the parent
+      commit: `expenses` (that feature is commented out, so expected),
+      `oneaccess-upsert`, `security`, `self-sign`, `signer-date`.
+- [ ] `workflow-validity.integration.mjs` is flaky — `Assertion failed:
+      !(handle->flags & UV_HANDLE_CLOSING)`, a libuv teardown abort on Windows,
+      not a test assertion. Measured 3 pass / 3 fail on current code versus
+      1 pass / 5 fail on the parent commit, so it is environmental.
+
+---
+
+## Security and hygiene
+
+- [ ] **Rotate the RustFS secret key and the `hqhbadmin` console password.**
+      Both were pasted into a chat transcript in plaintext.
+- [ ] **`test.js` at the repo root contains a production login in plaintext.**
+      Never committed and now gitignored, but still sitting on disk. Delete it,
+      and rotate that password too.
+- [ ] Three logo files remain uncommitted: `fbd-logo.png`, `org-emblem.png`,
+      `qh-logo.png`. `qh-logo.png` is needed once the landing picker lands.
