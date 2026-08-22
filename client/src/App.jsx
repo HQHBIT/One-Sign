@@ -41,7 +41,9 @@ import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
 import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
+import { getChosenOrg, setChosenOrg, clearChosenOrg } from "./lib/org.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
+import { OrgPicker } from "./components/OrgPicker.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -273,10 +275,18 @@ export default function App() {
     };
   }, [user, refresh]);
 
+  // ---- which organisation's door are we at? ----
+  // Remembered so a returning user goes straight to their own sign-in. Only a
+  // convenience: the server independently verifies the account belongs to the
+  // organisation, so changing this cannot get anyone into another space.
+  const [orgId, setOrgId] = useState(() => getChosenOrg());
+  const pickOrg = (id) => { setChosenOrg(id); setOrgId(id); };
+  const changeOrg = () => { clearChosenOrg(); setOrgId(null); };
+
   // ---- auth actions ----
   const login = async (email, password) => {
     try {
-      const { token, user: u } = await api.login(email, password);
+      const { token, user: u } = await api.login(email, password, orgId);
       api.setToken(token);
       // If a newer build has shipped, reload now (the token is persisted, so the
       // user lands signed in on the latest version — including the current logo).
@@ -436,7 +446,10 @@ export default function App() {
     <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}>
       <StyleTag />
       {!user ? (
-        <LoginScreen login={login} onSession={completeSession} />
+        // Landing: choose an organisation, then that organisation's sign-in.
+        orgId
+          ? <LoginScreen login={login} onSession={completeSession} org={orgId} onChangeOrg={changeOrg} />
+          : <OrgPicker onPick={pickOrg} />
       ) : user.needsWorkEmail ? (
         <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (

@@ -12,7 +12,7 @@ function todayStr() {
 }
 */
 
-export function LoginScreen({ login, onSession }) {
+export function LoginScreen({ login, onSession, org = null, onChangeOrg = null }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,7 +48,9 @@ export function LoginScreen({ login, onSession }) {
   // Login options from the server: whether to offer oneAccess SSO and/or the local
   // password form. Defaults keep the local form so a config hiccup never locks out.
   const [authCfg, setAuthCfg] = useState({ oneAccessEnabled: false, localLoginEnabled: true, oneAccessStartUrl: null });
-  useEffect(() => { api.authConfig().then(setAuthCfg).catch(() => {}); }, []);
+  // Scoped to the chosen organisation — its permitted sign-in methods, not the
+  // server's. WAQF is password-only even where oneAccess is fully configured.
+  useEffect(() => { api.authConfig(org).then(setAuthCfg).catch(() => {}); }, [org]);
   const oneAccessAvailable = authCfg.oneAccessEnabled;
   // Whether the server will accept a password login at all (kept on for the admin door).
   const localAvailable = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
@@ -175,11 +177,28 @@ export function LoginScreen({ login, onSession }) {
         <div className="w-full max-w-sm">
           {forgotState === "idle" && (
             <div>
+              {/* Whose door this is. Each organisation has its own people, so an
+                  account from another one will be refused here — saying which
+                  organisation you are signing in to prevents a confusing
+                  "invalid credentials" from a perfectly correct password. */}
+              {authCfg.org && (
+                <div className="flex items-center gap-2 mb-4 text-xs">
+                  <span className="opacity-50">Signing in to</span>
+                  <span className="font-medium">{authCfg.org.name}</span>
+                  {onChangeOrg && (
+                    <button type="button" onClick={onChangeOrg} className="underline opacity-60 hover:opacity-100 ml-auto">
+                      change
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="font-display text-2xl sm:text-3xl mb-2">{adminMode ? "Sign in with email & password" : "Sign in"}</div>
               <div className="text-sm opacity-60 mb-8">
                 {adminMode
                   ? "For administrators, executives and executive assistants with a SignFlow password."
-                  : "Continue with your oneAccess account."}
+                  : oneAccessAvailable
+                    ? "Continue with your oneAccess account."
+                    : "Enter the email and password your administrator gave you."}
               </div>
 
               {/* Regular users: oneAccess only, with a discreet admin link below. */}

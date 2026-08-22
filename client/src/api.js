@@ -52,11 +52,23 @@ export const api = {
   },
 
   // -------- auth --------
-  login(email, password) {
-    return this.fetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+  // `org` is the organisation whose door this sign-in is at. The server checks
+  // the account actually belongs to it and refuses otherwise — with a response
+  // identical to a wrong password, so the form reveals nothing.
+  login(email, password, org) {
+    return this.fetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(org ? { email, password, org } : { email, password })
+    });
   },
+  // The organisations offered on the landing page. Public — it is what a visitor
+  // sees before they have any identity.
+  organisations() { return this.fetch("/api/auth/organisations").then(r => r.organisations || []); },
   // What the login screen should offer (oneAccess SSO vs local password form).
-  authConfig() { return this.fetch("/api/auth/config"); },
+  // Scoped to one organisation when given: WAQF's door never offers SSO.
+  authConfig(org) {
+    return this.fetch(`/api/auth/config${org ? `?org=${encodeURIComponent(org)}` : ""}`);
+  },
   // Exchange an oneAccess access token (from the SSO redirect ?token=) for a
   // SignFlow session. Returns { token, user }.
   oneAccessCallback(token) {
