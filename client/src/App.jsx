@@ -42,6 +42,7 @@ import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { getChosenOrg, setChosenOrg, clearChosenOrg } from "./lib/org.js";
+import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { OrgPicker } from "./components/OrgPicker.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
@@ -774,7 +775,11 @@ function SelfSignDoc({ user, notify, back }) {
   const markIdx = (id) => { const m = /^self-(\d+)$/.exec(id || ""); return m ? Number(m[1]) : -1; };
   const onUpdateMarker = (id, patch) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.map((m, k) => k === i ? { ...m, ...patch } : m)); };
   const onDeleteMarker = (id) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.filter((_, k) => k !== i)); };
-  const fixedBox = tool === "date" ? { w: 12, h: 4.5 } : { w: 22, h: 6 };
+  // Signing your own document: the box follows YOUR signature's shape, so the
+  // stamp fills it exactly and there is nothing to drag.
+  const boxSpec = tool === "date"
+    ? { heightMm: DATE_HEIGHT_MM, aspect: DATE_ASPECT }
+    : { heightMm: SIGNATURE_HEIGHTS_MM[getPreset()], aspect: (user?.signatureAspect > 0 ? user.signatureAspect : DEFAULT_SIGNATURE_ASPECT) };
 
   const download = async () => {
     setBusy(true);
@@ -842,7 +847,7 @@ function SelfSignDoc({ user, notify, back }) {
             </div>
           )}
           <Suspense fallback={<ViewerFallback />}>
-            <DocPreview file={file} markers={markers} editable fixedBox={fixedBox}
+            <DocPreview file={file} markers={markers} editable boxSpec={boxSpec}
               onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
               rotation={rotation} onRotate={() => setRotation(r => (r + 90) % 360)} />
           </Suspense>

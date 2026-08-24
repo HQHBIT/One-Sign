@@ -7,9 +7,11 @@
 //   own chunk and only download when the user actually previews a
 //   document — not on initial page load.
 // ============================================================
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import * as XLSX from "xlsx";
+
+import { boxPercentFor, boxMillimetres, snapBox } from "./lib/boxSize.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
@@ -23,14 +25,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fixedBox = null, fill = false, rotation = 0, onRotate }) {
+export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fixedBox = null, boxSpec = null, fill = false, rotation = 0, onRotate }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} fixedBox={fixedBox} fill={fill} rotation={rotation} onRotate={onRotate} />;
+      onPages={onPages} lockedAspect={lockedAspect} fixedBox={fixedBox} boxSpec={boxSpec} fill={fill} rotation={rotation} onRotate={onRotate} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
 }
@@ -55,7 +57,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fixedBox = null, fill = false, rotation = 0, onRotate }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fixedBox = null, boxSpec = null, fill = false, rotation = 0, onRotate }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
   // Page 1's native aspect — used so placeholders for unrendered pages reserve
@@ -151,6 +153,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             onPlaced={() => setArmed(false)}
             lockedAspect={lockedAspect}
             fixedBox={fixedBox}
+            boxSpec={boxSpec}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
@@ -259,11 +262,13 @@ const LONGPRESS_MS = 420;
 // If the finger travels more than this (px) the gesture is a scroll, not a press.
 const MOVE_CANCEL_PX = 12;
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, fixedBox = null, onRendered, armed = false, onPlaced }) {
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, fixedBox = null, boxSpec = null, onRendered, armed = false, onPlaced }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // The page in PDF points, so a box can be sized in millimetres.
+  const [ptSize, setPtSize] = useState(null);
   // The page's own /Rotate (e.g. a stored file the requestor rotated on submit).
   // The `rotation` prop is ADDED on top so an approver viewing an already-rotated
   // file sees it upright, and markers (stored in the un-rotated frame) still align.
@@ -272,14 +277,27 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   // Pending long-press: { timer, cx, cy } while a stationary touch is held.
   const longPressRef = useRef(null);
 
-  // Constrain a viewport %-rectangle to satisfy lockedAspect (signature width/height
+  // The drop size, in page percentages, derived from a millimetre height and the
+  // signer's own signature shape. Falls back to the caller's fixed %-box while
+  // the page is still being measured, or when no spec was given.
+  const effBox = useMemo(() => {
+    if (!boxSpec) return fixedBox;
+    return boxPercentFor({ ...boxSpec, pagePt: ptSize }) || fixedBox;
+  }, [boxSpec, ptSize, fixedBox]);
+
+  // A box whose shape does not match the signature going into it leaves slack,
+  // because the stamp is contain-fitted. So the aspect is always locked — to the
+  // signer's real signature where we know it, to the spec's default otherwise.
+  const effAspect = boxSpec?.aspect || lockedAspect;
+
+  // Constrain a viewport %-rectangle to satisfy effAspect (signature width/height
   // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger
   // dimension. Returns null if there's no lock or canvas hasn't measured yet.
   const lockRect = (vx, vy, vw, vh) => {
-    if (!lockedAspect || !size.w || !size.h) return null;
+    if (!effAspect || !size.w || !size.h) return null;
     // Target viewport ratio so that the resulting MediaBox rectangle has aspect α.
     // At rotation 0: vw_px / vh_px = α   →   vw/vh = α * (canvas_h / canvas_w).
-    const target = lockedAspect * (size.h / size.w);
+    const target = effAspect * (size.h / size.w);
     const currentRatio = vw / Math.max(vh, 0.0001);
     if (currentRatio > target) {
       // Too wide → shrink width to match height
@@ -310,6 +328,10 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
       // Render at the page's native rotation plus the user's chosen rotation. The
       // stamp itself is drawn upright regardless (see placeInRotatedPage server-side).
       const baseViewport = page.getViewport({ scale: 1, rotation: eff });
+      // Scale 1 means PDF points, in the orientation actually on screen. This is
+      // what lets a box be sized in millimetres rather than as a percentage —
+      // the same percentage is 46 mm on A4 and 65 mm on A3.
+      if (!cancelled) setPtSize({ w: baseViewport.width, h: baseViewport.height });
       const cssScale = containerW / baseViewport.width;
       const dpr = window.devicePixelRatio || 1;
       const viewport = page.getViewport({ scale: cssScale * dpr, rotation: eff });
@@ -349,8 +371,8 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
     const dragW = Math.abs(cx - sx);
     const dragH = Math.abs(cy - sy);
     let vx, vy, vw, vh;
-    if (fixedBox) {
-      vw = fixedBox.w; vh = fixedBox.h;
+    if (effBox) {
+      vw = effBox.w; vh = effBox.h;
       const midX = (sx + cx) / 2, midY = (sy + cy) / 2;
       vx = midX - vw / 2;
       vy = midY - vh / 2;
@@ -424,9 +446,9 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   // following the cursor; otherwise the dragged rectangle (aspect-locked if set).
   const previewRect = (() => {
     if (!drawing) return null;
-    if (fixedBox) {
+    if (effBox) {
       const midX = (drawing.sx + drawing.x) / 2, midY = (drawing.sy + drawing.y) / 2;
-      return { vx: midX - fixedBox.w / 2, vy: midY - fixedBox.h / 2, vw: fixedBox.w, vh: fixedBox.h };
+      return { vx: midX - effBox.w / 2, vy: midY - effBox.h / 2, vw: effBox.w, vh: effBox.h };
     }
     const vx = Math.min(drawing.sx, drawing.x);
     const vy = Math.min(drawing.sy, drawing.y);
@@ -458,6 +480,9 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
           return <MarkerOverlay key={m.id || i}
             m={{ ...m, x: v.x, y: v.y, w: v.w, h: v.h }}
             editable={editable}
+            aspect={effAspect}
+            pagePt={ptSize}
+            canvasPx={size}
             onUpdate={updateHandler}
             onDelete={deleteHandler} />;
         })}
@@ -475,11 +500,16 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   );
 }
 
-function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
+function MarkerOverlay({ m, editable, onUpdate, onDelete, aspect = null, pagePt = null, canvasPx = null }) {
   const color = m.color || "#B8894A";
   const isSigned = !!m.signedDataUrl;
   const highlight = m.highlight;
   const interactive = !!(editable && onUpdate);
+  // Shown only while the box is being dragged — a permanent label on every box
+  // would clutter a page with a dozen of them.
+  const [sizing, setSizing] = useState(false);
+  const lastRef = useRef(null);
+  const mm = boxMillimetres({ box: { w: m.w, h: m.h }, pagePt });
 
   // ---- drag handlers (move + resize) ----
   function startDrag(e, kind) {
@@ -515,9 +545,32 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
         nw = clamp(startM.w + dxPct, 2, 100 - startM.x);
         nh = clamp(startM.h + dyPct, 1, 100 - startM.y);
       }
-      onUpdate({ x: nx, y: ny, w: nw, h: nh });
+      // Resizing keeps the signature's own shape. A box that drifts off-aspect
+      // leaves slack once the stamp is contain-fitted, which is the thing that
+      // made people fiddle with these in the first place.
+      if (kind !== "move" && aspect && canvasPx?.w && canvasPx?.h) {
+        const target = aspect * (canvasPx.h / canvasPx.w);   // %-space ratio for aspect α
+        nw = nh * target;
+        // Re-anchor the edge the user is actually dragging, so the box grows
+        // from the opposite corner rather than sliding away from the cursor.
+        if (kind === "nw" || kind === "sw") nx = startM.x + startM.w - nw;
+        if (kind === "nw" || kind === "ne") ny = startM.y + startM.h - nh;
+        nx = clamp(nx, 0, Math.max(0, 100 - nw));
+        ny = clamp(ny, 0, Math.max(0, 100 - nh));
+      }
+      lastRef.current = { x: nx, y: ny, w: nw, h: nh };
+      onUpdate(lastRef.current);
     };
+    setSizing(true);
     const up = () => {
+      setSizing(false);
+      // Land on a whole millimetre. A dragged box otherwise settles on values like
+      // 17.3 mm, which look careless across a page of them.
+      if (kind !== "move" && aspect && pagePt && lastRef.current) {
+        const snapped = snapBox({ box: lastRef.current, aspect, pagePt });
+        onUpdate({ ...lastRef.current, w: snapped.w, h: snapped.h });
+      }
+      lastRef.current = null;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
@@ -527,18 +580,24 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
     window.addEventListener("pointercancel", up);
   }
 
+  // 14px with a 20px hit area. The old 10px squares were a hard target with a
+  // mouse and close to unusable with a fingertip, which is its own reason people
+  // struggled to resize these.
   const handleStyle = (corner) => ({
     position: "absolute",
-    width: 10, height: 10,
+    width: 14, height: 14,
+    boxSizing: "content-box",
+    padding: 3,                       // grows the hit area without growing the dot
     backgroundColor: color,
+    backgroundClip: "content-box",
     border: "2px solid #FAF7F0",
-    borderRadius: 2,
+    borderRadius: 3,
     cursor: corner === "nw" ? "nwse-resize" : corner === "ne" ? "nesw-resize"
           : corner === "sw" ? "nesw-resize" : "nwse-resize",
-    ...(corner === "nw" ? { left: -6, top: -6 } : {}),
-    ...(corner === "ne" ? { right: -6, top: -6 } : {}),
-    ...(corner === "sw" ? { left: -6, bottom: -6 } : {}),
-    ...(corner === "se" ? { right: -6, bottom: -6 } : {}),
+    ...(corner === "nw" ? { left: -11, top: -11 } : {}),
+    ...(corner === "ne" ? { right: -11, top: -11 } : {}),
+    ...(corner === "sw" ? { left: -11, bottom: -11 } : {}),
+    ...(corner === "se" ? { right: -11, bottom: -11 } : {}),
     pointerEvents: "auto",
     touchAction: "none"
   });
@@ -569,6 +628,12 @@ function MarkerOverlay({ m, editable, onUpdate, onDelete }) {
         <span style={{ padding: "2px 4px", backgroundColor: "rgba(255,255,255,.85)", borderRadius: 3, lineHeight: 1.1, textAlign: "center", pointerEvents: "none", maxWidth: "96%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {m.label || "SIGN HERE"}
         </span>
+      )}
+      {interactive && sizing && mm && (
+        <div style={{ position: "absolute", top: -24, left: 0, whiteSpace: "nowrap", fontSize: 10,
+          padding: "2px 6px", borderRadius: 4, backgroundColor: "#0F1A2E", color: "#F5F1E8", pointerEvents: "none" }}>
+          {mm.w.toFixed(0)} × {mm.h.toFixed(0)} mm
+        </div>
       )}
       {interactive && (
         <>

@@ -7,6 +7,7 @@ import {
   Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
+import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset, setPreset } from "../lib/boxSize.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
 import { api } from "../api.js";
@@ -187,12 +188,33 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     return (a && a > 0 && isFinite(a)) ? a : null;
   }, [mode, placingSlot, workflow, teams]);
 
-  // ---------- standard field size ----------
-  // Every placement drops the SAME industry-style box (resizable afterwards):
-  // signatures 22% x 6% of the page, date fields 12% x 4.5%. Which one applies
-  // follows what's currently being placed.
+  // Whose signature is going in the next box? Its shape decides the box's shape.
+  // A box that does not match leaves slack once the stamp is contain-fitted, and
+  // that slack is what used to send requestors dragging corners.
+  const activeAspect = useMemo(() => {
+    const ok = a => (a && a > 0 && isFinite(a)) ? a : null;
+    // The requestor placing their OWN signature.
+    if (selfPlacing === "signature") return ok(user?.signatureAspect) || DEFAULT_SIGNATURE_ASPECT;
+    if (lockedAspect) return lockedAspect;                       // workflow signer
+    const di = placingSlot?.directIdx;                           // named individual
+    if (mode === "direct" && di != null) {
+      return ok(directSigners[di]?.signatureAspect) || DEFAULT_SIGNATURE_ASPECT;
+    }
+    // Single mode routes to a team, so the eventual signer is not known yet.
+    return DEFAULT_SIGNATURE_ASPECT;
+  }, [selfPlacing, user, lockedAspect, mode, placingSlot, directSigners]);
+
+  // ---------- how big should the box be? ----------
+  // The requestor chooses a HEIGHT; the width follows from the signature above.
+  // Height is the only dimension that means anything for a signature, the same
+  // way type is sized by height — and one control beats two.
+  const [preset, setPresetState] = useState(getPreset);
+  const choosePreset = (k) => { setPreset(k); setPresetState(k); };
   const placingDates = selfPlacing === "date" || signerDatePlacing || placingSlot?.kind === "date";
-  const fixedBox = placingDates ? { w: 12, h: 4.5 } : { w: 22, h: 6 };
+  const boxSpec = useMemo(() => placingDates
+    ? { heightMm: DATE_HEIGHT_MM, aspect: DATE_ASPECT }
+    : { heightMm: SIGNATURE_HEIGHTS_MM[preset], aspect: activeAspect },
+    [placingDates, preset, activeAspect]);
 
   // ---------- markers shown on the doc ----------
   // The signer box(es) for the approver(s) AND the requestor's own self-signature /
@@ -381,6 +403,27 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   //     requestor signs / dates the SAME document view where they place the signer box.
   //     Available for PDFs and Excel workbooks alike; only the Date box is PDF-only,
   //     since a floating dated text box has no spreadsheet equivalent.
+  // Size control. Deliberately one dimension: pick how tall the signature should
+  // be, and the width follows the signer's own signature so the fit is exact.
+  // Date boxes size themselves from the text, so this is hidden while placing one.
+  const sizeBar = (file && !placingDates) ? (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+      <span className="font-medium opacity-80">Signature size:</span>
+      {SIGNATURE_PRESETS.map(p => (
+        <button key={p.key} type="button"
+          className={`text-xs ${preset === p.key ? "btn-gold" : "btn-ghost"}`}
+          title={`${SIGNATURE_HEIGHTS_MM[p.key]} mm tall on the page`}
+          onClick={() => choosePreset(p.key)}>
+          {p.label}
+        </button>
+      ))}
+      <span className="opacity-50">
+        {SIGNATURE_HEIGHTS_MM[preset]} mm tall — the width follows each signer&apos;s own signature,
+        so it never stretches and never leaves a gap. Drag a corner to fine-tune.
+      </span>
+    </div>
+  ) : null;
+
   const selfBar = file ? (
     <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,.08)" }}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -653,7 +696,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable fixedBox={fixedBox}
+                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
@@ -669,6 +712,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                       <div className="text-xs opacity-60">Click-drag or press and hold on the document — each drag adds a signature box. Drag a box to move it, ✕ to remove.</div>
                     )}
                     {signerDateBar}
+                    {sizeBar}
                     {selfBar}
                   </div>
                 </div>
@@ -729,7 +773,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                         onClick={() => {
                           // adding a person immediately arms signature placement for them
                           const newIdx = directSigners.length;
-                          setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, boxes: [], dateFields: [] }]);
+                          setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, signatureAspect: u.signatureAspect, boxes: [], dateFields: [] }]);
                           setDirectQuery("");
                           setSelfPlacing(null); setSignerDatePlacing(false);
                           setPlacingSlot({ directIdx: newIdx, kind: "signature" });
@@ -753,7 +797,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 <div className="flex flex-col xl:flex-row gap-4">
                   <div className="flex-1 min-w-0">
                     <Suspense fallback={<ViewerFallback />}>
-                      <DocPreview file={file} markers={allMarkers} editable
+                      <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
                         onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                     </Suspense>
                   </div>
@@ -811,6 +855,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                         })}
                       </div>
                     </div>
+                    {sizeBar}
                     {selfBar}
                   </div>
                 </div>
@@ -824,7 +869,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable lockedAspect={lockedAspect} fixedBox={fixedBox}
+                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
@@ -846,6 +891,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                             : <span>(Aspect locks once signer uploads a signature.)</span>}</>}
                     </div>
                   )}
+                  {sizeBar}
                   {selfBar}
 
                   <div className="space-y-3">
@@ -1219,7 +1265,7 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
             )}
             <Suspense fallback={<ViewerFallback />}>
               <DocPreview key={active + "-" + doc.name} file={doc} markers={markers} editable
-                fixedBox={{ w: 22, h: 6 }}
+                boxSpec={{ heightMm: SIGNATURE_HEIGHTS_MM.standard, aspect: DEFAULT_SIGNATURE_ASPECT }}
                 onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
             </Suspense>
             <div className="flex items-center justify-between mt-3 text-xs">
