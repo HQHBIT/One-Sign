@@ -107,7 +107,11 @@ for (const r of REFS) {
     // Legacy Excel approvals recorded a ".signed.json" manifest instead of a
     // document (see requests.js:754). It is a database artefact, not a file.
     const isJsonManifest = r.column === "signed_file_path" && /\.json$/i.test(row.val);
-    const key = `${r.area}/${row.val}`;
+    // The column may ALREADY be a bucket key: dual-write stores "documents/x.pdf"
+    // rather than the bare "x.pdf" it used to. Prefixing again produced
+    // "documents/documents/x.pdf", which counted such a row as missing AND its
+    // file as an orphan. Only prefix a value that is not already a key.
+    const key = AREAS.some(a => String(row.val).startsWith(a + "/")) ? String(row.val) : `${r.area}/${row.val}`;
     const hit = onDisk.get(key);
     if (hit) hit.refs++;
     else if (!isJsonManifest) missing.push({ ...r, pk: row.pk, val: row.val, key });
