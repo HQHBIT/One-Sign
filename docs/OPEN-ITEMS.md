@@ -98,11 +98,21 @@ Earlier review findings, still binding:
   ciphertext** for confidential documents, which are encrypted before storage.
 - Its 10 MB cap conflicts with the 15 MB multer limit and the 14 MB client check.
 
-Decisions still needed: scope (all four storage areas or documents + signed
-first), whether to keep encrypting confidential files before upload
-(recommended — otherwise RustFS console access reads every one), confirmation
-that presigned URLs are dropped, a production bucket and credentials, and what
-backs the bucket up.
+**Decided.** Scope is **all four areas** — documents, signed, signatures and
+voicenotes (owner, 2026-08-25). Copying documents alone would give a bucket that
+could never be cut over to: the signed PDFs are the legally meaningful
+artefacts, and the signatures are what stamp them. All four verified
+byte-for-byte against the real bucket, `voicenotes` included by planting a probe
+file, since that area is empty locally and would otherwise have gone untested.
+
+Presigned URLs are dropped and the presigner package is deliberately not
+installed. Confidential files are copied still encrypted; their bytes are never
+decrypted to move them.
+
+Still needed: the six `STORAGE_*` repository secrets (only the owner can add
+them — use a **rotated** key, the current one has been pasted into a chat twice),
+a production bucket separate from UAT, and a backup story for the bucket once
+the files stop living on the EC2 box.
 
 ---
 
