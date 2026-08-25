@@ -75,9 +75,22 @@ proportion.
 
 ---
 
-## S3 / RustFS storage — **on hold at the owner's request**
+## S3 / RustFS storage — **dump stage**
 
-Review complete; no code written. Findings:
+Restarted 2026-08-25, dump first. `server/scripts/dump-uploads.mjs` takes a
+read-only inventory of the uploads tree and pairs every file with the rows that
+reference it; runbook in `docs/S3-MIGRATION-DUMP.md`. S3 keys mirror the
+directory layout, so each column's existing value is already the key suffix.
+
+- [ ] Run the dump on the production box and read `report.txt` — the orphan and
+      missing lists are decisions, not noise.
+- [ ] Decide whether orphaned files (no database reference) get uploaded.
+- [ ] Upload, then verify against the manifest's `sha256` column.
+- [ ] **Schema change deferred.** Whether the S3 URL columns are
+      reference-only, a full cutover, or a backfill-now/cutover-later is still
+      undecided. Nothing is repointed until the bucket is verified complete.
+
+Earlier review findings, still binding:
 
 - The proposed module is CommonJS; the server is `"type": "module"`.
 - The presigned-redirect route must be dropped. It bypasses `authoriseAccess`,

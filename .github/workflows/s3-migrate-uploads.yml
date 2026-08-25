@@ -1,0 +1,96 @@
+name: Migrate uploads to S3 (manual)
+
+# ============================================================
+# Copies the stored files on the UAT box into the object-storage bucket.
+#
+# Manual only, and staged on purpose. The three modes run in order, and each one
+# tells you whether the next is safe:
+#
+#   inventory  read-only. Counts files, pairs them with the rows that reference
+#              them, lists orphans and missing files. Touches nothing.
+#   dry-run    reports exactly what would be uploaded. Writes nothing.
+#   upload     uploads and verifies each object by reading it back.
+#
+# THE DATABASE IS NEVER MODIFIED by any mode, and nothing in the application
+# reads from the bucket yet. A completed upload therefore changes no behaviour —
+# it is a verified copy, and it is reversible by emptying the bucket. Repointing
+# the columns is a separate, later, riskier step that is deliberately not here.
+#
+# Confidential documents are copied exactly as they sit on disk, still
+# encrypted. Their bytes are never decrypted in the course of moving them.
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to do"
+        required: true
+        default: inventory
+        type: choice
+        options: [inventory, dry-run, upload]
+      confirm:
+        description: 'For "upload" only: type UPLOAD to proceed'
+        required: false
+        default: ""
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a live upload without explicit confirmation
+        if: inputs.mode == 'upload' && inputs.confirm != 'UPLOAD'
+        run: |
+          echo "mode=upload requires confirm=UPLOAD. Nothing done."
+          exit 1
+
+      - name: Run on EC2
+        uses: appleboy/ssh-action@v1
+        env:
+          MODE: ${{ inputs.mode }}
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          envs: MODE
+          command_timeout: 30m
+          script: |
+            set -e
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server
+
+            # Storage config lives in .env, synced there by the deploy workflow
+            # from the STORAGE_* repository secrets. Without it there is nothing
+            # to upload to, so stop before doing half a job.
+            if ! grep -q '^STORAGE_BUCKET=' .env 2>/dev/null; then
+              echo "STORAGE_BUCKET is not in .env."
+              echo "Add the STORAGE_* repository secrets and re-run the deploy first."
+              exit 1
+            fi
+
+            DUMP=/home/ubuntu/s3-migration/dump-latest
+
+            if [ "$MODE" = "inventory" ]; then
+              rm -rf "$DUMP"
+              mkdir -p "$(dirname "$DUMP")"
+              node --env-file=.env scripts/dump-uploads.mjs --out "$DUMP"
+              echo
+              echo "Inventory written to $DUMP. Read the ORPHANS and MISSING sections:"
+              echo "they are decisions, not noise."
+              exit 0
+            fi
+
+            if [ ! -f "$DUMP/manifest.csv" ]; then
+              echo "No inventory at $DUMP. Run this workflow with mode=inventory first."
+              exit 1
+            fi
+
+            if [ "$MODE" = "dry-run" ]; then
+              node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP"
+              exit 0
+            fi
+
+            echo "Uploading. The database will not be touched."
+            node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" --confirm
