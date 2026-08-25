@@ -25,14 +25,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 //     onAddMarker: (page, x%, y%, w%, h%) => void
 //     onPages:  (count) => void
 // ============================================================
-export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fixedBox = null, boxSpec = null, fill = false, rotation = 0, onRotate }) {
+export function DocPreview({ file, marker, markers, editable = false, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, appliedSignature, styleMap, lockedAspect = null, fixedBox = null, boxSpec = null, resizeToken = 0, fill = false, rotation = 0, onRotate }) {
   const list = markers || (marker ? [{ ...marker, page: marker.page || 1 }] : []);
   if (!file) return null;
 
   if (file.ext === "pdf") {
     return <PdfPagedViewer file={file} markers={list} editable={editable}
       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
-      onPages={onPages} lockedAspect={lockedAspect} fixedBox={fixedBox} boxSpec={boxSpec} fill={fill} rotation={rotation} onRotate={onRotate} />;
+      onPages={onPages} lockedAspect={lockedAspect} fixedBox={fixedBox} boxSpec={boxSpec} resizeToken={resizeToken} fill={fill} rotation={rotation} onRotate={onRotate} />;
   }
   return <XlsxViewer file={file} markers={list} editable={editable} onAddMarker={onAddMarker} onPages={onPages} appliedSignature={appliedSignature} styleMap={styleMap} fill={fill} />;
 }
@@ -57,7 +57,7 @@ function mediaboxToViewport(rotation, mx, my, mw, mh) {
   }
 }
 
-function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fixedBox = null, boxSpec = null, fill = false, rotation = 0, onRotate }) {
+function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, onPages, lockedAspect = null, fixedBox = null, boxSpec = null, resizeToken = 0, fill = false, rotation = 0, onRotate }) {
   const [pdf, setPdf] = useState(null);
   const [err, setErr] = useState(null);
   // Page 1's native aspect — used so placeholders for unrendered pages reserve
@@ -154,6 +154,7 @@ function PdfPagedViewer({ file, markers, editable, onAddMarker, onUpdateMarker, 
             lockedAspect={lockedAspect}
             fixedBox={fixedBox}
             boxSpec={boxSpec}
+            resizeToken={resizeToken}
             onAddMarker={onAddMarker ? (x, y, w, h) => onAddMarker(p, x, y, w, h) : null}
             onUpdateMarker={onUpdateMarker}
             onDeleteMarker={onDeleteMarker} />
@@ -262,7 +263,7 @@ const LONGPRESS_MS = 420;
 // If the finger travels more than this (px) the gesture is a scroll, not a press.
 const MOVE_CANCEL_PX = 12;
 
-function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, fixedBox = null, boxSpec = null, onRendered, armed = false, onPlaced }) {
+function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker, onDeleteMarker, rotation = 0, lockedAspect = null, fixedBox = null, boxSpec = null, resizeToken = 0, onRendered, armed = false, onPlaced }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [drawing, setDrawing] = useState(null);
@@ -289,6 +290,33 @@ function PdfPage({ pdf, pageNum, markers, editable, onAddMarker, onUpdateMarker,
   // because the stamp is contain-fitted. So the aspect is always locked — to the
   // signer's real signature where we know it, to the spec's default otherwise.
   const effAspect = boxSpec?.aspect || lockedAspect;
+
+  // Rescale the boxes ALREADY on this page when the size preset changes. A size
+  // control that only affects the next box dropped reads as broken — you click
+  // Large and nothing moves. Each box keeps its own shape and its own centre;
+  // only the height is driven to the new preset. Date boxes are left alone,
+  // since they are sized from their text rather than from this control.
+  const lastResize = useRef(resizeToken);
+  useEffect(() => {
+    if (resizeToken === lastResize.current) return;
+    lastResize.current = resizeToken;
+    if (!effBox || !onUpdateMarker || !markers?.length) return;
+    for (const m of markers) {
+      if (m.kind === "date") continue;
+      const v = mediaboxToViewport(effRot, m.x, m.y, m.w, m.h);
+      if (!(v.h > 0)) continue;
+      const k = effBox.h / v.h;
+      if (!isFinite(k) || Math.abs(k - 1) < 0.005) continue;
+      const nh = effBox.h;
+      const nw = v.w * k;
+      const nx = clamp(v.x + (v.w - nw) / 2, 0, Math.max(0, 100 - nw));
+      const ny = clamp(v.y + (v.h - nh) / 2, 0, Math.max(0, 100 - nh));
+      const mb = viewportToMediabox(effRot, nx, ny, nw, nh);
+      onUpdateMarker(m.id, { x: mb.x, y: mb.y, w: mb.w, h: mb.h, page: pageNum });
+    }
+    // markers/effBox are read fresh each time the token changes; re-running on
+    // their own identity would fight the user mid-drag.
+  }, [resizeToken]);
 
   // Constrain a viewport %-rectangle to satisfy effAspect (signature width/height
   // in MediaBox units). Anchors the rectangle at (vx, vy) and shrinks the larger

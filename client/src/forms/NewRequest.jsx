@@ -209,7 +209,14 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   // Height is the only dimension that means anything for a signature, the same
   // way type is sized by height — and one control beats two.
   const [preset, setPresetState] = useState(getPreset);
-  const choosePreset = (k) => { setPreset(k); setPresetState(k); };
+  // Bumped when the preset changes. The viewer watches it and rescales the boxes
+  // already on the page — without this the control only affected the NEXT box
+  // dropped, so clicking a size appeared to do nothing at all.
+  const [resizeToken, setResizeToken] = useState(0);
+  const choosePreset = (k) => {
+    if (k === preset) return;
+    setPreset(k); setPresetState(k); setResizeToken(t => t + 1);
+  };
   const placingDates = selfPlacing === "date" || signerDatePlacing || placingSlot?.kind === "date";
   const boxSpec = useMemo(() => placingDates
     ? { heightMm: DATE_HEIGHT_MM, aspect: DATE_ASPECT }
@@ -236,7 +243,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
         }));
         (s.dateFields || []).forEach((d, fi) => base.push({
           id: `dd-${di}-${fi}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h,
-          color: "#C77D2E", label: "date on signing"
+          kind: "date", color: "#C77D2E", label: "date on signing"
         }));
       });
     } else {
@@ -252,7 +259,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           // this signer's own date field(s), filled when THEY sign
           (s.dateFields || []).forEach((d, fi) => base.push({
             id: `sdw-${si}-${gi}-${fi}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h,
-            color: "#C77D2E", label: "date on signing"
+            kind: "date", color: "#C77D2E", label: "date on signing"
           }));
         });
       });
@@ -262,7 +269,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
     const sigDates = (mode === "single")
       ? signerDateFields.map((d, i) => ({
           id: `sd-${i}`, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h,
-          color: "#C77D2E", label: "date on signing"
+          kind: "date", color: "#C77D2E", label: "date on signing"
         }))
       : [];
     const self = selfMarks.map((s, i) => ({
@@ -467,7 +474,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const signerDateBar = (mode === "single" && file?.ext === "pdf") ? (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
       <span className="font-medium opacity-80 flex items-center gap-1">
-        <Calendar size={13} style={{ color: "#C77D2E" }} /> Date for the signer:
+        <Calendar size={13} style={{ kind: "date", color: "#C77D2E" }} /> Date for the signer:
       </span>
       <button type="button"
         className={`text-xs ${signerDatePlacing ? "btn-gold" : "btn-ghost"}`}
@@ -696,7 +703,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
+                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec} resizeToken={resizeToken}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
@@ -797,7 +804,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                 <div className="flex flex-col xl:flex-row gap-4">
                   <div className="flex-1 min-w-0">
                     <Suspense fallback={<ViewerFallback />}>
-                      <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
+                      <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec} resizeToken={resizeToken}
                         onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                     </Suspense>
                   </div>
@@ -833,7 +840,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                                 <span className="font-mono text-[10px] opacity-50 shrink-0">{di + 1}</span>
                                 <span className="text-xs font-medium truncate min-w-0 flex-1">{s.name}</span>
                                 {isPlacingSig && <span className="text-[9px] shrink-0" style={{ color: "#B8894A", fontWeight: 600 }}>placing signs</span>}
-                                {isPlacingDate && <span className="text-[9px] shrink-0" style={{ color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
+                                {isPlacingDate && <span className="text-[9px] shrink-0" style={{ kind: "date", color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
                                 <button className="opacity-40 hover:opacity-100 shrink-0" title="Remove"
                                   onClick={e => { e.stopPropagation(); setDirectSigners(list => list.filter((_, i) => i !== di)); setPlacingSlot(null); }}><X size={10} /></button>
                               </div>
@@ -869,7 +876,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="flex flex-col xl:flex-row gap-4">
                 <div className="flex-1 min-w-0">
                   <Suspense fallback={<ViewerFallback />}>
-                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec}
+                    <DocPreview file={file} markers={allMarkers} editable boxSpec={boxSpec} resizeToken={resizeToken}
                       onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} rotation={docRotation} onRotate={rotate} />
                   </Suspense>
                 </div>
@@ -948,7 +955,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                                         style={{ backgroundColor: `${stepColor}22`, color: stepColor }}>{ord(gi + 1)}</span>
                                       <span className="text-xs font-medium truncate min-w-0 flex-1" title={u?.name || ""}>{u?.name || "?"}</span>
                                       {isPlacingSig && <span className="text-[9px] shrink-0" style={{ color: "#B8894A", fontWeight: 600 }}>placing signs</span>}
-                                      {isPlacingDate && <span className="text-[9px] shrink-0" style={{ color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
+                                      {isPlacingDate && <span className="text-[9px] shrink-0" style={{ kind: "date", color: "#C77D2E", fontWeight: 600 }}>placing dates</span>}
                                       {step.signers.length > 1 && (
                                         <span className="flex items-center shrink-0">
                                           <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign earlier"
