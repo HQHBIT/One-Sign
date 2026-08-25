@@ -55,11 +55,18 @@ jobs:
           envs: MODE
           command_timeout: 30m
           script: |
-            set -e
+            # Sourcing nvm.sh returns a non-zero status of its own, and the
+            # `[ -s … ] &&` guard returns 1 when the file is absent. Under a
+            # blanket `set -e` either one kills the script in the preamble,
+            # before a single line of output — which is exactly what happened
+            # the first time this ran. So the preamble is unguarded, and
+            # `set -e` is turned on only once the environment is ready.
             export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh" || true; fi
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            set -e
             cd /home/ubuntu/OneSign/server
+            echo "node $(node -v) in $(pwd)"
 
             # Storage config lives in .env, synced there by the deploy workflow
             # from the STORAGE_* repository secrets. Without it there is nothing
