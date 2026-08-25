@@ -77,6 +77,50 @@ for (const m of missing) {
 }
 console.log(`\n  Looking for ${wanted.size} distinct filename(s) across ${missing.length} reference(s).`);
 
+// --- who raised each affected request ---
+// The people most likely to still hold a copy of a lost document are the ones
+// who uploaded it, so name them rather than leaving a list of opaque ids.
+const requestIds = [...new Set(missing.filter(m => m.table === "requests").map(m => m.pk))];
+if (requestIds.length) {
+  const mysql = (await import("mysql2/promise")).default;
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || "localhost",
+    port: parseInt(process.env.DB_PORT || "3306", 10),
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "signflow",
+  });
+  const ph = requestIds.map(() => "?").join(",");
+  const [rows] = await conn.execute(
+    `SELECT r.id, r.file_name, r.status, r.created_at, r.confidential,
+            u.name AS requestor, u.email AS requestor_email
+       FROM requests r LEFT JOIN users u ON u.id = r.requestor_id
+      WHERE r.id IN (${ph})
+      ORDER BY u.name, r.created_at`, requestIds);
+  await conn.end();
+
+  const byPerson = new Map();
+  for (const r of rows) {
+    const k = `${r.requestor || "(unknown)"}|${r.requestor_email || ""}`;
+    if (!byPerson.has(k)) byPerson.set(k, []);
+    byPerson.get(k).push(r);
+  }
+
+  console.log("\n  " + "=".repeat(66));
+  console.log("  WHO TO ASK — the person who uploaded each absent document");
+  console.log("  " + "=".repeat(66));
+  for (const [k, list] of [...byPerson.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    const [name, email] = k.split("|");
+    console.log(`\n    ${name}${email ? `  <${email}>` : ""}  — ${list.length} request(s)`);
+    for (const r of list) {
+      const when = new Date(Number(r.created_at)).toISOString().slice(0, 10);
+      console.log(`        ${when}  ${String(r.status).padEnd(16)} ${r.file_name}${Number(r.confidential) ? "   [CONFIDENTIAL]" : ""}`);
+    }
+  }
+  console.log("\n    These are the documents to ask them to re-send. A confidential one");
+  console.log("    should come back through SignFlow rather than by email.\n");
+}
+
 // --- one sweep of the filesystem ---
 // Pruned to keep this to seconds rather than minutes: nothing we lost will be
 // inside a package directory or a kernel pseudo-filesystem.
