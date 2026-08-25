@@ -6,6 +6,7 @@
 //   Needs the API running on :5001 (npm run dev:server).
 // ============================================================
 import { config } from "dotenv"; config({ path: "server/.env" });
+import { diskPathFor } from "../src/filestore.js";
 import fs from "fs/promises"; import path from "path"; import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import ExcelJS from "exceljs";
@@ -36,8 +37,8 @@ const clean = async () => {
   for (const r of rs) {
     await execute("DELETE FROM notifications WHERE request_id=?", [r.id]);
     await execute("DELETE FROM requests WHERE id=?", [r.id]);
-    if (r.file_path) await fs.unlink(path.join(DOCS, r.file_path)).catch(() => {});
-    if (r.signed_file_path) await fs.unlink(path.join(SIGNED, r.signed_file_path)).catch(() => {});
+    if (r.file_path) await fs.unlink(diskPathFor("documents", r.file_path)).catch(() => {});
+    if (r.signed_file_path) await fs.unlink(diskPathFor("signed", r.signed_file_path)).catch(() => {});
   }
   await execute("DELETE FROM signing_authority WHERE team_id = 't_xlzz'");
   await execute("DELETE FROM users WHERE id IN ('u_xa','u_xb','u_xr')");
@@ -58,7 +59,7 @@ const T = (id) => signToken(id);
 
 async function imagesIn(file) {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(path.join(SIGNED, file));
+  await wb.xlsx.readFile(diskPathFor("signed", file));
   const ws = wb.worksheets[0];
   return { images: ws.getImages().length, sheet: ws.name };
 }
@@ -118,7 +119,7 @@ console.log("C direct          ->", row.signed_file_path, JSON.stringify(info));
 
 // original content must survive the stamping
 const wb2 = new ExcelJS.Workbook();
-await wb2.xlsx.readFile(path.join(SIGNED, row.signed_file_path));
+await wb2.xlsx.readFile(diskPathFor("signed", row.signed_file_path));
 ck(wb2.worksheets[0].getCell("B1").value === "Taha Chunawala", "original cell content lost");
 ck(wb2.worksheets[0].getCell("A5").value === "Approver signature", "original labels lost");
 
@@ -188,7 +189,7 @@ id = c.status === 200 ? (await c.json()).request.id : null;
 if (id) {
   // The requestor's mark is baked into the STORED upload, before any approval.
   const up = await queryOne("SELECT file_path FROM requests WHERE id=?", [id]);
-  const uw = new ExcelJS.Workbook(); await uw.xlsx.readFile(path.join(DOCS, up.file_path));
+  const uw = new ExcelJS.Workbook(); await uw.xlsx.readFile(diskPathFor("documents", up.file_path));
   ck(uw.worksheets[0].getImages().length === 1, "G: requestor's own signature not baked into the upload");
   a = await approve(id, T("u_xa"), true);
   ck(a.status === 200, "G approve " + a.status);

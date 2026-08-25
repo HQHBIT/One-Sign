@@ -4,6 +4,7 @@
 //   Run: node server/test/confidential.integration.mjs
 // ============================================================
 import { config } from "dotenv"; config({ path: "server/.env" });
+import { diskPathFor } from "../src/filestore.js";
 import fs from "fs/promises"; import path from "path"; import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
@@ -37,8 +38,8 @@ const clean = async () => {
     await execute("DELETE FROM confidential_access_log WHERE request_id=?", [r.id]);
     await execute("DELETE FROM notifications WHERE request_id=?", [r.id]);
     await execute("DELETE FROM requests WHERE id=?", [r.id]);
-    if (r.file_path) await fs.unlink(path.join(DOCS, r.file_path)).catch(() => {});
-    if (r.signed_file_path) await fs.unlink(path.join(SIGNED, r.signed_file_path)).catch(() => {});
+    if (r.file_path) await fs.unlink(diskPathFor("documents", r.file_path)).catch(() => {});
+    if (r.signed_file_path) await fs.unlink(diskPathFor("signed", r.signed_file_path)).catch(() => {});
   }
   await execute("DELETE FROM signing_authority WHERE team_id='t_conf'");
   await execute("DELETE FROM users WHERE id IN ('u_cr','u_ca','u_cadm')");
@@ -72,7 +73,7 @@ const id = r.status === 200 ? (await r.json()).request.id : null;
 const row = await queryOne("SELECT * FROM requests WHERE id=?", [id]);
 ck(Number(row.confidential) === 1, "stored as confidential");
 ck(/\.enc$/.test(row.file_path), "stored file carries .enc (" + row.file_path + ")");
-const onDisk = await fs.readFile(path.join(DOCS, row.file_path));
+const onDisk = await fs.readFile(diskPathFor("documents", row.file_path));
 ck(looksEncrypted(onDisk), "bytes on disk are an envelope, not a PDF");
 ck(!onDisk.includes(Buffer.from("%PDF")), "no PDF header on disk");
 ck(!onDisk.equals(pdfBytes), "*** the stored bytes are NOT the original document ***");
@@ -200,7 +201,7 @@ ck(r.status === 200, "approve succeeds inside the window (" + r.status + ")");
 const after = await queryOne("SELECT * FROM requests WHERE id=?", [id]);
 ck(after.status === "approved", "request is approved");
 ck(/\.enc$/.test(after.signed_file_path), "signed copy carries .enc (" + after.signed_file_path + ")");
-const signedOnDisk = await fs.readFile(path.join(SIGNED, after.signed_file_path));
+const signedOnDisk = await fs.readFile(diskPathFor("signed", after.signed_file_path));
 ck(looksEncrypted(signedOnDisk), "*** the SIGNED copy is encrypted at rest too ***");
 ck(!signedOnDisk.subarray(0, 5).toString().includes("%PDF"), "signed copy is not a readable PDF on disk");
 const leftovers = (await fs.readdir(SIGNED)).filter(f => f.startsWith(id) && !f.endsWith(".enc"));
@@ -261,7 +262,7 @@ r = await fetch(`${B}/api/requests/${ordId}/file`, { headers: auth("u_cadm") });
 ck(r.status === 200, "admin still opens ordinary documents");
 await execute("DELETE FROM notifications WHERE request_id=?", [ordId]);
 await execute("DELETE FROM requests WHERE id=?", [ordId]);
-await fs.unlink(path.join(DOCS, ord.file_path)).catch(() => {});
+await fs.unlink(diskPathFor("documents", ord.file_path)).catch(() => {});
 
 // ---------- 13. a placeholder oneAccess address fails loudly ----------
 await execute("UPDATE users SET email = 'u_ca.12345@oneaccess.local' WHERE id = 'u_ca'");

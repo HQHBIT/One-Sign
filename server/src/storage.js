@@ -115,6 +115,21 @@ export async function putFile(area, buffer, { originalName = "", contentType } =
   return Key;
 }
 
+/**
+ * Store bytes at an EXPLICIT key. Used where the key has to mirror something
+ * else — the filestore keeps `area/filename` so a key's suffix is also its path
+ * on disk, which is what lets a migrated row fall back to the filesystem.
+ */
+export async function putAt(Key, buffer, contentType) {
+  await client().send(new PutObjectCommand({
+    Bucket: cfg.bucket,
+    Key,
+    Body: buffer,
+    ContentType: contentType || "application/octet-stream",
+  }));
+  return Key;
+}
+
 /** Fetch an object's bytes. Throws if it is missing. */
 export async function getFileBytes(Key) {
   const res = await client().send(new GetObjectCommand({ Bucket: cfg.bucket, Key }));

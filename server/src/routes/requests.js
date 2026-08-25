@@ -12,8 +12,9 @@ import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMark
 import { signXlsxBuffer } from "../xlsx-sign.js";
 import {
   isEnabled as confidentialEnabled, sealIfConfidential, storedNameFor,
-  readMaybe, newUnlockCode, maskEmail
+  newUnlockCode, maskEmail
 } from "../confidential.js";
+import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
 
@@ -170,16 +171,18 @@ async function requireUnlocked(req, row) {
 // — so a readable copy never exists on disk. Every signing path goes through
 // here, so none of them can forget.
 async function stampAndStore({ row, stamps }) {
-  const srcBytes = await readMaybe(path.join(DOC_DIR, row.file_path));
+  const srcBytes = await readStored("documents", row.file_path);
   const isPdf = row.file_type === "pdf";
   const outBytes = isPdf
     ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps }))
     // Excel embeds signature images only — date fields are PDF-only.
     : await signXlsxBuffer({ buffer: srcBytes, stamps: stamps.filter(s => s.type !== "date" && s.signaturePath) });
   const outName = storedNameFor(`${row.id}.signed.${isPdf ? "pdf" : "xlsx"}`, row.confidential);
-  await fs.mkdir(SIGNED_DIR, { recursive: true });
-  await fs.writeFile(path.join(SIGNED_DIR, outName), sealIfConfidential(outBytes, row.confidential));
-  return outName;
+  // Returns a bucket key once the object-storage copy has been read back and
+  // verified, otherwise the bare filename. Either way the disk copy exists, so
+  // readStored can always fall back to it.
+  return await writeStored("signed", outName, sealIfConfidential(outBytes, row.confidential),
+    { contentType: isPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
 // ============================================================
@@ -414,9 +417,11 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     }
 
     const id = uid();
-    const storedName = storedNameFor(`${id}.${ext}`, confidential);
-    await fs.mkdir(DOC_DIR, { recursive: true });
-    await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
+    const fileName = storedNameFor(`${id}.${ext}`, confidential);
+    // storedName is what goes into requests.file_path: a bucket key when the
+    // object-storage copy verified, else the bare filename it has always been.
+    const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+      { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
     await execute(`
       INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json, confidential)
@@ -517,9 +522,11 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   }
 
   const id = uid();
-  const storedName = storedNameFor(`${id}.${ext}`, confidential);
-  await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
+  const fileName = storedNameFor(`${id}.${ext}`, confidential);
+  // storedName is what goes into requests.file_path: a bucket key when the
+  // object-storage copy verified, else the bare filename it has always been.
+  const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+    { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
   const pool = getPool();
   const conn = await pool.getConnection();
@@ -608,9 +615,11 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
   }
 
   const id = uid();
-  const storedName = storedNameFor(`${id}.${ext}`, confidential);
-  await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), sealIfConfidential(bakedBuffer, confidential));
+  const fileName = storedNameFor(`${id}.${ext}`, confidential);
+  // storedName is what goes into requests.file_path: a bucket key when the
+  // object-storage copy verified, else the bare filename it has always been.
+  const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+    { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
   const pool = getPool();
   const conn = await pool.getConnection();
@@ -739,7 +748,7 @@ router.get("/:id/file", authRequired, async (req, res, next) => {
       await logAccess(req, row.id, req.query?.download === "1" ? "download" : "view");
     }
     res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(await readMaybe(path.join(DOC_DIR, row.file_path)));
+    res.send(await readStored("documents", row.file_path));
   } catch (e) { next(e); }
 });
 
@@ -751,7 +760,7 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     if (!row.signed_file_path) return res.status(404).json({ error: "Signed version not available" });
     // Excel requests approved before real .xlsx stamping existed recorded a
     // ".signed.json" manifest rather than a document — serve the original for those.
-    if (/\.json$/i.test(row.signed_file_path)) return res.send(await readMaybe(path.join(DOC_DIR, row.file_path)));
+    if (/\.json$/i.test(row.signed_file_path)) return res.send(await readStored("documents", row.file_path));
     if (row.confidential) {
       const gate = await requireUnlocked(req, row);
       if (gate) return res.status(403).json(gate);
@@ -766,7 +775,7 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
       await logAccess(req, row.id, wantsDownload ? "download" : "view");
     }
     res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(await readMaybe(path.join(SIGNED_DIR, row.signed_file_path)));
+    res.send(await readStored("signed", row.signed_file_path));
   } catch (e) { next(e); }
 });
 
