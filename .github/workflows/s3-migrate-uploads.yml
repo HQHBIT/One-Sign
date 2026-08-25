@@ -28,7 +28,7 @@ on:
         required: true
         default: inventory
         type: choice
-        options: [inventory, dry-run, upload]
+        options: [inventory, find-missing, dry-run, upload]
       confirm:
         description: 'For "upload" only: type UPLOAD to proceed'
         required: false
@@ -92,6 +92,14 @@ jobs:
             if [ ! -f "$DUMP/manifest.csv" ]; then
               echo "No inventory at $DUMP. Run this workflow with mode=inventory first."
               exit 1
+            fi
+
+            # Read-only. Sweeps the whole machine for files the database
+            # references but which are absent from uploads/, so a file that is
+            # merely in the wrong place is not written off as lost.
+            if [ "$MODE" = "find-missing" ]; then
+              node --env-file=.env scripts/find-missing-files.mjs --dump "$DUMP"
+              exit 0
             fi
 
             if [ "$MODE" = "dry-run" ]; then
