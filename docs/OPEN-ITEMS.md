@@ -75,7 +75,45 @@ proportion.
 
 ---
 
-## S3 / RustFS storage — **dump stage**
+## S3 / RustFS storage — **one user proven end to end**
+
+**Working as of 2026-08-26.** Taha Chunawala's documents are served from the
+bucket: 143 objects (72 documents, 43 signed, 24 signatures, 4 voice notes,
+66.2 MB), and 188 database columns repointed from filenames to bucket keys.
+Every column was changed only after the object was downloaded in full and its
+sha256 matched the file still on disk. Rollback file on the box at
+`server/repoint-rollback-2026-08-26T06-26-56.json`; `--revert` puts it all back.
+
+Blocking the rest:
+
+- [ ] **Bucket quota is 200 MiB; the estate is 648 MB.** Ask for 5 GB — roughly
+      two years at the observed ~200 MB/month. The first full upload got 281
+      files in before the quota refused the remaining 590.
+- [ ] Decide whether `signflow-uat` becomes the production store or a separate
+      `signflow-prod` bucket is created. Moving 648 MB twice is wasted effort.
+- [ ] Enable **versioning** — 92 files were lost in May; versioning makes an
+      accidental delete recoverable.
+- [ ] Arrange a **backup of the bucket**. Once disk writes stop, the bucket is
+      the system of record and nothing currently backs it up.
+- [ ] Rotate `STORAGE_SECRET_KEY` and **delete the old key in the RustFS
+      console** — replacing the GitHub secret alone revokes nothing.
+
+Smaller, still open:
+
+- [ ] `documents/req_mt9o6rit_3clur.pdf` — a live dual-write object belonging to
+      another user, deleted during the bucket clear-out. Its row holds a key with
+      no object and falls back to disk, which works but warns on every read.
+      Either restore the object or repoint that row back to a filename.
+- [ ] Signatures and voice notes are still written to disk only. Stamping reads
+      signature images by PATH (`pdf.js` `embed()`, `xlsx-sign`), so moving them
+      means reworking stamps to carry bytes.
+
+Learned the hard way: **the manifest is a point-in-time snapshot.** Four
+signature files created after the inventory ran were silently absent from the
+upload list, and the repoint refused them. Inventory and upload must run close
+together, or re-run inventory first.
+
+## S3 / RustFS storage — earlier notes
 
 Restarted 2026-08-25, dump first. `server/scripts/dump-uploads.mjs` takes a
 read-only inventory of the uploads tree and pairs every file with the rows that
