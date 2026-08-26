@@ -28,7 +28,7 @@ on:
         required: true
         default: inventory
         type: choice
-        options: [inventory, find-missing, dry-run, upload]
+        options: [inventory, find-missing, dry-run, upload, repoint-dry-run, repoint]
       confirm:
         description: 'For "upload" only: type UPLOAD to proceed'
         required: false
@@ -102,10 +102,17 @@ jobs:
               exit 0
             fi
 
-            if [ ! -f "$DUMP/manifest.csv" ]; then
-              echo "No inventory at $DUMP. Run this workflow with mode=inventory first."
-              exit 1
-            fi
+            # Repointing works from the database and the bucket, not the
+            # inventory, so it is exempt from this guard.
+            case "$MODE" in
+              repoint|repoint-dry-run) ;;
+              *)
+                if [ ! -f "$DUMP/manifest.csv" ]; then
+                  echo "No inventory at $DUMP. Run this workflow with mode=inventory first."
+                  exit 1
+                fi
+                ;;
+            esac
 
             # Read-only. Sweeps the whole machine for files the database
             # references but which are absent from uploads/, so a file that is
@@ -117,6 +124,24 @@ jobs:
 
             if [ "$MODE" = "dry-run" ]; then
               node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" $SCOPE
+              exit 0
+            fi
+
+            # Repointing is the ONLY mode that writes to the database. It is
+            # scoped to one person, refuses to run without one, changes a column
+            # only after the bucket object has been read back and matched against
+            # the file still on disk, and records a rollback before it starts.
+            if [ "$MODE" = "repoint-dry-run" ] || [ "$MODE" = "repoint" ]; then
+              if [ -z "$ONLY_USER" ]; then
+                echo "repoint requires only_user. Nothing done."
+                exit 1
+              fi
+              cd /home/ubuntu/OneSign/server
+              if [ "$MODE" = "repoint-dry-run" ]; then
+                node --env-file=.env scripts/repoint-to-s3.mjs --only-user "$ONLY_USER"
+              else
+                node --env-file=.env scripts/repoint-to-s3.mjs --only-user "$ONLY_USER" --confirm
+              fi
               exit 0
             fi
 
