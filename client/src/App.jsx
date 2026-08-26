@@ -1983,6 +1983,12 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {req.confidential && <ConfidentialBadge />}
+            {/* An approver can take the document away, read it properly, and come
+                back to sign later. DownloadBtn returns null for a confidential
+                request unless you raised it and it is fully signed — and the
+                server refuses the same download independently, so this is a
+                convenience, never the control. */}
+            {!locked && <DownloadBtn req={req} user={user} />}
             {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
@@ -1997,6 +2003,16 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {/* ── Single scrollable body ── */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
+          {/* The requestor's note explains WHY they are asking, so it belongs
+              before the document rather than after it — an approver should read
+              the ask before they read the paperwork, not scroll past a document
+              to find out what they were looking for. */}
+          {req.note && (
+            <div className="card p-4 text-sm mb-4">
+              <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Note from {users.find(u => u.id === req.requestorId)?.name || "the requestor"}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
+            </div>
+          )}
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
@@ -2008,7 +2024,6 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading…</div>}
-          {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
 
         {/* ── Pinned action bar(s) ── */}
