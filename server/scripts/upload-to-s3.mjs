@@ -108,6 +108,76 @@ let items = rows.map(r => ({
 const orphanCount = items.filter(i => i.refs === 0).length;
 if (skipOrphans) items = items.filter(i => i.refs > 0);
 
+// --- optionally narrow to one person's files ---
+// For a scoped trial: upload one user's documents, prove they serve correctly
+// from the bucket, and leave everyone else's files entirely alone.
+const onlyUser = flag("--only-user");
+if (onlyUser) {
+  const mysql = (await import("mysql2/promise")).default;
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || "localhost",
+    port: parseInt(process.env.DB_PORT || "3306", 10),
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "signflow",
+  });
+  const [users] = await conn.execute(
+    "SELECT id, name, email FROM users WHERE LOWER(email) = LOWER(?)", [onlyUser]);
+  if (!users.length) {
+    console.error(`\n  No user with email ${onlyUser}. Nothing done.\n`);
+    await conn.end(); process.exit(1);
+  }
+  const u = users[0];
+
+  // "Their data" is what they put in and what carries their hand: the requests
+  // they raised, the signed output of those requests, and their own signature
+  // images. Documents raised by other people that they merely signed are not
+  // theirs to move in a scoped trial.
+  const [rq] = await conn.execute(
+    `SELECT file_path, signed_file_path, applied_signature_path, reject_voice_path
+       FROM requests WHERE requestor_id = ?`, [u.id]);
+  const [sig] = await conn.execute("SELECT signature_path FROM users WHERE id = ?", [u.id]);
+  const [sigs] = await conn.execute(
+    "SELECT file_path, original_path FROM user_signatures WHERE user_id = ?", [u.id]);
+  const [signer] = await conn.execute(
+    "SELECT signature_path FROM request_step_signers WHERE user_id = ?", [u.id]);
+  await conn.end();
+
+  const AREA_OF = {
+    file_path: "documents", signed_file_path: "signed",
+    applied_signature_path: "signatures", reject_voice_path: "voicenotes",
+    signature_path: "signatures", original_path: "signatures",
+  };
+  const theirs = new Set();
+  const add = (rows, cols) => {
+    for (const r of rows) for (const c of cols) {
+      const v = r[c];
+      if (!v) continue;
+      // A value may already be a bucket key; the manifest keys are canonical.
+      theirs.add(String(v).includes("/") ? String(v) : `${AREA_OF[c]}/${v}`);
+    }
+  };
+  add(rq, ["file_path", "signed_file_path", "applied_signature_path", "reject_voice_path"]);
+  add(sig, ["signature_path"]);
+  add(sigs, ["file_path", "original_path"]);
+  add(signer, ["signature_path"]);
+
+  // user_signatures.file_path is a bare filename in the signatures area, and
+  // requests.file_path a bare filename in documents — both already normalised
+  // above, so a straight set membership test is enough.
+  const beforeCount = items.length;
+  items = items.filter(i => theirs.has(i.key));
+  console.log(`\n  Scoped to ${u.name} <${u.email}>`);
+  console.log(`  ${theirs.size} file(s) referenced by their rows; ${items.length} of ${beforeCount} manifest entries match.`);
+  const absent = [...theirs].filter(k => !items.some(i => i.key === k));
+  if (absent.length) {
+    console.log(`  ${absent.length} of their referenced file(s) are not on disk and cannot be uploaded:`);
+    for (const a of absent.slice(0, 20)) console.log(`      ${a}`);
+    if (absent.length > 20) console.log(`      … and ${absent.length - 20} more`);
+  }
+  if (!items.length) { console.log("\n  Nothing to upload for this user.\n"); process.exit(0); }
+}
+
 console.log(`\n  Bucket      ${cfg.bucket} at ${cfg.endpoint}`);
 console.log(`  Manifest    ${items.length} file(s), ${(items.reduce((a, b) => a + b.bytes, 0) / 1048576).toFixed(1)} MB`);
 console.log(`  Orphans     ${orphanCount} referenced by no database row` +

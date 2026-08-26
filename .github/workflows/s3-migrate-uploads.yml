@@ -33,6 +33,10 @@ on:
         description: 'For "upload" only: type UPLOAD to proceed'
         required: false
         default: ""
+      only_user:
+        description: 'Optional: limit the upload to one person, by email'
+        required: false
+        default: ""
 
 jobs:
   migrate:
@@ -48,11 +52,12 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           MODE: ${{ inputs.mode }}
+          ONLY_USER: ${{ inputs.only_user }}
         with:
           host: ${{ secrets.UAT_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
-          envs: MODE
+          envs: MODE,ONLY_USER
           command_timeout: 30m
           script: |
             # Sourcing nvm.sh returns a non-zero status of its own, and the
@@ -78,6 +83,14 @@ jobs:
             fi
 
             DUMP=/home/ubuntu/s3-migration/dump-latest
+            # A scoped run uploads one person's files and leaves everyone
+            # else's untouched — for proving the bucket works before moving
+            # the whole estate.
+            SCOPE=""
+            if [ -n "$ONLY_USER" ]; then
+              SCOPE="--only-user $ONLY_USER"
+              echo "Scoped to $ONLY_USER"
+            fi
 
             if [ "$MODE" = "inventory" ]; then
               rm -rf "$DUMP"
@@ -103,9 +116,9 @@ jobs:
             fi
 
             if [ "$MODE" = "dry-run" ]; then
-              node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP"
+              node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" $SCOPE
               exit 0
             fi
 
             echo "Uploading. The database will not be touched."
-            node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" --confirm
+            node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" $SCOPE --confirm
