@@ -104,11 +104,17 @@ jobs:
           STORAGE_FORCE_PATH_STYLE: ${{ secrets.STORAGE_FORCE_PATH_STYLE }}
           STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
           STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          JWT_SECRET: ${{ secrets.HQHB_JWT_SECRET }}
         with:
           host: ${{ secrets.HQHB_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.HQHB_EC2_SSH_KEY }}
-          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,ONEACCESS_API_BASE_URL,ONEACCESS_FRONTEND_URL,ONEACCESS_APP_SLUG,ONEACCESS_REDIRECT_URL,ONEACCESS_APP_ID,ONEACCESS_CLIENT_ID,ONEACCESS_CLIENT_SECRET,ONEACCESS_PUBLIC_KEY_PATH,ONEACCESS_ACCESS_TOKEN_TTL,AUTH_LOCAL_LOGIN_ENABLED,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,ONEACCESS_API_BASE_URL,ONEACCESS_FRONTEND_URL,ONEACCESS_APP_SLUG,ONEACCESS_REDIRECT_URL,ONEACCESS_APP_ID,ONEACCESS_CLIENT_ID,ONEACCESS_CLIENT_SECRET,ONEACCESS_PUBLIC_KEY_PATH,ONEACCESS_ACCESS_TOKEN_TTL,AUTH_LOCAL_LOGIN_ENABLED,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,JWT_SECRET
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -179,6 +185,47 @@ jobs:
               echo "oneAccess config synced to .env (SSO enabled: slug=$ONEACCESS_APP_SLUG)."
             else
               echo "No ONEACCESS_API_BASE_URL secret set — oneAccess stays disabled (local login)."
+            fi
+            # Sync database credentials from CI secrets. Fails CLOSED: with no
+            # DB_NAME the box keeps the .env it has, so a missing secret can never
+            # silently repoint a running box at a different database.
+            if [ -n "$DB_NAME" ]; then
+              touch .env
+              grep -v -E '^DB_(HOST|PORT|USER|PASSWORD|NAME)=' .env > .env.tmp || true
+              echo "DB_HOST=$DB_HOST" >> .env.tmp
+              echo "DB_PORT=$DB_PORT" >> .env.tmp
+              echo "DB_USER=$DB_USER" >> .env.tmp
+              echo "DB_PASSWORD=$DB_PASSWORD" >> .env.tmp
+              echo "DB_NAME=$DB_NAME" >> .env.tmp
+              mv .env.tmp .env
+              echo "Database config synced to .env (db=$DB_NAME user=$DB_USER)."
+            else
+              echo "No DB_NAME secret set — database config left as the box has it."
+            fi
+            # Token-signing key, per environment on purpose: one shared value would
+            # make a token minted on UAT valid on production.
+            if [ -n "$JWT_SECRET" ]; then
+              touch .env
+              grep -v -E '^JWT_SECRET=' .env > .env.tmp || true
+              echo "JWT_SECRET=$JWT_SECRET" >> .env.tmp
+              mv .env.tmp .env
+              echo "Token key synced to .env."
+            else
+              echo "No HQHB_JWT_SECRET secret set — token key left as the box has it."
+            fi
+            # Preflight: never start a process that cannot boot. Without these the
+            # app falls back to root@localhost with no password and the hardcoded
+            # "dev-secret-change-me" token key, so it crash-loops behind a green
+            # tick — which is what happened to WAQF on its first deploy.
+            # DB_PASSWORD is absent from this list: an empty password is legitimate.
+            MISSING=""
+            for k in DB_HOST DB_PORT DB_USER DB_NAME JWT_SECRET; do
+              grep -qE "^$k=.+" .env || MISSING="$MISSING $k"
+            done
+            if [ -n "$MISSING" ]; then
+              echo "REFUSING TO START — missing from .env:$MISSING"
+              echo "Set them as CI secrets, or put them in .env on the box, then re-run."
+              exit 1
             fi
             npm ci --omit=dev
             pm2 delete onesign_backend_hqhb 2>/dev/null || true
