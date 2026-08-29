@@ -1,18 +1,28 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
-import { authRequired, requireRole } from "../auth.js";
+import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { stampPdf, stampPdfMulti, writeXlsxSignatureManifest, bakeOrientation, applySelfMarks } from "../pdf.js";
+import { notifyUser } from "../notify.js";
+import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
+import { signXlsxBuffer } from "../xlsx-sign.js";
+import {
+  isEnabled as confidentialEnabled, sealIfConfidential, storedNameFor,
+  newUnlockCode, maskEmail
+} from "../confidential.js";
+import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
+import { pingUser, pingAdmins } from "../events.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
 const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
 const SIGNED_DIR = path.join(__dirname, "..", "..", "uploads", "signed");
+const VOICE_DIR = path.join(__dirname, "..", "..", "uploads", "voicenotes");
 
 const router = Router();
 const uid = (p = "req") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -30,22 +40,30 @@ function parseOrientation(raw) {
   return v === "landscape" ? "landscape" : v === "portrait" ? "portrait" : null;
 }
 
-// Bake the orientation into the uploaded PDF bytes and return the new buffer
-// plus the per-page rotation plan. Non-PDFs and missing orientation pass through.
+// Normalise a rotation value to 0/90/180/270 (clockwise degrees).
+function normalizeRotation(raw) {
+  const n = Math.round(Number(raw) || 0);
+  return ((n % 360) + 360) % 360;
+}
+
+// Bake an orientation target into the uploaded PDF bytes and return the new buffer
+// plus the per-page rotation plan. (The requestor's explicit rotate-control choice
+// is applied separately + losslessly up front — see the create handler.) Non-PDFs
+// and missing orientation pass through untouched.
 async function bakeRequestFile({ buffer, fileType, orientation }) {
-  if (fileType !== "pdf" || !orientation) {
-    return { bakedBuffer: buffer, pageRotations: [] };
-  }
+  if (fileType !== "pdf" || !orientation) return { bakedBuffer: buffer, pageRotations: [] };
   const { bakedBytes, pageRotations } = await bakeOrientation(buffer, orientation);
   return { bakedBuffer: Buffer.from(bakedBytes), pageRotations };
 }
 
-// Apply the per-page rotation plan to a marker. If the marker's page was rotated
-// 90° CW during the bake, rotate the marker the same way; otherwise return as-is.
+// Apply the per-page rotation plan to a marker: rotate it the same number of 90°
+// CW quarter-turns the page was rotated (handles 0/90/180/270). Coords stay in
+// MediaBox %.
 function transformMarkerForBake(marker, pageRotations) {
   const pageIdx = (marker.page || 1) - 1;
-  if (pageRotations[pageIdx] !== 90) return marker;
-  const r = rotateMarker90CW({ x: marker.x, y: marker.y, w: marker.w, h: marker.h });
+  const deg = (((pageRotations[pageIdx] || 0) % 360) + 360) % 360;
+  let r = { x: marker.x, y: marker.y, w: marker.w, h: marker.h };
+  for (let i = 0; i < deg / 90; i++) r = rotateMarker90CW(r);
   return { ...marker, ...r };
 }
 
@@ -84,6 +102,89 @@ function dateStampsFor(fields, signedAtMs) {
   }));
 }
 
+// A signer's signature box(es): the stored multi-box list (boxes_json) if present,
+// else the single legacy marker column. One signer may sign in several spots — each
+// box gets stamped with the same signer's signature.
+export function signerBoxes(s) {
+  let arr = [];
+  if (s.boxes_json) { try { const a = JSON.parse(s.boxes_json); if (Array.isArray(a)) arr = a; } catch { /* fall through */ } }
+  if (arr.length) return arr.map(b => ({ page: b.page || s.page || 1, x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) }));
+  return [{ page: s.page || 1, x: Number(s.marker_x), y: Number(s.marker_y), w: Number(s.marker_w), h: Number(s.marker_h) }];
+}
+
+// ============================================================
+//   confidential unlock gate
+//   ------------------------------------------------------------
+//   A confidential document is only served while the viewer holds a live
+//   window, opened by entering a code emailed to them moments earlier. This
+//   gates the API, not the cryptography — see docs/…/confidential-documents.
+// ============================================================
+// The timed re-lock was removed at the owner's request (2026-08-12): a
+// verified unlock now stays open — no countdown, no mid-read expiry. Each
+// viewer still proves themselves with their own one-time code, and every
+// view/sign/download is still written to the access log.
+const UNLOCK_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+const UNLOCK_CODE_TTL_MS = 5 * 60_000; // how long the emailed code stays usable
+const UNLOCK_MAX_ATTEMPTS = 5;
+const UNLOCK_MAX_ISSUES = 5;
+const UNLOCK_ISSUE_WINDOW_MS = 15 * 60_000;
+
+// Records the ACT of access — never any content.
+async function logAccess(req, requestId, action) {
+  try {
+    await execute(
+      "INSERT INTO confidential_access_log (request_id, user_id, action, at, ip) VALUES (?, ?, ?, ?, ?)",
+      [requestId, req.user.id, action, Date.now(), (req.ip || "").slice(0, 64)]
+    );
+  } catch { /* auditing must never block the user's work */ }
+}
+
+// A file name like "PR Termination - <person>.pdf" leaks the substance, so for
+// anyone who is not on the route (in practice: the IT Admin, who keeps
+// operational visibility of status and participants) the name and note are
+// stripped. Applied once, here, so there is a single place to audit.
+function redactConfidential(hydrated, row, user) {
+  if (!row.confidential) return hydrated;
+  const onRoute = user.id === row.requestor_id
+    || user.id === row.approver_id
+    // Legacy single-team requests carry no approver_id until someone signs, so
+    // holding the target team's authority IS being on the route. Without this,
+    // the very person due to sign would see "Confidential document".
+    || (!!row.target_team_id && (user.signingAuthorityTeams || []).includes(row.target_team_id))
+    || (hydrated.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id));
+  if (onRoute) return hydrated;
+  return { ...hydrated, fileName: "Confidential document", note: "", marker: null };
+}
+
+// null when the viewer may proceed; otherwise the JSON body to return with 403.
+async function requireUnlocked(req, row) {
+  const live = await queryOne(
+    `SELECT 1 AS ok FROM confidential_unlocks
+      WHERE request_id = ? AND user_id = ? AND consumed_at IS NOT NULL AND window_ends_at > ?`,
+    [row.id, req.user.id, Date.now()]
+  );
+  return live ? null : { error: "This document is locked", needsUnlock: true };
+}
+
+// Stamp a document and store the signed copy, returning its stored filename.
+// Confidential documents stay in memory end to end — decrypt, stamp, re-encrypt
+// — so a readable copy never exists on disk. Every signing path goes through
+// here, so none of them can forget.
+async function stampAndStore({ row, stamps }) {
+  const srcBytes = await readStored("documents", row.file_path);
+  const isPdf = row.file_type === "pdf";
+  const outBytes = isPdf
+    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps }))
+    // Excel embeds signature images only — date fields are PDF-only.
+    : await signXlsxBuffer({ buffer: srcBytes, stamps: stamps.filter(s => s.type !== "date" && s.signaturePath) });
+  const outName = storedNameFor(`${row.id}.signed.${isPdf ? "pdf" : "xlsx"}`, row.confidential);
+  // Returns a bucket key once the object-storage copy has been read back and
+  // verified, otherwise the bare filename. Either way the disk copy exists, so
+  // readStored can always fall back to it.
+  return await writeStored("signed", outName, sealIfConfidential(outBytes, row.confidential),
+    { contentType: isPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 // ============================================================
 //   list (role-scoped)
 // ============================================================
@@ -93,18 +194,11 @@ router.get("/", authRequired, async (req, res, next) => {
     let rows;
     if (u.role === "admin") {
       rows = await query("SELECT * FROM requests ORDER BY created_at DESC");
-    } else if (u.role === "requestor") {
-      // Own requests PLUS any request where they are an assigned signer (direct requests).
-      rows = await query(`
-        SELECT DISTINCT r.* FROM requests r
-        LEFT JOIN request_steps st ON st.request_id = r.id
-        LEFT JOIN request_step_signers sg ON sg.step_id = st.id
-        WHERE r.requestor_id = ? OR sg.user_id = ?
-        ORDER BY r.created_at DESC
-      `, [u.id, u.id]);
     } else {
-      // Approver: requests they RAISED themselves, requests where they are an
-      // assigned signer (workflow), the legacy claim path, or a team they sign for.
+      // Everyone else, regardless of role: requests they RAISED, requests where
+      // they are an assigned signer (workflow/direct), the legacy claim path, or
+      // a team whose signing authority they hold. Authority — not role — decides,
+      // so an admin can appoint any user as a team's approver.
       rows = await query(`
         SELECT DISTINCT r.* FROM requests r
         LEFT JOIN request_steps st ON st.request_id = r.id
@@ -118,15 +212,76 @@ router.get("/", authRequired, async (req, res, next) => {
         ORDER BY r.created_at DESC
       `, [u.id, u.id, u.id, u.id]);
     }
-    const requests = await Promise.all(rows.map(hydrateRequest));
+    const requests = await Promise.all(
+      rows.map(async r => redactConfidential(await hydrateRequest(r), r, u))
+    );
     res.json({ requests });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+//   self-sign — sign your OWN document and download it. Stateless: nothing is
+//   stored and no request is created; the signed PDF streams straight back.
+// ============================================================
+router.post("/self-sign", authRequired, upload.single("file"), async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+    const ext = (file.originalname.split(".").pop() || "").toLowerCase();
+    if (!["pdf", "xlsx", "xls"].includes(ext)) return res.status(400).json({ error: "Only PDF or Excel accepted" });
+    const isPdf = ext === "pdf";
+
+    // Same order as request creation: bake the chosen rotation first (lossless),
+    // then stamp — placeInRotatedPage keeps marks aligned on rotated pages.
+    // (Rotation is a page concept; spreadsheets have none.)
+    const rotDeg = isPdf ? normalizeRotation(req.body?.rotation) : 0;
+    if (rotDeg) {
+      try {
+        const { bakedBytes } = await bakeUniformRotation(file.buffer, rotDeg / 90);
+        file.buffer = Buffer.from(bakedBytes);
+      } catch (e) {
+        console.error("[self-sign] rotate failed", e);
+        return res.status(400).json({ error: "Could not rotate the PDF" });
+      }
+    }
+
+    let marks = null;
+    try { marks = JSON.parse(req.body?.marks || "[]"); } catch { return res.status(400).json({ error: "marks must be valid JSON" }); }
+    marks = (Array.isArray(marks) ? marks : []).filter(m =>
+      typeof m?.x === "number" && typeof m?.y === "number" && typeof m?.w === "number" && typeof m?.h === "number");
+    if (marks.length === 0) return res.status(400).json({ error: "Place your signature or a date on the document first" });
+    const hasSig = marks.some(m => m.type !== "date");
+    if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature first (top-right menu)" });
+    // A floating dated text box has no spreadsheet equivalent, and writing into a
+    // cell would overwrite the sheet's own content — so dates stay PDF-only.
+    if (!isPdf && !hasSig) return res.status(400).json({ error: "Place your signature on the sheet first" });
+
+    const dateText = formatDdMmYy(Date.now());
+    const stamps = marks.map(m => m.type === "date"
+      ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
+      : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
+
+    let signed;
+    try {
+      signed = isPdf
+        ? Buffer.from(await applySelfMarks(file.buffer, stamps))
+        : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
+    }
+    catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature to the document" }); }
+
+    const base = file.originalname.replace(/\.(pdf|xlsx|xls)$/i, "");
+    res.setHeader("Content-Type", isPdf
+      ? "application/pdf"
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(base)}.signed.${isPdf ? "pdf" : "xlsx"}"`);
+    res.send(signed);
   } catch (e) { next(e); }
 });
 
 // ============================================================
 //   create — supports legacy single-team OR multi-step workflow
 // ============================================================
-router.post("/", authRequired, requireRole("requestor", "approver"), upload.single("file"), async (req, res, next) => {
+router.post("/", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), upload.single("file"), async (req, res, next) => {
   try {
     const isDirect = req.body?.direct === "true" || req.body?.direct === true;
     // A direct request only routes a document to someone else to sign — the
@@ -142,20 +297,47 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
 
     const note = req.body?.note || "";
     const instantApproval = req.body?.instantApproval === "true" || req.body?.instantApproval === true ? 1 : 0;
+
+    // Confidential: the stored file is encrypted and the IT Admin is locked out.
+    // Fail CLOSED — without a configured key we refuse rather than quietly
+    // storing something the requestor believes is protected.
+    const confidential = req.body?.confidential === "true" || req.body?.confidential === true ? 1 : 0;
+    if (confidential && !confidentialEnabled()) {
+      return res.status(503).json({ error: "Confidential documents are not configured on this server" });
+    }
     const allowedTypes = ["leave", "document", "expense", "invoice", "general"];
     const rawType = (req.body?.requestType || "general").toString().toLowerCase();
     const requestType = allowedTypes.includes(rawType) ? rawType : "general";
 
+    // ---------- the requestor's rotate-control choice (0/90/180/270 CW) ----------
+    // Applied losslessly up front via native /Rotate, so the stored file stays crisp
+    // and the self-signature, approver markers, and content all share one upright
+    // orientation. Stamping is rotation-aware (placeInRotatedPage), so the markers
+    // themselves need no coordinate transform.
+    if (fileType === "pdf") {
+      const rotDeg = normalizeRotation(req.body?.rotation);
+      if (rotDeg) {
+        try {
+          const { bakedBytes } = await bakeUniformRotation(file.buffer, rotDeg / 90);
+          file.buffer = Buffer.from(bakedBytes);
+        } catch (e) {
+          console.error("[create] rotate failed", e);
+          return res.status(400).json({ error: "Could not rotate the PDF" });
+        }
+      }
+    }
+
     // ---------- optional: the requestor's OWN signature / date stamps ----------
-    // Applied to the uploaded PDF up-front so the self-signed/dated document flows
+    // Applied to the uploaded document up-front so the self-signed/dated file flows
     // through whichever routing path (single / workflow / direct) below.
     let selfMarks = null;
     if (req.body?.selfMarks) {
       try { selfMarks = JSON.parse(req.body.selfMarks); } catch { return res.status(400).json({ error: "selfMarks must be valid JSON" }); }
     }
     if (Array.isArray(selfMarks) && selfMarks.length > 0) {
-      if (fileType !== "pdf") return res.status(400).json({ error: "Signing or dating the document yourself is available for PDF files only" });
       const hasSig = selfMarks.some(m => m.type !== "date");
+      // Dates are a floating text box — no spreadsheet equivalent (see xlsx-sign.js).
+      if (fileType !== "pdf" && !hasSig) return res.status(400).json({ error: "Dating the document yourself is available for PDF files only" });
       if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature before signing the document yourself" });
       const dateText = formatDdMmYy(Date.now());
       const stamps = selfMarks
@@ -164,7 +346,11 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
           ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
           : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
       if (stamps.length > 0) {
-        try { file.buffer = Buffer.from(await applySelfMarks(file.buffer, stamps)); }
+        try {
+          file.buffer = fileType === "pdf"
+            ? Buffer.from(await applySelfMarks(file.buffer, stamps))
+            : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
+        }
         catch (e) { console.error("[self-sign] apply failed", e); return res.status(500).json({ error: "Could not apply your signature/date to the document" }); }
       }
     }
@@ -177,7 +363,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     }
 
     if (Array.isArray(workflow) && workflow.length > 0) {
-      return await createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType });
+      return await createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType, confidential });
     }
 
     // ---------- direct (person-to-person) path ----------
@@ -185,7 +371,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
       let signers = null;
       try { signers = JSON.parse(req.body.signers || "[]"); }
       catch { return res.status(400).json({ error: "signers must be valid JSON" }); }
-      return await createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType });
+      return await createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType, confidential });
     }
 
     // ---------- legacy single-marker single-team path ----------
@@ -193,14 +379,18 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     if (!targetTeamId || !marker) return res.status(400).json({ error: "Provide either workflow or targetTeamId+marker" });
     let markerObj;
     try { markerObj = JSON.parse(marker); } catch { return res.status(400).json({ error: "marker must be valid JSON" }); }
-    if (markerObj && "rotation" in markerObj) delete markerObj.rotation;
+    // One box (legacy object) or several (array) — the approver signs in each.
+    const markerList = (Array.isArray(markerObj) ? markerObj : [markerObj])
+      .filter(m => m && typeof m.x === "number" && typeof m.y === "number" && typeof m.w === "number" && typeof m.h === "number");
+    if (markerList.length === 0) return res.status(400).json({ error: "Place at least one signature box" });
+    for (const m of markerList) if ("rotation" in m) delete m.rotation;
 
     const team = await queryOne("SELECT * FROM teams WHERE id = ?", [targetTeamId]);
     if (!team) return res.status(400).json({ error: "Unknown team" });
 
     const approvers = await query(`
       SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-      WHERE u.role = 'approver' AND sa.team_id = ?
+      WHERE u.active = 1 AND sa.team_id = ?
     `, [targetTeamId]);
     if (approvers.length === 0) return res.status(400).json({ error: "No approvers configured for this team" });
 
@@ -214,7 +404,10 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
       console.error("[create] bake failed", e);
       return res.status(400).json({ error: "Could not process PDF orientation" });
     }
-    const bakedMarker = transformMarkerForBake(markerObj, pageRotations);
+    // Bake each box; store a single object when there's one (legacy shape) or the
+    // full array for multi-sign requests. Readers normalise either shape.
+    const bakedList = markerList.map(m => transformMarkerForBake(m, pageRotations));
+    const bakedMarker = bakedList.length === 1 ? bakedList[0] : bakedList;
 
     // Optional: date field(s) for the team approver, filled when they sign.
     let signerDateFields = [];
@@ -224,19 +417,31 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
     }
 
     const id = uid();
-    const storedName = `${id}.${ext}`;
-    await fs.mkdir(DOC_DIR, { recursive: true });
-    await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+    const fileName = storedNameFor(`${id}.${ext}`, confidential);
+    // storedName is what goes into requests.file_path: a bucket key when the
+    // object-storage copy verified, else the bare filename it has always been.
+    const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+      { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
     await execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json, confidential)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null, confidential]);
 
     for (const a of approvers) {
-      sendEmail({
-        to: a.email, template: "new_request",
-        ctx: { approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name }
+      notifyUser({
+        user: a, requestId: id, template: "new_request",
+        ctx: {
+          approverName: a.name, requestorName: req.user.name, fileName: file.originalname, teamName: team.name, requestId: id,
+          // Routes confidential requests to the redacted template — without this
+          // the creation email named the document, defeating the redaction.
+          confidential: !!confidential,
+          // approveToken intentionally withheld until hqhb.in has SPF/DKIM
+          // (SendGrid domain authentication): an "Approve" button + token link
+          // from an unauthenticated sender trips Gmail's phishing filters and
+          // sank delivery. Re-enable by passing:
+          //   approveToken: signActionToken("email-approve", { req: id, uid: a.id }),
+        }
       }).catch(e => console.error("email fail", e));
     }
 
@@ -245,7 +450,7 @@ router.post("/", authRequired, requireRole("requestor", "approver"), upload.sing
   } catch (e) { next(e); }
 });
 
-async function createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType = "general" }) {
+async function createWorkflowRequest({ req, res, file, ext, fileType, note, instantApproval, workflow, requestType = "general", confidential = 0 }) {
   // Validate workflow shape
   for (const [i, step] of workflow.entries()) {
     if (!step?.teamId) return res.status(400).json({ error: `Step ${i + 1}: teamId required` });
@@ -254,8 +459,17 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     }
     for (const [j, s] of step.signers.entries()) {
       if (!s.userId) return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: userId required` });
-      if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.w !== "number" || typeof s.h !== "number") {
-        return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: marker x/y/w/h required` });
+      // Accept a boxes[] array (one signer, several signature spots) or the
+      // legacy single x/y/w/h shape.
+      if (!Array.isArray(s.boxes) || s.boxes.length === 0) {
+        if (typeof s.x === "number" && typeof s.y === "number" && typeof s.w === "number" && typeof s.h === "number") {
+          s.boxes = [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+        } else {
+          return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: signature box not placed` });
+        }
+      }
+      if (s.boxes.some(b => typeof b.x !== "number" || typeof b.y !== "number" || typeof b.w !== "number" || typeof b.h !== "number")) {
+        return res.status(400).json({ error: `Step ${i + 1} signer ${j + 1}: invalid signature box` });
       }
     }
   }
@@ -273,10 +487,16 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
     for (const s of step.signers) {
       const u = userById[s.userId];
       if (!u) return res.status(400).json({ error: `Unknown signer: ${s.userId}` });
-      if (u.role !== "approver") return res.status(400).json({ error: `${u.name} is not an approver` });
-      if (!u.signature_path) return res.status(400).json({ error: `${u.name} has no signature on file` });
+      if (u.active != null && Number(u.active) === 0) return res.status(400).json({ error: `${u.name} is no longer active` });
+      // A signer qualifies either by holding the team's signing authority, or by
+      // being a MEMBER of that team — the fallback that keeps team routing usable
+      // when no approver has been designated yet. (Only the named person can
+      // actually sign; the approve path checks identity + signature.)
       const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [s.userId, step.teamId]);
-      if (!auth) return res.status(400).json({ error: `${u.name} has no signing authority for ${teamById[step.teamId].name}` });
+      const isMember = u.team_id === step.teamId;
+      if (!auth && !isMember) {
+        return res.status(400).json({ error: `${u.name} is neither an approver for nor a member of ${teamById[step.teamId].name}` });
+      }
     }
   }
 
@@ -284,7 +504,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   let bakedBuffer, pageRotations;
   try {
     ({ bakedBuffer, pageRotations } = await bakeRequestFile({
-      buffer: file.buffer, fileType, orientation
+      buffer: file.buffer, fileType, orientation, rotation: req.body?.rotation
     }));
   } catch (e) {
     console.error("[create workflow] bake failed", e);
@@ -292,29 +512,30 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   }
   for (const step of workflow) {
     for (const s of step.signers) {
-      const baked = transformMarkerForBake(
-        { x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 },
-        pageRotations
-      );
-      s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+      s.boxes = s.boxes.map(b => {
+        const baked = transformMarkerForBake({ x: b.x, y: b.y, w: b.w, h: b.h, page: b.page || 1 }, pageRotations);
+        return { page: b.page || 1, x: baked.x, y: baked.y, w: baked.w, h: baked.h };
+      });
       s.dateFields = bakeDateFields(s.dateFields, pageRotations);
       delete s.rotation;
     }
   }
 
   const id = uid();
-  const storedName = `${id}.${ext}`;
-  await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+  const fileName = storedNameFor(`${id}.${ext}`, confidential);
+  // storedName is what goes into requests.file_path: a bucket key when the
+  // object-storage copy verified, else the bare filename it has always been.
+  const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+    { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType, confidential]);
 
     for (let i = 0; i < workflow.length; i++) {
       const step = workflow[i];
@@ -326,10 +547,11 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
       );
       for (let j = 0; j < step.signers.length; j++) {
         const s = step.signers[j];
+        const first = s.boxes[0];
         await conn.execute(
-          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-          [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, (s.dateFields && s.dateFields.length) ? JSON.stringify(s.dateFields) : null]
+          `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json, boxes_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          [uid("sg"), stepId, j + 1, s.userId, first.page || 1, first.x, first.y, first.w, first.h, 0, (s.dateFields && s.dateFields.length) ? JSON.stringify(s.dateFields) : null, s.boxes.length > 1 ? JSON.stringify(s.boxes) : null]
         );
       }
     }
@@ -352,13 +574,22 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
 // team-workflow path it does NOT require the signer to be an approver, to have
 // team signing authority, or to already have a signature on file — the recipient
 // adds a signature when they go to sign. PDF only (the signing path stamps PDFs).
-async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general" }) {
-  if (fileType !== "pdf") return res.status(400).json({ error: "Direct requests support PDF documents only" });
+async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general", confidential = 0 }) {
+  // PDF and Excel both supported — the signing path stamps each accordingly.
   if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
   for (const [i, s] of signers.entries()) {
     if (!s.userId) return res.status(400).json({ error: `Recipient ${i + 1}: userId required` });
-    if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.w !== "number" || typeof s.h !== "number") {
-      return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+    // Accept a boxes[] array (one signer, several signature spots) or the legacy
+    // single x/y/w/h shape.
+    if (!Array.isArray(s.boxes) || s.boxes.length === 0) {
+      if (typeof s.x === "number" && typeof s.y === "number" && typeof s.w === "number" && typeof s.h === "number") {
+        s.boxes = [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+      } else {
+        return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+      }
+    }
+    if (s.boxes.some(b => typeof b.x !== "number" || typeof b.y !== "number" || typeof b.w !== "number" || typeof b.h !== "number")) {
+      return res.status(400).json({ error: `Recipient ${i + 1}: invalid signature box` });
     }
   }
 
@@ -376,24 +607,28 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     return res.status(400).json({ error: "Could not process PDF orientation" });
   }
   for (const s of signers) {
-    const baked = transformMarkerForBake({ x: s.x, y: s.y, w: s.w, h: s.h, page: s.page || 1 }, pageRotations);
-    s.x = baked.x; s.y = baked.y; s.w = baked.w; s.h = baked.h;
+    s.boxes = s.boxes.map(b => {
+      const baked = transformMarkerForBake({ x: b.x, y: b.y, w: b.w, h: b.h, page: b.page || 1 }, pageRotations);
+      return { page: b.page || 1, x: baked.x, y: baked.y, w: baked.w, h: baked.h };
+    });
     s.dateFields = bakeDateFields(s.dateFields, pageRotations);
   }
 
   const id = uid();
-  const storedName = `${id}.${ext}`;
-  await fs.mkdir(DOC_DIR, { recursive: true });
-  await fs.writeFile(path.join(DOC_DIR, storedName), bakedBuffer);
+  const fileName = storedNameFor(`${id}.${ext}`, confidential);
+  // storedName is what goes into requests.file_path: a bucket key when the
+  // object-storage copy verified, else the bare filename it has always been.
+  const storedName = await writeStored("documents", fileName, sealIfConfidential(bakedBuffer, confidential),
+    { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type)
-      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential]);
 
     const stepId = uid("st");
     await conn.execute(
@@ -402,10 +637,11 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     );
     for (let j = 0; j < signers.length; j++) {
       const s = signers[j];
+      const first = s.boxes[0];
       await conn.execute(
-        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        [uid("sg"), stepId, j + 1, s.userId, s.page || 1, s.x, s.y, s.w, s.h, 0, s.dateFields.length ? JSON.stringify(s.dateFields) : null]
+        `INSERT INTO request_step_signers (id, step_id, signer_order, user_id, page, marker_x, marker_y, marker_w, marker_h, rotation, status, date_fields_json, boxes_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [uid("sg"), stepId, j + 1, s.userId, first.page || 1, first.x, first.y, first.w, first.h, 0, s.dateFields.length ? JSON.stringify(s.dateFields) : null, s.boxes.length > 1 ? JSON.stringify(s.boxes) : null]
       );
     }
     await conn.commit();
@@ -416,19 +652,45 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     conn.release();
   }
 
-  await notifyNextSigner(id, file.originalname, req.user.name);
+  // The batch flow defers per-document notices and sends ONE summary email per
+  // signer afterwards (POST /notify-batch) — otherwise a 10-document batch means
+  // 10 back-to-back emails to the same person.
+  const deferNotify = req.body?.deferNotify === "true" || req.body?.deferNotify === true;
+  if (!deferNotify) await notifyNextSigner(id, file.originalname, req.user.name);
   const row = await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
   res.json({ request: await hydrateRequest(row) });
 }
 
-async function notifyNextSigner(requestId, fileName, requestorName) {
+// Tell whoever is next in line that the document has reached them. Mid-workflow
+// (previousSignerName given) this names the person who just signed — "X has
+// signed the document and it is now waiting for your approval" — instead of the
+// generic new-request notice used for the very first signer.
+async function notifyNextSigner(requestId, fileName, requestorName, previousSignerName = null) {
   const next = await getNextPendingSigner(requestId);
   if (!next) return;
   const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
   if (!u) return;
-  sendEmail({
-    to: u.email, template: "new_request",
-    ctx: { approverName: u.name, requestorName, fileName, teamName: "(workflow step)" }
+  // Mid-workflow callers don't carry the raiser's name — look it up so the
+  // notification never shows a blank "sent by".
+  let raisedBy = requestorName;
+  if (!raisedBy) {
+    const r = await queryOne(
+      "SELECT u.name FROM requests rq JOIN users u ON u.id = rq.requestor_id WHERE rq.id = ?", [requestId]);
+    raisedBy = r?.name || "";
+  }
+  // Confidential routes swap to the redacted templates, which name neither the
+  // document nor the note.
+  const conf = await queryOne("SELECT confidential FROM requests WHERE id = ?", [requestId]);
+  notifyUser({
+    user: u, requestId,
+    template: previousSignerName ? "your_turn" : "new_request",
+    ctx: {
+      approverName: u.name, requestorName: raisedBy, previousSignerName,
+      fileName, teamName: "(workflow step)", requestId,
+      confidential: !!conf?.confidential,
+      // approveToken withheld until domain authentication is live — see the
+      // matching note in the team-request send above.
+    }
   }).catch(e => console.error("email fail", e));
 }
 
@@ -446,6 +708,9 @@ async function getNextPendingSigner(requestId) {
 // ============================================================
 async function authoriseAccess(user, row) {
   if (!row) return false;
+  // Confidential documents exclude the IT Admin BY DESIGN — that is the whole
+  // point of the feature. Must stay above the admin shortcut below.
+  if (row.confidential && user.role === "admin") return false;
   if (user.role === "admin") return true;
   if (user.id === row.requestor_id) return true;
   if (user.id === row.approver_id) return true;
@@ -456,7 +721,7 @@ async function authoriseAccess(user, row) {
     WHERE st.request_id = ? AND sg.user_id = ?
   `, [row.id, user.id]);
   if (sg) return true;
-  if (user.role === "approver" && row.status === "pending" && row.target_team_id) {
+  if (row.status === "pending" && row.target_team_id) {
     const auth = await queryOne(
       "SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?",
       [user.id, row.target_team_id]
@@ -474,7 +739,16 @@ router.get("/:id/file", authRequired, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
-    res.sendFile(path.join(DOC_DIR, row.file_path));
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      if (req.query?.download === "1" && !(row.requestor_id === req.user.id && row.status === "approved")) {
+        return res.status(403).json({ error: "Confidential documents can only be downloaded by the requestor, once fully signed" });
+      }
+      await logAccess(req, row.id, req.query?.download === "1" ? "download" : "view");
+    }
+    res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(await readStored("documents", row.file_path));
   } catch (e) { next(e); }
 });
 
@@ -484,67 +758,274 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
     if (!row.signed_file_path) return res.status(404).json({ error: "Signed version not available" });
-    res.sendFile(path.join(SIGNED_DIR, row.signed_file_path));
+    // Excel requests approved before real .xlsx stamping existed recorded a
+    // ".signed.json" manifest rather than a document — serve the original for those.
+    if (/\.json$/i.test(row.signed_file_path)) return res.send(await readStored("documents", row.file_path));
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      // Taking a copy OUT of SignFlow is restricted to the requestor, and only
+      // once the document is fully signed. (Viewing already puts the bytes in
+      // the participant's browser, so this is a policy control, not a
+      // cryptographic one — an approver who can read it could save it.)
+      const wantsDownload = req.query?.download === "1";
+      if (wantsDownload && !(row.requestor_id === req.user.id && row.status === "approved")) {
+        return res.status(403).json({ error: "Confidential documents can only be downloaded by the requestor, once fully signed" });
+      }
+      await logAccess(req, row.id, wantsDownload ? "download" : "view");
+    }
+    res.type(row.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(await readStored("signed", row.signed_file_path));
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /:id/unlock — email a fresh code ----------
+router.post("/:id/unlock", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).end();
+    if (!row.confidential) return res.status(400).json({ error: "This document is not confidential" });
+    // Deliberately AFTER the confidential check but using the same rule as
+    // viewing: only participants may request a code. Admins are not participants.
+    if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+
+    // users.email is the WORK email — setting one promotes it to `email` and
+    // demotes the old oneAccess address to secondary_email (see auth.js
+    // /me/work-email). Every other notification uses `email`; this must too, or
+    // the code goes to the superseded @onelogin.com address the user can't read.
+    // oneAccess users who never captured a work email carry a placeholder
+    // @oneaccess.local address; fail loudly rather than leaving them waiting for
+    // a code that can never arrive. Checked BEFORE issuing, so an undeliverable
+    // request neither writes a row nor consumes their rate limit.
+    const to = req.userRow?.email;
+    if (!to || /@oneaccess\.local$/i.test(to)) {
+      return res.status(400).json({
+        error: "Add your work email address before opening confidential documents",
+        code: "no_work_email"
+      });
+    }
+
+    const since = Date.now() - UNLOCK_ISSUE_WINDOW_MS;
+    const recent = await queryOne(
+      "SELECT COUNT(*) AS n FROM confidential_unlocks WHERE request_id = ? AND user_id = ? AND issued_at > ?",
+      [row.id, req.user.id, since]
+    );
+    if (Number(recent?.n || 0) >= UNLOCK_MAX_ISSUES) {
+      return res.status(429).json({ error: "Too many codes requested. Try again in 15 minutes." });
+    }
+
+    const code = newUnlockCode();
+    const now = Date.now();
+    await execute(
+      `INSERT INTO confidential_unlocks (id, request_id, user_id, code_hash, issued_at, code_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [uid("cu"), row.id, req.user.id, bcrypt.hashSync(code, 10), now, now + UNLOCK_CODE_TTL_MS]
+    );
+
+    // Sent directly, NOT via notifyUser: an unlock code must arrive even when
+    // the user has switched workflow email notifications off.
+    await sendEmail({
+      to, template: "confidential_unlock_code",
+      ctx: { name: req.user.name, code, minutes: Math.round(UNLOCK_CODE_TTL_MS / 60000) }
+    }).catch(e => console.error("[unlock] email failed", e));
+    await logAccess(req, row.id, "unlock_sent");
+
+    res.json({ sent: true, to: maskEmail(to), expiresInMs: UNLOCK_CODE_TTL_MS });
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /:id/unlock/verify — open the 60-second window ----------
+router.post("/:id/unlock/verify", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).end();
+    if (!row.confidential) return res.status(400).json({ error: "This document is not confidential" });
+    if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+
+    const code = String(req.body?.code || "").trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "Enter the 6-digit code" });
+
+    const rec = await queryOne(
+      `SELECT * FROM confidential_unlocks
+        WHERE request_id = ? AND user_id = ? AND consumed_at IS NULL
+        ORDER BY issued_at DESC LIMIT 1`,
+      [row.id, req.user.id]
+    );
+    if (!rec) return res.status(400).json({ error: "Request a code first", code: "no_code" });
+    if (Date.now() > Number(rec.code_expires_at)) {
+      return res.status(400).json({ error: "That code has expired. Request a new one.", code: "code_expired" });
+    }
+    if (Number(rec.attempts) >= UNLOCK_MAX_ATTEMPTS) {
+      return res.status(400).json({ error: "Too many wrong attempts. Request a new code.", code: "too_many_attempts" });
+    }
+    if (!bcrypt.compareSync(code, rec.code_hash)) {
+      await execute("UPDATE confidential_unlocks SET attempts = attempts + 1 WHERE id = ?", [rec.id]);
+      await logAccess(req, row.id, "unlock_fail");
+      const left = UNLOCK_MAX_ATTEMPTS - (Number(rec.attempts) + 1);
+      return res.status(400).json({
+        error: left > 0 ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many wrong attempts. Request a new code.",
+        attemptsLeft: Math.max(0, left)
+      });
+    }
+
+    // The clock starts HERE, immediately before the document loads, so the
+    // window is 60s of actual visibility rather than being eaten by the email.
+    const now = Date.now();
+    const endsAt = now + UNLOCK_WINDOW_MS;
+    await execute("UPDATE confidential_unlocks SET consumed_at = ?, window_ends_at = ? WHERE id = ?", [now, endsAt, rec.id]);
+    await logAccess(req, row.id, "unlock_ok");
+    res.json({ ok: true, windowEndsAt: endsAt, windowMs: UNLOCK_WINDOW_MS });
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /notify-batch — one summary notice per signer ----------
+// Called by the batch flow after its requests are created with deferNotify.
+// Groups the caller's OWN pending requests by whoever signs next and sends each
+// signer a single email listing every document by the name the requestor
+// uploaded — with the same Review button — instead of one email per document.
+router.post("/notify-batch", authRequired, async (req, res, next) => {
+  try {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).filter(Boolean).slice(0, 20);
+    if (ids.length === 0) return res.status(400).json({ error: "ids required" });
+
+    const ph = ids.map(() => "?").join(",");
+    // Only the raiser may trigger notices, and only for still-pending requests —
+    // this endpoint can announce someone's OWN batch, nothing else.
+    const rows = await query(
+      `SELECT * FROM requests WHERE id IN (${ph}) AND requestor_id = ? AND status = 'pending'`,
+      [...ids, req.user.id]);
+
+    const bySigner = new Map(); // user_id -> [{ row, signer }]
+    for (const row of rows) {
+      const signer = await getNextPendingSigner(row.id);
+      if (!signer) continue;
+      if (!bySigner.has(signer.user_id)) bySigner.set(signer.user_id, []);
+      bySigner.get(signer.user_id).push(row);
+    }
+
+    const sends = [];
+    for (const [signerId, docs] of bySigner) {
+      const u = await queryOne("SELECT * FROM users WHERE id = ?", [signerId]);
+      if (!u) continue;
+      if (docs.length === 1) {
+        // A one-document "batch" reads exactly like the classic notice.
+        const row = docs[0];
+        sends.push(notifyUser({
+          user: u, requestId: row.id, template: "new_request",
+          ctx: {
+            approverName: u.name, requestorName: req.user.name,
+            fileName: row.file_name, confidential: !!row.confidential, requestId: row.id,
+          },
+        }));
+      } else {
+        // Confidential names never travel by email — the batch prompt applies to
+        // every document, so the whole list redacts together.
+        const fileNames = docs.map(d => d.confidential ? "Confidential document" : d.file_name);
+        sends.push(notifyUser({
+          user: u, requestId: docs[0].id, template: "new_request_batch",
+          ctx: {
+            approverName: u.name, requestorName: req.user.name,
+            count: docs.length, fileNames,
+            confidential: docs.every(d => !!d.confidential),
+          },
+        }));
+      }
+    }
+    await Promise.allSettled(sends);
+    res.json({ notified: bySigner.size, requests: rows.length });
   } catch (e) { next(e); }
 });
 
 // ============================================================
 //   approve  — handles both legacy and workflow paths
 // ============================================================
-router.post("/:id/approve", authRequired, async (req, res, next) => {
+// Exported so the "approve on behalf" (assist) route can reuse the exact same
+// signing logic. It reads the acting signer from req.user / req.userRow, so the
+// assist route calls it with an executive-shaped req (see routes/assist.js) —
+// keeping one single code path for all approvals.
+// The signer may pick WHICH of their signatures to stamp (body.signatureId).
+// Resolved once, by overwriting req.userRow.signature_path in place: every
+// downstream site — stamping, applied_signature_path, the step-signer record —
+// reads that field, so none of the ~18 call sites can miss the choice. With no
+// signatureId the default (users.signature_path) applies, which is also the
+// auto-selection when a user has only one signature.
+async function applyChosenSignature(req) {
+  const sid = req.body?.signatureId;
+  if (!sid) return null;
+  const row = await queryOne(
+    "SELECT * FROM user_signatures WHERE id = ? AND user_id = ?", [String(sid), req.user.id]);
+  if (!row) return "That signature does not exist";
+  req.userRow.signature_path = row.file_path;
+  req.userRow.signature_aspect = row.aspect;
+  return null;
+}
+
+export async function approveRequestHandler(req, res, next) {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
     if (row.status !== "pending") return res.status(400).json({ error: "Not pending" });
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+    const sigErr = await applyChosenSignature(req);
+    if (sigErr) return res.status(400).json({ error: sigErr });
+
+    // You cannot sign what you are not currently permitted to see.
+    if (row.confidential) {
+      const gate = await requireUnlocked(req, row);
+      if (gate) return res.status(403).json(gate);
+      await logAccess(req, row.id, "sign");
+    }
 
     // Workflow path?
     const next = await getNextPendingSigner(row.id);
     if (next) return await approveWorkflowStep({ req, res, row, signer: next });
 
     // Legacy single-marker (team path) — still approver-only + team authority.
-    if (req.user.role !== "approver") return res.status(403).json({ error: "Not authorised to sign this request" });
+    // No role gate: holding the team's signing authority is the authorisation
+    // (checked immediately below), so any user an admin appoints can sign.
     if (!row.target_team_id || !row.marker_json) return res.status(400).json({ error: "Request misconfigured" });
     const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
 
     const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
-    const marker = JSON.parse(row.marker_json);
-    marker.signerName = req.user.name;
-    marker.signedAt = Date.now();
+    // marker_json holds one box (legacy) or an array — the approver signs in each.
+    const parsedMarker = JSON.parse(row.marker_json);
+    const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
+    const signedAt = Date.now();
 
     let signedPath = null;
     try {
-      if (row.file_type === "pdf") {
-        const outName = `${row.id}.signed.pdf`;
-        // signature box + any date fields the requestor placed for the approver,
-        // all showing this approval's date.
-        await stampPdfMulti({
-          srcPath: path.join(DOC_DIR, row.file_path),
-          stamps: [
-            { signaturePath: sigPathFull, page: marker.page || 1, x: marker.x, y: marker.y, w: marker.w, h: marker.h, signerName: marker.signerName, signedAt: marker.signedAt },
-            ...dateStampsFor(row.signer_date_fields_json, marker.signedAt)
-          ],
-          outName
-        });
-        signedPath = outName;
-      } else {
-        const manifest = await writeXlsxSignatureManifest({
-          srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName: row.id
-        });
-        signedPath = path.basename(manifest);
-      }
+      // every signature box + any date fields the requestor placed for the
+      // approver, all showing this approval's date.
+      signedPath = await stampAndStore({
+        row,
+        stamps: [
+          ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+          ...dateStampsFor(row.signer_date_fields_json, signedAt)
+        ]
+      });
     } catch (e) {
       console.error("[approve] stamp failed", e);
       return res.status(500).json({ error: "Failed to stamp signature" });
     }
 
-    if (row.instant_approval) {
+    // The APPROVER decides at approval time: instant (finalise now) or the
+    // 1-hour rejection window. Legacy requests created with instant_approval
+    // keep behaving as before.
+    const instant = wantsInstant(req) || !!row.instant_approval;
+    if (instant) {
       await execute(`
         UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?,
           applied_signature_path = ?, signed_file_path = ?
         WHERE id = ?
       `, [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+      // Instant → notify the requestor now. Window → the scheduler emails when
+      // the hour lapses; a rejection inside the window sends the reject email.
+      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+      notifyUser({
+        user: requestor, requestId: row.id, template: "approved",
+        ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
+      }).catch(() => {});
     } else {
       await execute(`
         UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -554,9 +1035,17 @@ router.post("/:id/approve", authRequired, async (req, res, next) => {
     }
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
-    res.json({ request: await hydrateRequest(updated), approvalWindowMs: row.instant_approval ? 0 : APPROVAL_WINDOW_MS });
+    res.json({ request: await hydrateRequest(updated), approvalWindowMs: instant ? 0 : APPROVAL_WINDOW_MS });
   } catch (e) { next(e); }
-});
+}
+router.post("/:id/approve", authRequired, approveRequestHandler);
+
+// Approver's choice, sent with the approve action: { instant: true } finalises
+// immediately; anything else keeps the 1-hour rejection window.
+function wantsInstant(req) {
+  const v = req.body?.instant;
+  return v === true || v === "true" || v === 1 || v === "1";
+}
 
 async function approveWorkflowStep({ req, res, row, signer }) {
   if (signer.user_id !== req.user.id) {
@@ -564,10 +1053,8 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     return res.status(403).json({ error: `Awaiting signature from ${u?.name || "another signer"}` });
   }
 
-  // Stamp the PDF: re-build from original applying ALL signed signers + this one
-  if (row.file_type !== "pdf") {
-    return res.status(400).json({ error: "Workflow currently supports PDF only" });
-  }
+  // Re-build from the ORIGINAL applying ALL signed signers + this one. Works for
+  // both PDFs (pdf-lib) and Excel workbooks (embedded images) — see below.
 
   // Mark this signer as signed FIRST so the rebuild includes it
   await execute(
@@ -587,13 +1074,13 @@ async function approveWorkflowStep({ req, res, row, signer }) {
   const stamps = allSigned.flatMap(s => {
     const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
     return [
-      {
+      // one stamp per signature box this signer placed (multi-box)
+      ...signerBoxes(s).map(b => ({
         signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-        w: Number(s.marker_w), h: Number(s.marker_h),
+        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
         signerName: s.user_name,
         signedAt
-      },
+      })),
       // the signer's own placeable date fields, all showing their signing date
       ...dateStampsFor(s.date_fields_json, signedAt)
     ];
@@ -601,9 +1088,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
 
   let signedPath;
   try {
-    const outName = `${row.id}.signed.pdf`;
-    await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-    signedPath = outName;
+    signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
     // Roll back the signer status so it can be retried
@@ -621,7 +1106,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     // Same step still active — just update signed file path
     await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ? WHERE id = ?",
       [signedPath, req.userRow.signature_path, row.id]);
-    await notifyNextSigner(row.id, row.file_name, "");
+    await notifyNextSigner(row.id, row.file_name, "", req.user.name);
   } else {
     // Mark step done
     await execute("UPDATE request_steps SET status = 'done' WHERE id = ?", [signer.step_id]);
@@ -634,15 +1119,24 @@ async function approveWorkflowStep({ req, res, row, signer }) {
       await execute("UPDATE request_steps SET status = 'active' WHERE id = ?", [nextStep.id]);
       await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ?, current_step = ? WHERE id = ?",
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
-      await notifyNextSigner(row.id, row.file_name, "");
+      await notifyNextSigner(row.id, row.file_name, "", req.user.name);
     } else {
-      // All steps done — finalize (instant) or enter cooling window
-      if (row.instant_approval) {
+      // All steps done — the signer completing the workflow chooses: finalize
+      // instantly or enter the 1-hour rejection window.
+      const instant = wantsInstant(req) || !!row.instant_approval;
+      if (instant) {
         await execute(`
           UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?,
             applied_signature_path = ?, signed_file_path = ?
           WHERE id = ?
         `, [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+        // Instant → tell the requestor now. Window → the scheduler emails when the
+        // hour lapses (or the reject email goes out if the approver rejects first).
+        const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+        notifyUser({
+          user: requestor, requestId: row.id, template: "approved",
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
+        }).catch(() => {});
       } else {
         await execute(`
           UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -650,25 +1144,22 @@ async function approveWorkflowStep({ req, res, row, signer }) {
           WHERE id = ?
         `, [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
       }
-      // Notify requestor
-      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-      sendEmail({
-        to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name }
-      }).catch(() => {});
     }
   }
 
   const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
-  res.json({ request: await hydrateRequest(updated), approvalWindowMs: row.instant_approval ? 0 : APPROVAL_WINDOW_MS });
+  res.json({ request: await hydrateRequest(updated), approvalWindowMs: (wantsInstant(req) || row.instant_approval) ? 0 : APPROVAL_WINDOW_MS });
 }
 
 // ============================================================
 //   batch approve — one signature, many requests
 // ============================================================
-router.post("/batch-approve", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     if (!req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+    // One chosen signature applies to the whole batch.
+    const sigErr = await applyChosenSignature(req);
+    if (sigErr) return res.status(400).json({ error: sigErr });
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
     if (ids.length === 0) return res.status(400).json({ error: "ids required" });
 
@@ -700,28 +1191,31 @@ router.post("/batch-approve", authRequired, requireRole("approver"), async (req,
           const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
           if (!auth) { results.failed.push({ id, error: "No authority" }); continue; }
           const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
-          const marker = JSON.parse(row.marker_json);
-    marker.signerName = req.user.name;
-    marker.signedAt = Date.now();
+          // one box (legacy) or an array — stamp every box, same as single approve.
+          const parsedMarker = JSON.parse(row.marker_json);
+          const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
+          const signedAt = Date.now();
           let signedPath;
           try {
-            if (row.file_type === "pdf") {
-              const outName = `${row.id}.signed.pdf`;
-              await stampPdf({ srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName });
-              signedPath = outName;
-            } else {
-              const manifest = await writeXlsxSignatureManifest({
-                srcPath: path.join(DOC_DIR, row.file_path), signaturePath: sigPathFull, marker, outName: row.id
-              });
-              signedPath = path.basename(manifest);
-            }
+            signedPath = await stampAndStore({
+              row,
+              stamps: [
+                ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+                ...dateStampsFor(row.signer_date_fields_json, signedAt)
+              ]
+            });
           } catch (e) {
             results.failed.push({ id, error: "Stamp failed" });
             continue;
           }
-          if (row.instant_approval) {
+          if (wantsInstant(req) || row.instant_approval) {
             await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+            const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+            notifyUser({
+              user: requestor, requestId: row.id, template: "approved",
+              ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
+            }).catch(() => {});
           } else {
             await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
@@ -755,13 +1249,13 @@ async function approveWorkflowStepInline({ req, row, signer }) {
   const stamps = allSigned.flatMap(s => {
     const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
     return [
-      {
+      // one stamp per signature box this signer placed (multi-box)
+      ...signerBoxes(s).map(b => ({
         signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: s.page, x: Number(s.marker_x), y: Number(s.marker_y),
-        w: Number(s.marker_w), h: Number(s.marker_h),
+        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
         signerName: s.user_name,
         signedAt
-      },
+      })),
       // the signer's own placeable date fields, all showing their signing date
       ...dateStampsFor(s.date_fields_json, signedAt)
     ];
@@ -769,9 +1263,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 
   let signedPath;
   try {
-    const outName = `${row.id}.signed.pdf`;
-    await stampPdfMulti({ srcPath: path.join(DOC_DIR, row.file_path), stamps, outName });
-    signedPath = outName;
+    signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     return { error: "Stamp failed" };
@@ -785,7 +1277,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
   if (remainingInStep) {
     await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ? WHERE id = ?",
       [signedPath, req.userRow.signature_path, row.id]);
-    await notifyNextSigner(row.id, row.file_name, "");
+    await notifyNextSigner(row.id, row.file_name, "", req.user.name);
   } else {
     await execute("UPDATE request_steps SET status = 'done' WHERE id = ?", [signer.step_id]);
     const nextStep = await queryOne(
@@ -796,20 +1288,21 @@ async function approveWorkflowStepInline({ req, row, signer }) {
       await execute("UPDATE request_steps SET status = 'active' WHERE id = ?", [nextStep.id]);
       await execute("UPDATE requests SET signed_file_path = ?, applied_signature_path = ?, current_step = ? WHERE id = ?",
         [signedPath, req.userRow.signature_path, nextStep.step_order, row.id]);
-      await notifyNextSigner(row.id, row.file_name, "");
+      await notifyNextSigner(row.id, row.file_name, "", req.user.name);
     } else {
-      if (row.instant_approval) {
+      if (wantsInstant(req) || row.instant_approval) {
         await execute(`UPDATE requests SET status = 'approved', approver_id = ?, approved_at = ?, finalized_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), Date.now(), req.userRow.signature_path, signedPath, row.id]);
+        // Instant → notify now; window → the scheduler emails at finalisation.
+        const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
+        notifyUser({
+          user: requestor, requestId: row.id, template: "approved",
+          ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
+        }).catch(() => {});
       } else {
         await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
       }
-      const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-      sendEmail({
-        to: requestor?.email, template: "approved",
-        ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name }
-      }).catch(() => {});
     }
   }
   return {};
@@ -818,7 +1311,10 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 // ============================================================
 //   reject  — any signer or admin/team-authority can reject
 // ============================================================
-router.post("/:id/reject", authRequired, async (req, res, next) => {
+// Accepts plain JSON ({ reason }) or multipart with an optional recorded voice
+// note (field "voice") alongside the typed reason — the approver can explain a
+// rejection by speaking, typing, or both.
+router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -836,17 +1332,29 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
     if (!allowed) return res.status(403).json({ error: "No authority to reject" });
 
     const reason = req.body?.reason || "";
+
+    // Optional voice note — store the recording, extension from the mime type.
+    let voicePath = null;
+    if (req.file?.buffer?.length) {
+      const mt = String(req.file.mimetype || "").toLowerCase();
+      const ext = mt.includes("mp4") || mt.includes("m4a") || mt.includes("aac") ? "m4a"
+        : mt.includes("ogg") ? "ogg" : "webm";
+      voicePath = `${row.id}.${ext}`;
+      await fs.mkdir(VOICE_DIR, { recursive: true });
+      await fs.writeFile(path.join(VOICE_DIR, voicePath), req.file.buffer);
+    }
+
     await execute(
-      "UPDATE requests SET status = 'rejected', approver_id = ?, rejected_at = ?, reject_reason = ?, applied_signature_path = NULL, signed_file_path = NULL WHERE id = ?",
-      [req.user.id, Date.now(), reason, row.id]
+      "UPDATE requests SET status = 'rejected', approver_id = ?, rejected_at = ?, reject_reason = ?, reject_voice_path = ?, applied_signature_path = NULL, signed_file_path = NULL WHERE id = ?",
+      [req.user.id, Date.now(), reason, voicePath, row.id]
     );
     // Mark current step rejected
     await execute("UPDATE request_steps SET status = 'rejected' WHERE request_id = ? AND status = 'active'", [row.id]);
 
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-    sendEmail({
-      to: requestor?.email, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason }
+    notifyUser({
+      user: requestor, requestId: row.id, template: "rejected",
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, reason: reason || (voicePath ? "A voice note was attached — listen in SignFlow." : ""), requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -854,10 +1362,25 @@ router.post("/:id/reject", authRequired, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Play back the rejection voice note — participants only (requestor, the
+// request's signers, admin), same rule as the document itself. Anyone else gets
+// the same 404 as a nonexistent id, so ids can't even be probed.
+router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row?.reject_voice_path) return res.status(404).end();
+    if (!(await authoriseAccess(req.user, row))) return res.status(404).end();
+    const type = row.reject_voice_path.endsWith(".m4a") ? "audio/mp4"
+      : row.reject_voice_path.endsWith(".ogg") ? "audio/ogg" : "audio/webm";
+    res.setHeader("Content-Type", type);
+    res.sendFile(path.join(VOICE_DIR, row.reject_voice_path));
+  } catch (e) { next(e); }
+});
+
 // ============================================================
 //   withdraw (within window — only when not instant)
 // ============================================================
-router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, res, next) => {
+router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -871,9 +1394,9 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
     );
 
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
-    sendEmail({
-      to: requestor?.email, template: "rejected",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: req.user.name, reason: "Withdrawn within 1h window" }
+    notifyUser({
+      user: requestor, requestId: row.id, template: "rejected",
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, reason: "Withdrawn within 1h window", requestId: row.id }
     }).catch(() => {});
 
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
@@ -886,7 +1409,7 @@ router.post("/:id/withdraw", authRequired, requireRole("approver"), async (req, 
 //   pending (nobody has accepted or rejected it yet). Soft-delete to 'withdrawn'
 //   so it drops out of every actionable list but stays in the admin audit view.
 // ============================================================
-router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
+router.post("/:id/cancel", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -901,6 +1424,24 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), a
       [row.id]
     );
 
+    // Nobody is "notified" of a withdrawal, so notifyUser doesn't run here —
+    // but every screen showing this request must still drop it live: assigned
+    // signers, any claiming approver, the target team's authority holders.
+    try {
+      const parties = new Set();
+      if (row.approver_id) parties.add(row.approver_id);
+      for (const s of await query(
+        "SELECT sg.user_id FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id WHERE st.request_id = ?",
+        [row.id])) parties.add(s.user_id);
+      if (row.target_team_id) {
+        for (const a of await query("SELECT user_id FROM signing_authority WHERE team_id = ?", [row.target_team_id])) {
+          parties.add(a.user_id);
+        }
+      }
+      parties.forEach(pingUser);
+      pingAdmins();
+    } catch { /* live updates must never block the action */ }
+
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });
   } catch (e) { next(e); }
@@ -909,7 +1450,7 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", "approver"), a
 // ============================================================
 //   reminder
 // ============================================================
-router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"), async (req, res, next) => {
+router.post("/:id/reminder", authRequired, requireRole("requestor", "executive_assistant", ...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -930,16 +1471,16 @@ router.post("/:id/reminder", authRequired, requireRole("requestor", "approver"),
     if (next) {
       const u = await queryOne("SELECT * FROM users WHERE id = ?", [next.user_id]);
       if (u) {
-        sendEmail({ to: u.email, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name } }).catch(() => {});
+        notifyUser({ user: u, requestId: row.id, template: "reminder", ctx: { approverName: u.name, requestorName: req.user.name, fileName: row.file_name, confidential: !!row.confidential, requestId: row.id } }).catch(() => {});
         count = 1;
       }
     } else if (row.target_team_id) {
       const approvers = await query(`
         SELECT u.* FROM users u JOIN signing_authority sa ON sa.user_id = u.id
-        WHERE u.role = 'approver' AND sa.team_id = ?
+        WHERE u.active = 1 AND sa.team_id = ?
       `, [row.target_team_id]);
       for (const a of approvers) {
-        sendEmail({ to: a.email, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name } }).catch(() => {});
+        notifyUser({ user: a, requestId: row.id, template: "reminder", ctx: { approverName: a.name, requestorName: req.user.name, fileName: row.file_name, confidential: !!row.confidential, requestId: row.id } }).catch(() => {});
       }
       count = approvers.length;
     }
@@ -957,9 +1498,9 @@ router.post("/:id/force-finalize", authRequired, requireRole("admin"), async (re
     await execute("UPDATE requests SET status = 'approved', finalized_at = ? WHERE id = ?", [Date.now(), row.id]);
     const requestor = await queryOne("SELECT * FROM users WHERE id = ?", [row.requestor_id]);
     const approver  = await queryOne("SELECT * FROM users WHERE id = ?", [row.approver_id]);
-    sendEmail({
-      to: requestor?.email, template: "approved",
-      ctx: { requestorName: requestor?.name, fileName: row.file_name, approverName: approver?.name }
+    notifyUser({
+      user: requestor, requestId: row.id, template: "approved",
+      ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: approver?.name, requestId: row.id }
     }).catch(() => {});
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });

@@ -8,7 +8,7 @@ const STEPS = [
   {
     icon: LogIn, n: 1, title: "Sign in",
     img: "/help/01-signin.png",
-    body: "Open signflow.devhqhb.online and sign in with the email and password you were given. If you don't have an account yet, use “Create an account” on the sign-in page — an administrator approves it before you can log in.",
+    body: "Open signflow.umooriqtesadiyah.org and choose “Sign in with oneAccess”, then use your oneAccess account. There's no separate sign-up — your access comes through oneAccess.",
   },
   {
     icon: PenTool, n: 2, title: "Register your signature (one-time)",

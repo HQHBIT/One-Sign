@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowRight, ArrowLeft, Check } from "lucide-react";
+import { ArrowRight, ArrowLeft, Check, ScanFace } from "lucide-react";
 import { api } from "../api.js";
+import { PasswordInput } from "./PasswordInput.jsx";
+import { loginBiometric, biometricSupported, biometricErrorMessage, forgetBiometricHere, savedBiometricEmail } from "../lib/biometric.js";
 
 // DISABLED: expense feature commented out
 /* Local-time YYYY-MM-DD for the date input's default value.
@@ -10,45 +12,67 @@ function todayStr() {
 }
 */
 
-export function LoginScreen({ login }) {
+export function LoginScreen({ login, onSession, org = null, onChangeOrg = null }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // Biometric (WebAuthn) sign-in — offered wherever the browser supports it.
+  // With a saved/entered email the server offers that account's passkeys, so a
+  // synced passkey or the QR → phone hand-off works even on a fresh device.
+  const bioSupported = biometricSupported();
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioErr, setBioErr] = useState(null);
+  const [bioEmail, setBioEmail] = useState(() => savedBiometricEmail());
+  const [bioEmailOpen, setBioEmailOpen] = useState(false);
+  const signInBiometric = async (em) => {
+    setBioBusy(true); setBioErr(null);
+    try {
+      const session = await loginBiometric((em || "").trim() || undefined);
+      onSession?.(session);
+    } catch (e) {
+      if (e?.code === "no_biometric") {
+        // Known shape: no passkey for that email — guide, keep the field open.
+        setBioErr(e.message);
+        setBioEmailOpen(true);
+      } else if (e?.code === "not_registered") {
+        forgetBiometricHere();
+        setBioErr("Please register on oneAccess to sign in!");
+        if (oneAccessAvailable && authCfg.oneAccessStartUrl) {
+          setTimeout(() => { window.location.href = authCfg.oneAccessStartUrl; }, 1400);
+        }
+      } else {
+        setBioErr(biometricErrorMessage(e));
+      }
+    } finally { setBioBusy(false); }
+  };
   // Login options from the server: whether to offer oneAccess SSO and/or the local
   // password form. Defaults keep the local form so a config hiccup never locks out.
   const [authCfg, setAuthCfg] = useState({ oneAccessEnabled: false, localLoginEnabled: true, oneAccessStartUrl: null });
-  useEffect(() => { api.authConfig().then(setAuthCfg).catch(() => {}); }, []);
-  // Never hide the local form unless oneAccess is actually available.
-  const showLocal = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
-  // Forgot-password panel state: idle | open | sending | sent | error
+  // Scoped to the chosen organisation — its permitted sign-in methods, not the
+  // server's. WAQF is password-only even where oneAccess is fully configured.
+  useEffect(() => { api.authConfig(org).then(setAuthCfg).catch(() => {}); }, [org]);
+  const oneAccessAvailable = authCfg.oneAccessEnabled;
+  // Whether the server will accept a password login at all (kept on for the admin door).
+  const localAvailable = authCfg.localLoginEnabled || !authCfg.oneAccessEnabled;
+  // Admins sign in with email+password, hidden behind a link / the #superadmin (or
+  // /superadmin) URL. Regular users only ever see the oneAccess button.
+  const [adminMode, setAdminMode] = useState(() => {
+    try { return /superadmin/i.test(window.location.pathname) || /superadmin/i.test(window.location.hash); }
+    catch { return false; }
+  });
+  const openAdmin = () => { try { window.history.replaceState(null, "", "#superadmin"); } catch {} setAdminMode(true); };
+  const closeAdmin = () => { try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch {} setAdminMode(false); };
+  // Self-service password reset (email OTP): idle → email → code → done
   const [forgotState, setForgotState] = useState("idle");
+  const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotErr, setForgotErr] = useState(null);
+  const [forgotOtp, setForgotOtp] = useState("");
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotConfirm, setForgotConfirm] = useState("");
+  const [forgotErr, setForgotErr] = useState(null);
+  const [forgotNote, setForgotNote] = useState(null);
 
-  // Self-registration panel.
-  const [regOpen, setRegOpen] = useState(false);
-  const [reg, setReg] = useState({ name: "", email: "", password: "", teamName: "", reportingManager: "" });
-  const [regState, setRegState] = useState("form"); // form | saving | done | error
-  const [regErr, setRegErr] = useState(null);
-
-  const resetReg = () => { setReg({ name: "", email: "", password: "", teamName: "", reportingManager: "" }); setRegState("form"); setRegErr(null); };
-  const openReg = () => { resetReg(); setRegOpen(true); };
-  const closeReg = () => { setRegOpen(false); resetReg(); };
-
-  const submitReg = async e => {
-    e.preventDefault();
-    if (!reg.name.trim() || !reg.email.trim() || reg.password.length < 6) return;
-    setRegState("saving"); setRegErr(null);
-    try {
-      await api.register({ name: reg.name.trim(), email: reg.email.trim(), password: reg.password, teamName: reg.teamName.trim(), reportingManager: reg.reportingManager.trim() });
-      setRegState("done");
-    } catch (err) {
-      setRegErr(err.message || "Could not submit registration");
-      setRegState("error");
-    }
-  };
+  // Self-registration removed — users are provisioned through oneAccess.
 
   /* DISABLED: expense feature commented out
   // Expense panel: anyone can record an expense without signing in.
@@ -81,33 +105,42 @@ export function LoginScreen({ login }) {
     await login(email, password); setBusy(false);
   };
 
-  const submitForgot = async e => {
-    e.preventDefault();
-    if (!forgotEmail.trim()) return;
-    if (forgotNewPassword.length < 6) { setForgotErr("New password must be at least 6 characters"); setForgotState("error"); return; }
-    if (forgotNewPassword !== forgotConfirm) { setForgotErr("Passwords don't match"); setForgotState("error"); return; }
-    setForgotState("sending");
-    setForgotErr(null);
-    try {
-      await api.requestReset({ email: forgotEmail.trim(), newPassword: forgotNewPassword });
-      // Server always returns 200 (anti-enumeration). The new password takes
-      // effect only after IT approves the request.
-      setForgotState("sent");
-    } catch (e) {
-      setForgotErr(e.message || "Could not submit reset request");
-      setForgotState("error");
-    }
-  };
-
   const openForgot = () => {
     setForgotEmail(email); // prefill from login form if they typed one
-    setForgotNewPassword(""); setForgotConfirm("");
-    setForgotErr(null);
-    setForgotState("open");
+    setForgotOtp(""); setForgotNewPassword(""); setForgotConfirm("");
+    setForgotErr(null); setForgotNote(null);
+    setForgotState("email");
   };
-  const closeForgot = () => {
-    setForgotState("idle");
-    setForgotErr(null);
+  const closeForgot = () => { setForgotState("idle"); setForgotErr(null); setForgotNote(null); };
+
+  // Step 1 — email a one-time code to the account holder.
+  const sendOtp = async e => {
+    e?.preventDefault?.();
+    const em = forgotEmail.trim();
+    if (!em) return;
+    setForgotBusy(true); setForgotErr(null);
+    try {
+      await api.sendResetOtp(em);
+      setForgotNote(`If an account exists for ${em}, a 6-digit code is on its way — valid for 10 minutes.`);
+      setForgotState("code");
+    } catch (err) {
+      setForgotErr(err.message || "Could not send the code");
+    } finally { setForgotBusy(false); }
+  };
+
+  // Step 2 — verify the code and set the new password (no admin involved).
+  const verifyOtp = async e => {
+    e?.preventDefault?.();
+    if (!forgotOtp.trim()) { setForgotErr("Enter the code from your email"); return; }
+    if (forgotNewPassword.length < 6) { setForgotErr("New password must be at least 6 characters"); return; }
+    if (forgotNewPassword !== forgotConfirm) { setForgotErr("Passwords don't match"); return; }
+    setForgotBusy(true); setForgotErr(null);
+    try {
+      await api.resetWithOtp({ email: forgotEmail.trim(), otp: forgotOtp.trim(), newPassword: forgotNewPassword });
+      setForgotState("done");
+    } catch (err) {
+      setForgotErr(err.message || "Could not reset the password");
+    } finally { setForgotBusy(false); }
   };
 
   return (
@@ -142,95 +175,120 @@ export function LoginScreen({ login }) {
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
         <div className="w-full max-w-sm">
-          {forgotState === "idle" && !regOpen && (
+          {forgotState === "idle" && (
             <div>
-              <div className="font-display text-2xl sm:text-3xl mb-2">Sign in</div>
+              {/* Whose door this is. Each organisation has its own people, so an
+                  account from another one will be refused here — saying which
+                  organisation you are signing in to prevents a confusing
+                  "invalid credentials" from a perfectly correct password. */}
+              {authCfg.org && (
+                <div className="flex items-center gap-2 mb-4 text-xs">
+                  <span className="opacity-50">Signing in to</span>
+                  <span className="font-medium">{authCfg.org.name}</span>
+                  {onChangeOrg && (
+                    <button type="button" onClick={onChangeOrg} className="underline opacity-60 hover:opacity-100 ml-auto">
+                      change
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="font-display text-2xl sm:text-3xl mb-2">{adminMode ? "Sign in with email & password" : "Sign in"}</div>
               <div className="text-sm opacity-60 mb-8">
-                {showLocal ? "Use the credentials provided by your administrator." : "Continue with your oneAccess account."}
+                {adminMode
+                  ? "For administrators, executives and executive assistants with a SignFlow password."
+                  : oneAccessAvailable
+                    ? "Continue with your oneAccess account."
+                    : "Enter the email and password your administrator gave you."}
               </div>
 
-              {authCfg.oneAccessEnabled && (
+              {/* Regular users: oneAccess only, with a discreet admin link below. */}
+              {!adminMode && oneAccessAvailable && (
                 <>
                   <button type="button" className="btn-primary w-full justify-center"
                     onClick={() => { window.location.href = authCfg.oneAccessStartUrl; }}>
                     Sign in with oneAccess <ArrowRight size={16} />
                   </button>
-                  {showLocal && (
-                    <div className="flex items-center gap-3 my-6 text-xs opacity-50">
-                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
-                      or
-                      <div className="flex-1 h-px" style={{ background: "var(--c-ink-18)" }} />
+                  {localAvailable && (
+                    <div className="text-center mt-6">
+                      <button type="button" onClick={openAdmin}
+                        className="text-xs opacity-60 hover:opacity-100 underline">
+                        Click here to login with email &amp; password (Admin / Assistant)
+                      </button>
                     </div>
                   )}
                 </>
               )}
 
-              {showLocal && (
+              {/* Biometric (Face ID / fingerprint / Windows Hello) sign-in — any
+                  device. Saved email = one tap; otherwise ask for the email so
+                  the account's passkeys (incl. phone via QR) can be offered. */}
+              {!adminMode && bioSupported && (
+                <div className={oneAccessAvailable ? "mt-3" : ""}>
+                  {!bioEmailOpen ? (
+                    <>
+                      <button type="button" className="btn-ghost w-full justify-center"
+                        onClick={() => { if (bioEmail.trim()) signInBiometric(bioEmail); else setBioEmailOpen(true); }}
+                        disabled={bioBusy}>
+                        <ScanFace size={16} /> {bioBusy ? "Waiting for your device…" : "Sign in with Face / fingerprint"}
+                      </button>
+                      {bioEmail.trim() && (
+                        <div className="text-[11px] mt-1.5 text-center opacity-60">
+                          as <span className="font-mono">{bioEmail.trim()}</span> ·{" "}
+                          <button type="button" className="underline hover:opacity-100"
+                            onClick={() => setBioEmailOpen(true)}>use a different email</button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <form onSubmit={e => { e.preventDefault(); signInBiometric(bioEmail); }}>
+                      <label className="block text-xs tracking-wider uppercase opacity-70 mb-2 mt-2">Your email</label>
+                      <input type="email" value={bioEmail} onChange={e => setBioEmail(e.target.value)}
+                        className="w-full mb-3" placeholder="you@hqhb.in" required autoFocus disabled={bioBusy} />
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-ghost" onClick={() => { setBioEmailOpen(false); setBioErr(null); }} disabled={bioBusy}>
+                          <ArrowLeft size={13} />
+                        </button>
+                        <button className="btn-ghost flex-1 justify-center" disabled={bioBusy || !bioEmail.trim()}>
+                          <ScanFace size={15} /> {bioBusy ? "Waiting for your device…" : "Continue with biometrics"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                  {bioErr && <div className="text-xs mt-2 text-center" style={{ color: "var(--c-rust-deep)" }}>{bioErr}</div>}
+                </div>
+              )}
+
+              {/* Admin email+password form — in admin mode, or as the sole option if
+                  oneAccess isn't configured (safety fallback so no deploy is locked out). */}
+              {(adminMode || !oneAccessAvailable) && localAvailable && (
                 <form onSubmit={submit}>
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
-                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus={!authCfg.oneAccessEnabled} />
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full mb-5" required autoFocus />
                   <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
+                  <PasswordInput value={password} onChange={e => setPassword(e.target.value)} className="w-full mb-3" required />
                   <div className="flex justify-end mb-6">
                     <button type="button" onClick={openForgot}
                       className="text-xs opacity-60 hover:opacity-100 underline">
                       Forgot password?
                     </button>
                   </div>
-                  <button className={`${authCfg.oneAccessEnabled ? "btn-ghost" : "btn-primary"} w-full justify-center`} disabled={busy}>
+                  <button className="btn-primary w-full justify-center" disabled={busy}>
                     {busy ? "Signing in…" : <>Continue <ArrowRight size={16} /></>}
                   </button>
-                  <div className="text-center mt-6">
-                    <button type="button" onClick={openReg}
-                      className="text-xs opacity-60 hover:opacity-100 underline">
-                      New here? Create an account →
-                    </button>
-                  </div>
+                  {adminMode && oneAccessAvailable && (
+                    <div className="text-center mt-6">
+                      <button type="button" onClick={closeAdmin}
+                        className="text-xs opacity-60 hover:opacity-100 underline inline-flex items-center gap-1">
+                        <ArrowLeft size={12} /> Back to oneAccess sign-in
+                      </button>
+                    </div>
+                  )}
                 </form>
               )}
             </div>
           )}
 
-          {regOpen && regState !== "done" && (
-            <form onSubmit={submitReg}>
-              <div className="font-display text-2xl sm:text-3xl mb-2">Create an account</div>
-              <div className="text-sm opacity-60 mb-8">Your request goes to IT for approval. You'll be able to sign in once it's approved.</div>
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Full name</label>
-              <input type="text" value={reg.name} onChange={e => setReg({ ...reg, name: e.target.value })} className="w-full mb-4" maxLength={191} required autoFocus />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Work email</label>
-              <input type="email" value={reg.email} onChange={e => setReg({ ...reg, email: e.target.value })} className="w-full mb-4" maxLength={191} required />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Password</label>
-              <input type="password" value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} className="w-full mb-4" placeholder="At least 6 characters" required />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Team / Department</label>
-              <input type="text" value={reg.teamName} onChange={e => setReg({ ...reg, teamName: e.target.value })} className="w-full mb-4" maxLength={191} placeholder="e.g., Finance" />
-
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Reporting manager</label>
-              <input type="text" value={reg.reportingManager} onChange={e => setReg({ ...reg, reportingManager: e.target.value })} className="w-full mb-5" maxLength={191} placeholder="Manager's name" />
-
-              {regErr && (
-                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{regErr}</div>
-              )}
-
-              <div className="flex gap-2">
-                <button type="button" className="btn-ghost" onClick={closeReg}><ArrowLeft size={14} /> Back</button>
-                <button className="btn-primary flex-1 justify-center" disabled={regState === "saving" || !reg.name.trim() || !reg.email.trim() || reg.password.length < 6}>
-                  {regState === "saving" ? "Submitting…" : <>Request access <ArrowRight size={14} /></>}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {regOpen && regState === "done" && (
-            <div className="anim-in">
-              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
-              <div className="text-sm opacity-70 mb-6 leading-relaxed">Thanks! IT will review your request. Once approved, sign in with the email and password you just chose.</div>
-              <button className="btn-primary w-full justify-center" onClick={closeReg}><ArrowLeft size={14} /> Back to sign-in</button>
-            </div>
-          )}
+          {/* Self-registration removed — users come through oneAccess. */}
 
           {/* DISABLED: expense feature commented out — submission + success panels
           {expenseOpen && expState !== "done" && (
@@ -299,66 +357,68 @@ export function LoginScreen({ login }) {
           )}
           */}
 
-          {(forgotState === "open" || forgotState === "sending" || forgotState === "error") && (
-            <form onSubmit={submitForgot}>
+          {/* Step 1 — request a one-time code */}
+          {forgotState === "email" && (
+            <form onSubmit={sendOtp}>
               <div className="font-display text-2xl sm:text-3xl mb-2">Reset password</div>
               <div className="text-sm opacity-60 mb-8">
-                Enter your email and choose a new password. IT will review and approve the request — then you can sign in with it.
+                Enter your email and we'll send you a one-time code to reset your password yourself.
               </div>
               <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Email</label>
-              <input type="email"
-                value={forgotEmail}
-                onChange={e => setForgotEmail(e.target.value)}
-                className="w-full mb-4"
-                required
-                autoFocus
-                disabled={forgotState === "sending"} />
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
-              <input type="password"
-                value={forgotNewPassword}
-                onChange={e => setForgotNewPassword(e.target.value)}
-                className="w-full mb-4"
-                placeholder="At least 6 characters"
-                required
-                disabled={forgotState === "sending"} />
-              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
-              <input type="password"
-                value={forgotConfirm}
-                onChange={e => setForgotConfirm(e.target.value)}
-                className="w-full mb-5"
-                required
-                disabled={forgotState === "sending"} />
+              <input type="email" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)}
+                className="w-full mb-5" required autoFocus disabled={forgotBusy} />
               {forgotErr && (
-                <div className="text-xs px-3 py-2 rounded mb-4"
-                  style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
-                  {forgotErr}
-                </div>
+                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{forgotErr}</div>
               )}
               <div className="flex gap-2">
-                <button type="button" className="btn-ghost" onClick={closeForgot}>
-                  <ArrowLeft size={14} /> Back
-                </button>
-                <button className="btn-primary flex-1 justify-center" disabled={forgotState === "sending" || !forgotEmail.trim() || forgotNewPassword.length < 6}>
-                  {forgotState === "sending" ? "Submitting…" : <>Request reset <ArrowRight size={14} /></>}
+                <button type="button" className="btn-ghost" onClick={closeForgot}><ArrowLeft size={14} /> Back</button>
+                <button className="btn-primary flex-1 justify-center" disabled={forgotBusy || !forgotEmail.trim()}>
+                  {forgotBusy ? "Sending…" : <>Send code <ArrowRight size={14} /></>}
                 </button>
               </div>
             </form>
           )}
 
-          {forgotState === "sent" && (
+          {/* Step 2 — enter the code + choose a new password */}
+          {forgotState === "code" && (
+            <form onSubmit={verifyOtp}>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Enter your code</div>
+              <div className="text-sm opacity-60 mb-6">{forgotNote || `We sent a code to ${forgotEmail}.`}</div>
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">6-digit code</label>
+              <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                value={forgotOtp} onChange={e => setForgotOtp(e.target.value.replace(/\D/g, ""))}
+                className="w-full mb-4 font-mono text-lg" style={{ letterSpacing: ".4em" }} placeholder="••••••" required autoFocus disabled={forgotBusy} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">New password</label>
+              <PasswordInput value={forgotNewPassword} onChange={e => setForgotNewPassword(e.target.value)}
+                className="w-full mb-4" placeholder="At least 6 characters" required disabled={forgotBusy} />
+              <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Confirm new password</label>
+              <PasswordInput value={forgotConfirm} onChange={e => setForgotConfirm(e.target.value)}
+                className="w-full mb-4" required disabled={forgotBusy} />
+              {forgotErr && (
+                <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{forgotErr}</div>
+              )}
+              <div className="flex gap-2">
+                <button type="button" className="btn-ghost" onClick={() => { setForgotState("email"); setForgotErr(null); }}><ArrowLeft size={14} /> Back</button>
+                <button className="btn-primary flex-1 justify-center" disabled={forgotBusy || forgotOtp.length < 4 || forgotNewPassword.length < 6}>
+                  {forgotBusy ? "Resetting…" : <>Reset password <ArrowRight size={14} /></>}
+                </button>
+              </div>
+              <div className="text-center mt-5">
+                <button type="button" onClick={sendOtp} disabled={forgotBusy} className="text-xs opacity-60 hover:opacity-100 underline">
+                  Didn't get it? Resend code
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Step 3 — done */}
+          {forgotState === "done" && (
             <div className="anim-in">
-              <div className="font-display text-2xl sm:text-3xl mb-2">Request submitted ✓</div>
+              <div className="font-display text-2xl sm:text-3xl mb-2">Password reset ✓</div>
               <div className="text-sm opacity-70 mb-6 leading-relaxed">
-                Your reset request for <span className="font-mono">{forgotEmail}</span> has been sent to IT.
-                Once they approve it, sign in with your new password.
+                Your password for <span className="font-mono">{forgotEmail}</span> has been updated — sign in with it now.
               </div>
-              <div className="card p-3 mb-6 flex items-start gap-3 text-xs" style={{ backgroundColor: "rgba(45,95,47,.06)", borderColor: "rgba(45,95,47,.2)" }}>
-                <Check size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-forest)" }} />
-                <div className="opacity-80">Your current password keeps working until IT approves the change.</div>
-              </div>
-              <button className="btn-primary w-full justify-center" onClick={closeForgot}>
-                <ArrowLeft size={14} /> Back to sign-in
-              </button>
+              <button className="btn-primary w-full justify-center" onClick={closeForgot}><ArrowLeft size={14} /> Back to sign-in</button>
             </div>
           )}
         </div>

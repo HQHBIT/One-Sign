@@ -2,6 +2,9 @@ name: Deploy OneSign to EC2 (UAT)
 on:
   push:
     branches: [UAT]
+  # Secrets change without any code changing. A manual run lets a rotated
+  # key reach the server without inventing a dummy commit.
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -69,8 +72,10 @@ jobs:
           target: "/home/ubuntu/OneSign"
           overwrite: true
 
-      - name: Restart backend on EC2
-        if: steps.changes.outputs.server == 'true'
+      # Always runs: this step syncs secrets into .env, and a secret can change
+      # with no server file touched. Gating it on server changes meant a rotated
+      # key silently never applied. Restart is a couple of seconds via pm2.
+      - name: Sync secrets and restart backend on EC2
         uses: appleboy/ssh-action@v1
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
@@ -86,11 +91,18 @@ jobs:
           ONEACCESS_PUBLIC_KEY_PATH: ${{ secrets.ONEACCESS_PUBLIC_KEY_PATH }}
           ONEACCESS_ACCESS_TOKEN_TTL: ${{ secrets.ONEACCESS_ACCESS_TOKEN_TTL }}
           AUTH_LOCAL_LOGIN_ENABLED: ${{ secrets.AUTH_LOCAL_LOGIN_ENABLED }}
+          CONFIDENTIAL_KEY: ${{ secrets.CONFIDENTIAL_KEY }}
+          STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
+          STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
+          STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
+          STORAGE_FORCE_PATH_STYLE: ${{ secrets.STORAGE_FORCE_PATH_STYLE }}
+          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
         with:
           host: ${{ secrets.UAT_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.UAT_EC2_SSH_KEY }}
-          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,ONEACCESS_API_BASE_URL,ONEACCESS_FRONTEND_URL,ONEACCESS_APP_SLUG,ONEACCESS_REDIRECT_URL,ONEACCESS_APP_ID,ONEACCESS_CLIENT_ID,ONEACCESS_CLIENT_SECRET,ONEACCESS_PUBLIC_KEY_PATH,ONEACCESS_ACCESS_TOKEN_TTL,AUTH_LOCAL_LOGIN_ENABLED
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,ONEACCESS_API_BASE_URL,ONEACCESS_FRONTEND_URL,ONEACCESS_APP_SLUG,ONEACCESS_REDIRECT_URL,ONEACCESS_APP_ID,ONEACCESS_CLIENT_ID,ONEACCESS_CLIENT_SECRET,ONEACCESS_PUBLIC_KEY_PATH,ONEACCESS_ACCESS_TOKEN_TTL,AUTH_LOCAL_LOGIN_ENABLED,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -108,6 +120,38 @@ jobs:
               echo "SendGrid config synced to .env (LIVE email)."
             else
               echo "No SENDGRID_API_KEY secret set — email stays in log-only mode."
+            fi
+            # Sync the confidential-documents key. Without it the feature fails
+            # CLOSED: the toggle is hidden and the API refuses confidential uploads,
+            # so a missing secret can never mean a document is silently unprotected.
+            # WARNING: rotating or losing this key makes every existing
+            # confidential document permanently unreadable.
+            if [ -n "$CONFIDENTIAL_KEY" ]; then
+              touch .env
+              grep -v -E '^CONFIDENTIAL_KEY=' .env > .env.tmp || true
+              echo "CONFIDENTIAL_KEY=$CONFIDENTIAL_KEY" >> .env.tmp
+              mv .env.tmp .env
+              echo "Confidential documents: key synced (feature ENABLED)."
+            else
+              echo "No CONFIDENTIAL_KEY secret set — confidential documents stay disabled."
+            fi
+            # Sync object-storage config. Fails CLOSED in the same spirit as the
+            # key above: with no STORAGE_BUCKET the application keeps using the
+            # filesystem, so a missing secret degrades to the previous behaviour
+            # rather than losing uploads.
+            if [ -n "$STORAGE_BUCKET" ]; then
+              touch .env
+              grep -v -E '^STORAGE_' .env > .env.tmp || true
+              echo "STORAGE_ENDPOINT=$STORAGE_ENDPOINT" >> .env.tmp
+              echo "STORAGE_REGION=$STORAGE_REGION" >> .env.tmp
+              echo "STORAGE_BUCKET=$STORAGE_BUCKET" >> .env.tmp
+              echo "STORAGE_FORCE_PATH_STYLE=$STORAGE_FORCE_PATH_STYLE" >> .env.tmp
+              echo "STORAGE_ACCESS_KEY=$STORAGE_ACCESS_KEY" >> .env.tmp
+              echo "STORAGE_SECRET_KEY=$STORAGE_SECRET_KEY" >> .env.tmp
+              mv .env.tmp .env
+              echo "Object storage: config synced (bucket $STORAGE_BUCKET)."
+            else
+              echo "No STORAGE_BUCKET secret set — files stay on the local filesystem."
             fi
             # Sync oneAccess SSO config from CI secrets. Rewrites the whole ONEACCESS_*
             # block (+ the AUTH_LOCAL_LOGIN_ENABLED cutover flag) when API_BASE_URL is

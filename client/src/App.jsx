@@ -3,9 +3,9 @@ import {
   FileText, Upload, CheckCircle, XCircle, Clock, Users, LogOut,
   PenTool, Download, Eye, Bell, Mail, BarChart3, Shield, UserPlus,
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
-  RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, Undo2, Trash2,
+  RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -13,8 +13,10 @@ import {
   APPROVAL_WINDOW_MS, REMINDER_COOLDOWN_MS,
   COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor
 } from "./lib/constants.js";
-import { uid, fmt, fmtShort } from "./lib/format.js";
-import { useBackHandler, useEscapeKey } from "./lib/useBackHandler.js";
+import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
+import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
+import { UnlockModal, ConfidentialBadge } from "./components/UnlockGate.jsx";
+import { useBackHandler, useEscapeKey, useScrollLock } from "./lib/useBackHandler.js";
 import { useConfirm, useConfirmation, ConfirmContext } from "./lib/useConfirm.jsx";
 import { useFocusTrap } from "./lib/useFocusTrap.js";
 
@@ -32,7 +34,17 @@ import { Row } from "./components/Row.jsx";
 import { Countdown } from "./components/Countdown.jsx";
 import { ModalShell } from "./components/ModalShell.jsx";
 import { TopBar } from "./components/TopBar.jsx";
+import { enrolBiometric, biometricAvailableHere, biometricErrorMessage, rememberBiometricEmail } from "./lib/biometric.js";
+import { BiometricPrompt } from "./components/BiometricPrompt.jsx";
+import { DelegationSettings } from "./components/DelegationSettings.jsx";
+import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
+import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
+import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
+import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
+import { getChosenOrg, setChosenOrg, clearChosenOrg } from "./lib/org.js";
+import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
+import { OrgPicker } from "./components/OrgPicker.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -45,7 +57,7 @@ import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
 import { PasswordResetModal } from "./components/PasswordResetModal.jsx";
 
 // Forms — multi-step wizards and the big create flow
-import { NewRequest } from "./forms/NewRequest.jsx";
+import { NewRequest, teamSigners, ord } from "./forms/NewRequest.jsx";
 import { OnboardUserWizard } from "./forms/OnboardUserWizard.jsx";
 
 // Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
@@ -67,9 +79,34 @@ const FileX = (props) => <FileText {...props} />;
    Constants + helpers live in ./lib/.
    ============================================================ */
 
+// Can this user act (approve/reject) on the request right now? Mirrors the
+// eligibility ApproverView uses — decides whether a deep-linked request opens the
+// actionable review drawer (ApproveDrawer) or the read-only preview (PreviewDrawer).
+function canActOnRequest(r, user) {
+  if (!r || !user || r.status !== "pending") return false;
+  if (r.approverId === user.id) return true;
+  if ((r.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id))) return true;
+  if (r.targetTeamId && (user.signingAuthorityTeams || []).includes(r.targetTeamId)) return true;
+  return false;
+}
+
 // ============================================================
 //   ROOT APP
 // ============================================================
+// Captured once at module load: the approve-from-email token (?approveToken=…).
+// Stripped from the URL immediately so a refresh or bookmark can't replay it.
+const EMAIL_APPROVE_TOKEN = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("approveToken");
+    if (t) {
+      params.delete("approveToken");
+      window.history.replaceState({}, "", window.location.pathname + (params.toString() ? "?" + params.toString() : ""));
+    }
+    return t;
+  } catch { return null; }
+})();
+
 export default function App() {
   const [booted, setBooted] = useState(false);
   const [user, setUser] = useState(null);
@@ -78,7 +115,15 @@ export default function App() {
   const [requests, setRequests] = useState([]);
   const [emails, setEmails] = useState([]);
   const [toasts, setToasts] = useState([]); // queue — multiple notifications stack
+  // In-app notification centre (bell in the top bar).
+  const [notifs, setNotifs] = useState({ unread: 0, notifications: [] });
   const [tick, setTick] = useState(0);
+  const [deepLinkReq, setDeepLinkReq] = useState(null); // request opened via an email deep link (?request=<id>)
+  // Approve-from-email: the green button carries ?approveToken=… — captured once
+  // at module load (state initializers can run twice under StrictMode, and the
+  // URL-strip makes a second run return null) and rendered as a standalone
+  // confirm screen before any auth.
+  const [emailApproveToken, setEmailApproveToken] = useState(EMAIL_APPROVE_TOKEN);
 
   const notify = useCallback((msg, kind = "info") => {
     const id = uid("t");
@@ -93,6 +138,7 @@ export default function App() {
       const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
       setTeams(t || []);
       setRequests(r || []);
+      api.listNotifications().then(n => setNotifs(n)).catch(() => {});
       if (forUser.role === "admin") {
         const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
         setUsers(u || []);
@@ -110,21 +156,26 @@ export default function App() {
     (async () => {
       api.onAuthExpired(() => { setUser(null); notify("Session expired — please sign in again", "error"); });
 
-      // oneAccess SSO landing: the redirect brings us back with ?token=<oneaccess jwt>.
-      // Exchange it for a SignFlow session, then scrub it from the URL so a refresh
-      // or bookmark can't replay it.
+      // Email deep link (?request=<id>) + oneAccess SSO landing (?token=<jwt>).
+      // Stash the request id up front so it survives a login / SSO round-trip, then
+      // scrub both params so a refresh or bookmark can't replay them.
       try {
         const params = new URLSearchParams(window.location.search);
+        const deepReq = params.get("request");
+        if (deepReq) localStorage.setItem("sf_deeplink", deepReq);
         const ssoToken = params.get("token");
         if (ssoToken) {
-          params.delete("token");
-          const clean = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
           try {
             const { token: sfToken } = await api.oneAccessCallback(ssoToken);
             api.setToken(sfToken);
           } catch (e) {
             notify(e.message || "oneAccess sign-in failed", "error");
           }
+        }
+        if (deepReq || ssoToken) {
+          params.delete("request");
+          params.delete("token");
+          const clean = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
           window.history.replaceState({}, "", clean);
         }
       } catch { /* no-op */ }
@@ -136,6 +187,7 @@ export default function App() {
           setUser(me.user);
           const [t, r] = await Promise.all([api.listTeams(), api.listRequests()]);
           setTeams(t || []); setRequests(r || []);
+          api.listNotifications().then(n => setNotifs(n)).catch(() => {});
           if (me.user.role === "admin") {
             const [u, e] = await Promise.all([api.listUsers(), api.listEmails()]);
             setUsers(u || []); setEmails(e || []);
@@ -147,6 +199,60 @@ export default function App() {
       setBooted(true);
     })();
   }, []);
+
+  // Open a request deep-linked from an email button, once we're signed in. The id
+  // was stashed at boot so it survives the login / SSO round-trip. Fetch a fresh
+  // list so we're sure the request is present, then open the right drawer.
+  useEffect(() => {
+    if (!user) return;
+    const id = localStorage.getItem("sf_deeplink");
+    if (!id) return;
+    localStorage.removeItem("sf_deeplink");
+    (async () => {
+      try {
+        const list = await api.listRequests();
+        const r = (list || []).find(x => x.id === id);
+        if (r) setDeepLinkReq(r);
+        else notify("That document isn't available on your account.", "error");
+      } catch {
+        notify("Couldn't open that document — please try again.", "error");
+      }
+    })();
+  }, [user, notify]);
+
+  // ---- auto-update while signed out ----
+  // When the app is (re)opened or resumed on the login screen, pick up any newly
+  // deployed build before the user signs in — so their next login always lands on
+  // the latest version. We only do this while signed out to avoid reloading over
+  // a user's in-progress work; signed-in clients update on their next login.
+  useEffect(() => {
+    if (user) return;
+    checkForUpdate();
+    const onShow = () => { if (document.visibilityState === "visible") checkForUpdate(); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+    };
+  }, [user]);
+
+  // While SIGNED IN we never reload over in-progress work. Instead, when a newer
+  // build ships, surface a banner — one tap refreshes to the latest version (the
+  // session token persists, so they land right back where they were, signed in).
+  const [updateReady, setUpdateReady] = useState(false);
+  useEffect(() => {
+    if (!user) { setUpdateReady(false); return; }
+    const check = () => { updateAvailable().then(v => { if (v) setUpdateReady(true); }); };
+    check();
+    const onShow = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+    };
+  }, [user]);
 
   // ---- refresh strategy ----
   // The countdown for the approval-window pill needs to tick at least every
@@ -170,19 +276,39 @@ export default function App() {
     };
   }, [user, refresh]);
 
+  // ---- which organisation's door are we at? ----
+  // Remembered so a returning user goes straight to their own sign-in. Only a
+  // convenience: the server independently verifies the account belongs to the
+  // organisation, so changing this cannot get anyone into another space.
+  const [orgId, setOrgId] = useState(() => getChosenOrg());
+  const pickOrg = (id) => { setChosenOrg(id); setOrgId(id); };
+  const changeOrg = () => { clearChosenOrg(); setOrgId(null); };
+
   // ---- auth actions ----
   const login = async (email, password) => {
     try {
-      const { token, user: u } = await api.login(email, password);
+      const { token, user: u } = await api.login(email, password, orgId);
       api.setToken(token);
+      // If a newer build has shipped, reload now (the token is persisted, so the
+      // user lands signed in on the latest version — including the current logo).
+      await checkForUpdate();
       setUser(u);
       await refresh(u);
-      notify(`Welcome, ${u.name.split(" ")[0]}`, "success");
+      notify(`Welcome, ${greetName(u.name)}`, "success");
       return true;
     } catch (e) {
       notify(e.message || "Sign-in failed", "error");
       return false;
     }
+  };
+  // Establish a session from an already-issued { token, user } — used by
+  // biometric (WebAuthn) sign-in, which authenticates without a password.
+  const completeSession = async ({ token, user: u }) => {
+    api.setToken(token);
+    await checkForUpdate();
+    setUser(u);
+    await refresh(u);
+    notify(`Welcome, ${greetName(u.name)}`, "success");
   };
   const logout = async () => {
     api.setToken(null);
@@ -196,19 +322,83 @@ export default function App() {
     setUser(me.user);
   };
   const createRequest = async payload => {
-    await api.createRequest(payload);
+    const r = await api.createRequest(payload);
     await refresh(user);
+    return r;   // the batch flow needs the created ids for its summary notice
   };
   const sendReminder = async id => {
     try { await api.remindRequest(id); notify("Reminder sent", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
-  const approveRequest = async id => {
-    try { await api.approveRequest(id); notify("Approved — 1 hour reject window active", "success"); await refresh(user); }
+  const approveRequest = async (id, instant, signatureId = null) => {
+    try {
+      await api.approveRequest(id, instant, signatureId);
+      notify(instant ? "Approved!" : "Approved! You have 1 hour to change your mind.", "success");
+      await refresh(user);
+    }
     catch (e) { notify(e.message, "error"); }
   };
-  const rejectRequest = async (id, reason) => {
-    try { await api.rejectRequest(id, reason); notify("Request rejected", "success"); await refresh(user); }
+  // ---- live updates (SSE) ----
+  // One EventSource per session: the server sends a tiny "changed" whenever a
+  // request or notification touches this user, and the client re-runs its
+  // normal refresh — no manual reloading. Bursts (a 10-document batch) are
+  // coalesced by a short debounce. Tickets expire, so reconnection fetches a
+  // fresh one rather than relying on EventSource's built-in retry.
+  useEffect(() => {
+    if (!user) return;
+    let es = null, closed = false, debounce = null, retryTimer = null;
+    const scheduleRefresh = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => refresh(user), 400);
+    };
+    const connect = async () => {
+      try {
+        const { ticket } = await api.eventsTicket();
+        if (closed) return;
+        es = new EventSource(`/api/events?ticket=${encodeURIComponent(ticket)}`);
+        es.onmessage = (ev) => { if (ev.data === "changed") scheduleRefresh(); };
+        es.onerror = () => {
+          es?.close();
+          if (!closed) retryTimer = setTimeout(connect, 5000);
+        };
+      } catch {
+        if (!closed) retryTimer = setTimeout(connect, 10000);
+      }
+    };
+    connect();
+    return () => { closed = true; clearTimeout(debounce); clearTimeout(retryTimer); es?.close(); };
+  }, [user?.id]);
+
+  // ---- in-app notifications ----
+  const openNotification = async (n) => {
+    if (!n.read) {
+      api.markNotificationsRead([n.id]).catch(() => {});
+      setNotifs(prev => ({ unread: Math.max(0, prev.unread - 1), notifications: prev.notifications.map(x => x.id === n.id ? { ...x, read: true } : x) }));
+    }
+    if (!n.requestId) return;
+    let r = requests.find(x => x.id === n.requestId);
+    if (!r) {
+      try { const list = await api.listRequests(); setRequests(list || []); r = (list || []).find(x => x.id === n.requestId); } catch { /* ignore */ }
+    }
+    if (r) setDeepLinkReq(r);
+    else notify("That document isn't available on your account.", "info");
+  };
+  const markAllNotifsRead = () => {
+    api.markNotificationsRead().catch(() => {});
+    setNotifs(prev => ({ unread: 0, notifications: prev.notifications.map(x => ({ ...x, read: true })) }));
+  };
+  const toggleEmailNotifications = async () => {
+    try {
+      const { user: updated } = await api.setEmailNotifications(!user.emailNotifications);
+      setUser(updated);
+      notify(updated.emailNotifications
+        ? "Email notifications turned ON."
+        : "Email notifications turned OFF — you'll still get in-app notifications here.", "success");
+    } catch (e) { notify(e.message || "Could not update the setting", "error"); }
+  };
+
+  const rejectRequest = async (id, reason, voice) => {
+    try { await api.rejectRequest(id, reason, voice); notify("Request rejected", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
   const undoApproval = async id => {
@@ -241,18 +431,37 @@ export default function App() {
   // ---- render ----
   if (!booted) return <BootScreen />;
 
+  // Approve-from-email takes over the whole screen — the emailed token is the
+  // authentication, so this works signed-in or not.
+  if (emailApproveToken) {
+    return (
+      <>
+        <StyleTag />
+        <EmailApproveScreen token={emailApproveToken} onClose={() => setEmailApproveToken(null)} />
+      </>
+    );
+  }
+
   return (
     <ConfirmContext.Provider value={confirm}>
     <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}>
       <StyleTag />
       {!user ? (
-        <LoginScreen login={login} />
+        // Landing: choose an organisation, then that organisation's sign-in.
+        orgId
+          ? <LoginScreen login={login} onSession={completeSession} org={orgId} onChangeOrg={changeOrg} />
+          : <OrgPicker onPick={pickOrg} />
+      ) : user.needsWorkEmail ? (
+        <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
         <Shell
           user={user}
           users={users} teams={teams} requests={requests} emails={emails}
+          notifs={notifs} onOpenNotification={openNotification}
+          onMarkAllNotifsRead={markAllNotifsRead} onToggleEmailNotifs={toggleEmailNotifications}
           logout={logout}
           setSignature={setMySignature}
+          refreshUser={async () => { const me = await api.me(); setUser(me.user); }}
           saveUsers={saveUsers} saveTeams={saveTeams}
           addRequest={createRequest}
           sendReminder={sendReminder}
@@ -264,10 +473,145 @@ export default function App() {
           tick={tick}
         />
       )}
+      {user && deepLinkReq && (
+        canActOnRequest(deepLinkReq, user)
+          ? <ApproveDrawer req={deepLinkReq} user={user} users={users} teams={teams}
+              approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+              onClose={() => setDeepLinkReq(null)} notify={notify} />
+          : <PreviewDrawer user={user} req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
+      )}
+      {user && updateReady && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-full pl-4 pr-2 py-2 shadow-lg text-sm"
+          style={{ backgroundColor: "var(--c-ink)", color: "var(--c-cream)" }}>
+          <span>A new version of SignFlow is ready.</span>
+          <button className="rounded-full px-3 py-1 text-xs font-medium"
+            style={{ backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}
+            onClick={() => window.location.reload()}>
+            Refresh now
+          </button>
+        </div>
+      )}
       <ToastStack toasts={toasts} />
       <ConfirmHost />
     </div>
     </ConfirmContext.Provider>
+  );
+}
+
+// ============================================================
+//   WORK-EMAIL CAPTURE — one-time, blocking prompt shown to a brand-new
+//   oneAccess user so their notifications go to their work address, not
+//   whatever email oneAccess signed them in with.
+// ============================================================
+function WorkEmailCapture({ user, notify, onDone }) {
+  const isPlaceholder = /@oneaccess\.local$/i.test(user.email || "");
+  const [email, setEmail] = useState(isPlaceholder ? "" : (user.email || ""));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const submit = async e => {
+    e.preventDefault();
+    const v = email.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { setErr("Please enter a valid email address"); return; }
+    setBusy(true); setErr(null);
+    try {
+      const { user: updated } = await api.setWorkEmail(v);
+      notify("Work email saved — you'll get all notifications here.", "success");
+      onDone(updated);
+    } catch (e2) {
+      setErr(e2.message || "Could not save your work email");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: "var(--c-cream)" }}>
+      <div className="w-full max-w-md card p-6 sm:p-8 anim-in">
+        <div className="font-display text-2xl sm:text-3xl mb-2">One quick thing, {greetName(user.name)}</div>
+        <div className="text-sm opacity-60 mb-8">
+          Please enter your <strong>work email address</strong>. SignFlow will use it for all your notifications — document requests, approvals and reminders.
+        </div>
+        <form onSubmit={submit}>
+          <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Work email address</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+            className="w-full mb-2" placeholder="you@hqhb.in" required autoFocus disabled={busy} />
+          {!isPlaceholder && (
+            <div className="text-xs opacity-50 mb-5">
+              Signed in via oneAccess as <span className="font-mono">{user.email}</span> — keep this or enter a different work email.
+            </div>
+          )}
+          {isPlaceholder && <div className="mb-5" />}
+          {err && (
+            <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
+          )}
+          <button className="btn-primary w-full justify-center" disabled={busy || !email.trim()}>
+            {busy ? "Saving…" : <>Continue <ArrowRight size={16} /></>}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+//   BIOMETRIC SIGN-IN — enrol / manage this device's Face ID / fingerprint.
+//   The device does the biometric check; SignFlow stores only a public key.
+// ============================================================
+function BiometricModal({ user, notify, onClose }) {
+  const [avail, setAvail] = useState(null);     // null = checking
+  const [creds, setCreds] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  useEscapeKey(onClose);
+  const load = () => api.webauthnCredentials().then(setCreds).catch(() => setCreds([]));
+  useEffect(() => { biometricAvailableHere().then(setAvail).catch(() => setAvail(false)); load(); }, []);
+
+  const enrol = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await enrolBiometric();
+      rememberBiometricEmail(user?.email); // one-tap next time on this device
+      notify(`Biometric sign-in enabled on ${r.label || "this device"}.`, "success");
+      await load();
+    } catch (e) { setErr(biometricErrorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const remove = async (id) => {
+    try { await api.webauthnRemoveCredential(id); await load(); notify("Device removed.", "success"); }
+    catch (e) { notify(e.message || "Could not remove device.", "error"); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }} onClick={onClose}>
+      <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+        <div className="font-display text-2xl mb-1">Biometric sign-in</div>
+        <div className="text-sm opacity-60 mb-5">
+          Turn on Face ID / fingerprint sign-in for <b>this device</b>. Your face or fingerprint never leaves it — SignFlow only stores a key.
+        </div>
+        {avail === false && (
+          <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+            This device doesn't offer a built-in biometric. Try a phone, or a laptop with Face ID / Windows Hello.
+          </div>
+        )}
+        {creds && creds.length > 0 && (
+          <div className="mb-4">
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-2">Enabled on</div>
+            <div className="space-y-2">
+              {creds.map(c => (
+                <div key={c.id} className="flex items-center justify-between rounded p-2.5" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                  <div className="text-sm">{c.label} <span className="opacity-40 text-xs">· {fmtShort(c.createdAt)}</span></div>
+                  <button className="text-xs opacity-60 hover:opacity-100" onClick={() => remove(c.id)}>Remove</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {err && <div className="text-xs px-3 py-2 rounded mb-4" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>}
+        <div className="flex justify-end gap-3">
+          <button className="btn-ghost" onClick={onClose}>Close</button>
+          <button className="btn-primary" onClick={enrol} disabled={busy || avail === false}>
+            <ScanFace size={15} /> {busy ? "Follow your device…" : "Enable on this device"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -279,7 +623,9 @@ function Shell(props) {
   const [needsSig, setNeedsSig] = useState(false);
   const [editSig, setEditSig] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
+  const [bioOpen, setBioOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [delegationOpen, setDelegationOpen] = useState(false);
   // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
   // so tapping install opens a short instructions sheet instead.
   const install = useInstall();
@@ -291,22 +637,55 @@ function Shell(props) {
 
   // require signature for requestor & approver on first login
   useEffect(() => {
-    if ((user.role === "requestor" || user.role === "approver") && !user.hasSignature) setNeedsSig(true);
+    if ((user.role === "requestor" || user.role === "approver" || user.role === "executive") && !user.hasSignature) setNeedsSig(true);
     else setNeedsSig(false);
   }, [user.id, user.role, user.hasSignature]);
 
+  // Display mode: null = normal, or one of the three dark variants. Stored on
+  // the server so the choice follows the user across phone and web.
+  const setDisplayMode = async (variant) => {
+    try { await api.setMyDarkMode(!!variant, variant || null); await props.refreshUser?.(); }
+    catch (e) { notify(e.message || "Could not switch the display", "error"); }
+  };
+
   return (
     <>
+      {/* Whole-screen inversion for low-vision reading: a difference blend
+          against white turns every pixel underneath into its opposite — white
+          pages become black, dark text becomes light — documents, PDFs and
+          spreadsheets included, on any screen size. pointer-events: none, so
+          it never intercepts a tap; z-index above every drawer and modal. */}
+      {user.darkModeOn && (
+        <div aria-hidden="true" data-invert-layer data-variant={user.darkModeVariant} style={{
+          position: "fixed", inset: 0, pointerEvents: "none", zIndex: 2147483000,
+          ...(user.darkModeVariant === "natural"
+            // Dark with familiar colours: invert flips luminance, the half-turn
+            // hue rotation puts the hues roughly back where they were.
+            ? { backdropFilter: "invert(1) hue-rotate(180deg)", WebkitBackdropFilter: "invert(1) hue-rotate(180deg)" }
+            : user.darkModeVariant === "grayscale"
+            // No hue at all: every kind of colour-blindness sees the same
+            // picture — everything is distinguished by brightness alone.
+            ? { backdropFilter: "invert(1) grayscale(1) contrast(1.2)", WebkitBackdropFilter: "invert(1) grayscale(1) contrast(1.2)" }
+            // The strongest flip — the original difference-blend inversion.
+            : { background: "#fff", mixBlendMode: "difference" }),
+        }} />
+      )}
       <TopBar user={user} logout={logout}
+        notifs={props.notifs} onOpenNotification={props.onOpenNotification}
+        onMarkAllNotifsRead={props.onMarkAllNotifsRead} onToggleEmailNotifs={props.onToggleEmailNotifs}
+        onSetDisplayMode={user.darkModeAllowed ? setDisplayMode : null}
         onEditSignature={() => setEditSig(true)}
         onChangePassword={() => setChangingPwd(true)}
+        onBiometric={() => setBioOpen(true)}
+        onDelegation={(user.role === "executive" || user.role === "admin") ? () => setDelegationOpen(true) : null}
         onHome={() => setHomeKey(k => k + 1)}
         onInstall={install.supported ? handleInstall : null}
         onHelp={() => setHelpOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
-        {user.role === "approver" && <ApproverView key={homeKey} {...props} />}
+        {(user.role === "approver" || user.role === "executive") && <ApproverView key={homeKey} {...props} />}
+        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} PersonalView={RequestorView} {...props} />}
         {user.role === "admin" && <AdminView key={homeKey} {...props} />}
       </main>
       {needsSig && (
@@ -322,10 +701,11 @@ function Shell(props) {
       )}
       {editSig && (
         <SignatureModal
-          title={user.hasSignature ? "Update your signature" : "Add your signature"}
-          subtitle="Drawing or uploading a new image will replace any existing signature on file."
+          manage
+          title="My signatures"
+          subtitle="Keep up to 5 signatures, each with a name tag. The default is used unless you pick another while signing."
           onCancel={() => setEditSig(false)}
-          currentUserId={user.hasSignature ? user.id : null}
+          onChanged={() => props.refreshUser?.()}
           onSave={async dataUrl => { await setSignature(dataUrl); setEditSig(false); notify("Signature updated", "success"); }}
         />
       )}
@@ -334,9 +714,344 @@ function Shell(props) {
           onClose={() => setChangingPwd(false)}
           notify={notify} />
       )}
+      {bioOpen && <BiometricModal user={user} notify={notify} onClose={() => setBioOpen(false)} />}
+      {delegationOpen && <DelegationSettings user={user} notify={notify} onClose={() => setDelegationOpen(false)} />}
+      <BiometricPrompt notify={notify} hold={needsSig} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>
+  );
+}
+
+// ============================================================
+//   SIGN YOUR DOCUMENTS — personal signing utility. Upload a PDF, place your
+//   own signature / date marks, download the signed copy. Stateless: nothing
+//   is stored and no request or approval is created.
+// ============================================================
+function SelfSignDoc({ user, notify, back }) {
+  const [file, setFile] = useState(null);        // { name, base64, blob, ext }
+  const [marks, setMarks] = useState([]);        // [{ type: 'signature'|'date', page, x, y, w, h }]
+  const [tool, setTool] = useState("signature"); // what the next click-drag places
+  const [rotation, setRotation] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [mySigUrl, setMySigUrl] = useState(null);
+  const todayDdMmYy = (() => { const d = new Date(); const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`; })();
+
+  // Live preview of the user's actual signature inside the placed boxes.
+  useEffect(() => {
+    if (!user.hasSignature || !file) { setMySigUrl(null); return; }
+    let url = null, dead = false;
+    api.getSignatureBlob(user.id).then(u => { if (dead) { if (u) URL.revokeObjectURL(u); return; } url = u; setMySigUrl(u); }).catch(() => {});
+    return () => { dead = true; if (url) URL.revokeObjectURL(url); };
+  }, [file, user.hasSignature, user.id]);
+
+  const handleFile = e => {
+    const f = e.target.files?.[0]; if (!f) return;
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    if (!["pdf", "xlsx", "xls"].includes(ext)) { notify("Only PDF or Excel files supported", "error"); return; }
+    if (f.size > 14 * 1024 * 1024) { notify("File must be under 14 MB", "error"); return; }
+    const kind = ext === "pdf" ? "pdf" : "xlsx";
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFile({ name: f.name, base64: reader.result, blob: f, ext: kind });
+      setMarks([]); setRotation(0);
+      // A dated text box has no spreadsheet equivalent, so Excel is signature-only.
+      setTool(user.hasSignature || kind === "xlsx" ? "signature" : "date");
+    };
+    reader.readAsDataURL(f);
+  };
+  const isPdf = file?.ext === "pdf";
+
+  const markers = marks.map((m, i) => ({
+    id: `self-${i}`, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h,
+    color: "#3E8E5A",
+    label: m.type === "date" ? todayDdMmYy : "Your signature",
+    ...(m.type === "signature" && mySigUrl ? { signedDataUrl: mySigUrl } : {}),
+  }));
+  const onAddMarker = (page, x, y, w, h) => {
+    if (tool === "signature" && !user.hasSignature) { notify("Register a signature first (top-right menu)", "error"); return; }
+    setMarks(ms => [...ms, { type: tool, page, x, y, w, h }]);
+  };
+  const markIdx = (id) => { const m = /^self-(\d+)$/.exec(id || ""); return m ? Number(m[1]) : -1; };
+  const onUpdateMarker = (id, patch) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.map((m, k) => k === i ? { ...m, ...patch } : m)); };
+  const onDeleteMarker = (id) => { const i = markIdx(id); if (i >= 0) setMarks(ms => ms.filter((_, k) => k !== i)); };
+  // Signing your own document: the box follows YOUR signature's shape, so the
+  // stamp fills it exactly and there is nothing to drag.
+  const boxSpec = tool === "date"
+    ? { heightMm: DATE_HEIGHT_MM, aspect: DATE_ASPECT }
+    : { heightMm: SIGNATURE_HEIGHTS_MM[getPreset()], aspect: (user?.signatureAspect > 0 ? user.signatureAspect : DEFAULT_SIGNATURE_ASPECT) };
+
+  const download = async () => {
+    setBusy(true);
+    try {
+      const url = await api.selfSignDocument({ file: file.blob, marks, rotation });
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${file.name.replace(/\.(pdf|xlsx|xls)$/i, "")}.signed.${isPdf ? "pdf" : "xlsx"}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      notify(`Signed ${isPdf ? "PDF" : "workbook"} downloaded`, "success");
+    } catch (e) { notify(e.message || "Could not sign the document", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const sigCount = marks.filter(m => m.type === "signature").length;
+  const dateCount = marks.filter(m => m.type === "date").length;
+
+  return (
+    <div>
+      <BackHeader back={back} title="Sign your documents" step={file ? file.name : "Upload a document"} />
+      <p className="text-sm opacity-60 mt-3 max-w-2xl">
+        Upload a PDF or Excel workbook, place your signature (and today's date on a PDF if you like), and download the signed copy — no approvals, nothing stored.
+      </p>
+
+      {!file ? (
+        <label className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
+          <Upload size={22} className="opacity-50" />
+          <div className="text-sm font-medium">Click to upload a PDF or Excel file</div>
+          <div className="text-xs opacity-50">PDF · XLSX — up to 14 MB</div>
+          <input type="file" accept=".pdf,.xlsx,.xls" className="hidden" onChange={handleFile} />
+        </label>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2 mt-5 mb-3 text-xs">
+            <span className="font-medium opacity-80 flex items-center gap-1"><Stamp size={13} style={{ color: "#3E8E5A" }} /> Place on the document:</span>
+            <button type="button" disabled={!user.hasSignature}
+              className={`text-xs ${tool === "signature" ? "btn-gold" : "btn-ghost"}`}
+              title={user.hasSignature ? "Every click-drag adds your signature" : "Register a signature first (top-right menu)"}
+              onClick={() => setTool("signature")}>
+              <PenTool size={12} /> My signature
+            </button>
+            {/* Dates are a floating text box — PDF only. On a sheet they'd have to
+                overwrite a cell, so Excel offers signatures alone. */}
+            {isPdf && (
+              <button type="button"
+                className={`text-xs ${tool === "date" ? "btn-gold" : "btn-ghost"}`}
+                onClick={() => setTool("date")}>
+                <Calendar size={12} /> Date ({todayDdMmYy})
+              </button>
+            )}
+            {marks.length > 0 && (
+              <span className="opacity-60">· {sigCount} signature{sigCount === 1 ? "" : "s"} + {dateCount} date{dateCount === 1 ? "" : "s"} placed
+                <button type="button" className="underline ml-2" onClick={() => setMarks([])}>clear all</button>
+              </span>
+            )}
+            <span className="flex-1" />
+            <button className="btn-ghost text-xs" onClick={() => { setFile(null); setMarks([]); }}>Change file</button>
+          </div>
+          {!user.hasSignature && (
+            <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+              {isPdf
+                ? "No registered signature yet — you can still place dates. To sign, add your signature from the top-right menu first."
+                : "No registered signature yet — add your signature from the top-right menu to sign this workbook."}
+            </div>
+          )}
+          <Suspense fallback={<ViewerFallback />}>
+            <DocPreview file={file} markers={markers} editable boxSpec={boxSpec}
+              onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker}
+              rotation={rotation} onRotate={() => setRotation(r => (r + 90) % 360)} />
+          </Suspense>
+          <div className="flex justify-end mt-4">
+            <button className="btn-primary" onClick={download} disabled={busy || marks.length === 0}
+              title={marks.length === 0 ? "Place your signature or a date first" : ""}>
+              <Download size={14} /> {busy ? "Signing…" : `Download signed ${isPdf ? "PDF" : "workbook"}`}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+//   MY WORKFLOWS — saved, reusable signing routes. A template stores the steps
+//   and signers only; each use attaches a fresh document and places the boxes.
+// ============================================================
+function MyWorkflows({ teams, notify, back, onUse }) {
+  const [templates, setTemplates] = useState(null);
+  const [editing, setEditing] = useState(null); // { id?, name, steps: [{teamId, signers: [userId]}] }
+  const [busy, setBusy] = useState(false);
+  const confirm = useConfirmation();
+  const load = () => api.listWorkflowTemplates().then(setTemplates).catch(e => notify(e.message || "Could not load workflows", "error"));
+  useEffect(() => { load(); }, []);
+
+  const remove = async (t) => {
+    const ok = await confirm({
+      title: `Delete "${t.name}"?`,
+      message: "Only the saved workflow is removed — requests already raised with it are untouched.",
+      confirmLabel: "Delete workflow", destructive: true
+    });
+    if (!ok) return;
+    try { await api.deleteWorkflowTemplate(t.id); notify("Workflow deleted", "success"); load(); }
+    catch (e) { notify(e.message, "error"); }
+  };
+  const startNew = () => setEditing({ name: "", steps: [{ teamId: "", signers: [] }] });
+  const startEdit = (t) => setEditing({ id: t.id, name: t.name, steps: t.steps.map(s => ({ teamId: s.teamId, signers: s.signers.map(g => g.userId) })) });
+  const save = async () => {
+    if (!editing.name.trim()) { notify("Give the workflow a name", "error"); return; }
+    if (!editing.steps.length || editing.steps.some(s => !s.teamId || s.signers.length === 0)) {
+      notify("Every step needs a team and at least one signer", "error"); return;
+    }
+    setBusy(true);
+    try {
+      if (editing.id) await api.updateWorkflowTemplate(editing.id, { name: editing.name.trim(), steps: editing.steps });
+      else await api.createWorkflowTemplate({ name: editing.name.trim(), steps: editing.steps });
+      notify(`"${editing.name.trim()}" saved`, "success");
+      setEditing(null); load();
+    } catch (e) { notify(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+  const patchStep = (i, patch) => setEditing(ed => ({ ...ed, steps: ed.steps.map((s, j) => j === i ? { ...s, ...patch } : s) }));
+
+  // ---- builder ----
+  if (editing) {
+    return (
+      <div>
+        <BackHeader back={() => setEditing(null)} title={editing.id ? "Edit workflow" : "New workflow"} step={`${editing.steps.length} step${editing.steps.length === 1 ? "" : "s"}`} />
+        <div className="max-w-2xl mt-6 space-y-4">
+          <div className="card p-4">
+            <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Workflow name</label>
+            <input type="text" value={editing.name} onChange={e => setEditing(ed => ({ ...ed, name: e.target.value }))}
+              className="w-full" maxLength={120} placeholder='e.g. "PO approval — Finance then Director"' autoFocus />
+          </div>
+          {editing.steps.map((st, si) => {
+            const team = teams.find(t => t.id === st.teamId);
+            const pool = teamSigners(team).filter(a => !st.signers.includes(a.id));
+            // Reorder within the step — signers sign in exactly this sequence.
+            const moveSigner = (from, to) => {
+              if (to < 0 || to >= st.signers.length) return;
+              const signers = [...st.signers];
+              const [m] = signers.splice(from, 1);
+              signers.splice(to, 0, m);
+              patchStep(si, { signers });
+            };
+            return (
+              <div key={si} className="card p-4" style={{ borderLeft: `3px solid ${STEP_COLORS[si % STEP_COLORS.length]}` }}>
+                <div className="flex items-center justify-between gap-2 mb-3 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <span className="font-mono text-[10px] opacity-50 shrink-0">Step {si + 1}</span>
+                    <select value={st.teamId} onChange={e => patchStep(si, { teamId: e.target.value, signers: [] })}
+                      className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
+                      <option value="">— team —</option>
+                      {/* Teams without a designated approver fall back to members. */}
+                      {teams.map(t => {
+                        const n = teamSigners(t).length;
+                        return <option key={t.id} value={t.id}>{t.name}{n === 0 ? " — no members yet" : ""}</option>;
+                      })}
+                    </select>
+                  </div>
+                  <button className="btn-ghost text-[10px] shrink-0" onClick={() => setEditing(ed => ({ ...ed, steps: ed.steps.filter((_, j) => j !== si) }))}><Trash2 size={10} /></button>
+                </div>
+                {team && (
+                  <>
+                    {!(team.approvers || []).length && (team.members || []).length > 0 && (
+                      <div className="text-[10px] mb-2 px-2 py-1 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "var(--c-sand)" }}>
+                        No approver designated — choosing from {team.name}'s {(team.members || []).length} member(s).
+                      </div>
+                    )}
+                    <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">Signing order</div>
+                    <div className="space-y-1.5 mb-2">
+                      {st.signers.map((uid2, gi) => {
+                        const u = teamSigners(team).find(a => a.id === uid2);
+                        return (
+                          <div key={gi} className="flex items-center gap-2 px-2 py-1.5 rounded min-w-0" style={{ backgroundColor: "rgba(15,26,46,.05)" }}>
+                            <span className="text-[9px] font-semibold shrink-0 px-1.5 py-0.5 rounded"
+                              style={{ backgroundColor: `${STEP_COLORS[si % STEP_COLORS.length]}22`, color: STEP_COLORS[si % STEP_COLORS.length] }}>{ord(gi + 1)}</span>
+                            <span className="text-sm truncate min-w-0 flex-1" title={u?.name || ""}>{u?.name || "(removed)"}</span>
+                            {u && !u.hasSignature && <span className="pill pill-rejected text-[9px] shrink-0">no signature</span>}
+                            {st.signers.length > 1 && (
+                              <span className="flex items-center shrink-0">
+                                <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign earlier" disabled={gi === 0}
+                                  onClick={() => moveSigner(gi, gi - 1)}><ChevronUp size={12} /></button>
+                                <button className="opacity-40 hover:opacity-100 disabled:opacity-15" title="Sign later" disabled={gi === st.signers.length - 1}
+                                  onClick={() => moveSigner(gi, gi + 1)}><ChevronDown size={12} /></button>
+                              </span>
+                            )}
+                            <button className="opacity-50 hover:opacity-100 shrink-0" onClick={() => patchStep(si, { signers: st.signers.filter((_, k) => k !== gi) })}><X size={10} /></button>
+                          </div>
+                        );
+                      })}
+                      {st.signers.length === 0 && <span className="text-xs opacity-50 italic">No signers yet</span>}
+                    </div>
+                    {pool.length > 0 ? (
+                      <select value="" onChange={e => { if (e.target.value) patchStep(si, { signers: [...st.signers, e.target.value] }); }}
+                        className="text-xs w-full min-w-0" style={{ maxWidth: 320 }}>
+                        <option value="">+ Add signer{st.signers.length ? ` (signs ${ord(st.signers.length + 1)})` : ""}…</option>
+                        {pool.map(a => <option key={a.id} value={a.id}>{a.name}{a.hasSignature ? "" : " (no signature yet)"}</option>)}
+                      </select>
+                    ) : <div className="text-[11px] opacity-50">Everyone in this team is already added.</div>}
+                  </>
+                )}
+              </div>
+            );
+          })}
+          <button className="btn-ghost w-full justify-center text-xs" onClick={() => setEditing(ed => ({ ...ed, steps: [...ed.steps, { teamId: "", signers: [] }] }))}><Plus size={11} /> Add step</button>
+          <div className="flex justify-end gap-3">
+            <button className="btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn-primary" onClick={save} disabled={busy}><Check size={14} /> {busy ? "Saving…" : "Save workflow"}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- list ----
+  return (
+    <div>
+      <BackHeader back={back} title="My Workflows" step={templates ? `${templates.length} saved` : "…"} />
+      <p className="text-sm opacity-60 mt-3 max-w-2xl">
+        Save a signing route once — the steps and the signers in order. To use it, attach a document and place each signer's boxes; everything else is already set.
+      </p>
+      <div className="flex justify-end mt-4 mb-4">
+        <button className="btn-primary" onClick={startNew}><Plus size={14} /> New workflow</button>
+      </div>
+      {!templates ? <div className="card p-8 text-sm opacity-50 text-center">Loading…</div>
+        : templates.length === 0 ? <Empty icon={GitBranch} text="No saved workflows yet — create your first, or save one while raising a request." />
+        : (
+          <div className="space-y-3">
+            {templates.map(t => {
+              const totalSigners = t.steps.reduce((n, s) => n + s.signers.length, 0);
+              return (
+                <div key={t.id} className="card p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{t.name}</div>
+                      <div className="text-xs opacity-60">{t.steps.length} step{t.steps.length === 1 ? "" : "s"} · {totalSigners} signer{totalSigners === 1 ? "" : "s"}</div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button className="btn-primary text-xs" disabled={!t.valid}
+                        title={t.valid ? "Attach a document to this workflow"
+                          : (t.steps.flatMap(s => [s.reason, ...s.signers.map(g => g.reason)]).filter(Boolean)[0]
+                             || "Something in this route needs fixing — edit it first")}
+                        onClick={() => onUse(t)}>
+                        <FilePlus size={12} /> Use with a document
+                      </button>
+                      <button className="btn-ghost text-xs" onClick={() => startEdit(t)}><Pencil size={12} /> Edit</button>
+                      <button className="btn-ghost text-xs" style={{ color: "var(--c-rust-deep)" }} onClick={() => remove(t)}><Trash2 size={12} /></button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    {t.steps.map((s, i) => (
+                      <span key={i} className="inline-flex items-center gap-1">
+                        {i > 0 && <ArrowRight size={10} className="opacity-40" />}
+                        <span className="pill" style={{ backgroundColor: `${STEP_COLORS[i % STEP_COLORS.length]}1A`, color: STEP_COLORS[i % STEP_COLORS.length] }}>
+                          {s.teamName}: {s.signers.map(g => g.name.split(" ")[0]).join(", ")}
+                        </span>
+                        {(!s.teamValid || s.signers.some(g => !g.valid)) && (
+                          <span className="pill" title={[s.reason, ...s.signers.map(g => g.reason)].filter(Boolean).join(" · ")}
+                            style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>
+                            {[s.reason, ...s.signers.map(g => g.reason)].filter(Boolean)[0] || "needs attention"}
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
   );
 }
 
@@ -347,66 +1062,112 @@ function RequestorView(props) {
   const { user, requests } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null); // pre-selected request type when opening NewRequest
+  const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
   const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
-  const approved = my.filter(r => r.status === "approved");
-  // Requests sent directly to me where it's my turn to sign (from the full list, not just my own).
-  const awaitingMySig = requests.filter(r => {
-    if (r.status !== "pending" || !r.workflow?.length) return false;
-    const active = r.workflow.find(s => s.status === "active");
-    const next = active?.signers?.find(s => s.status === "pending");
-    return next?.userId === user.id;
-  });
+  // Two separate lists: requests I RAISED that are approved, and documents I was
+  // asked to sign and signed (someone else's request).
+  const iSigned = r => iSignedInWorkflow(r, user.id);
+  const myApproved = my.filter(r => r.status === "approved");
+  const mySigned = requests.filter(r => r.status === "approved" && r.requestorId !== user.id && iSigned(r));
+  // Documents waiting on MY signature: workflow/direct steps where it's my turn,
+  // plus — when an admin has appointed me an approver for a team — that team's
+  // pending requests (authority, not role, confers the right to sign).
+  const awaitingMySig = requests.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
 
+  // Confidential is chosen via the checkbox inside the form (Section 00) —
+  // the up-front popup was removed at the owner's request (2026-08-12).
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
-  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
+  useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
 
-  if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+  if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
+    onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
+  if (tab === "selfsign") return <SelfSignDoc user={user} notify={props.notify} back={() => setTab("home")} />;
   if (tab === "awaiting-sig") return <AwaitingSignatureList {...props} back={() => setTab("home")} items={awaitingMySig} />;
   if (tab === "pending") return <PendingList {...props} back={() => setTab("home")} items={pending.concat(my.filter(r => r.status === "approved_pending"))} />;
-  if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={approved} />;
+  if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={myApproved} title="My approved requests" />;
+  if (tab === "signed") return <ApprovedList {...props} back={() => setTab("home")} items={mySigned} title="My signed documents" />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
 
+  const inWindow = my.filter(r => r.status === "approved_pending").length;
+  const rejectedCount = my.filter(r => r.status === "rejected").length;
   const tiles = [
-    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, mark a signature field, choose the signing team.", color: "var(--c-gold)" },
+    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
+    { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF or Excel file, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
-    { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + my.filter(r => r.status === "approved_pending").length },
-    { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Signed and finalised documents, ready to download.", badge: approved.length }
+    { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + inWindow },
+    { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
+    { key: "signed", icon: PenTool, title: "My signed documents", desc: "Documents sent to you that you have signed.", badge: mySigned.length }
   ];
 
   return (
     <div>
-      <Hero title={`Welcome back, ${user.name.split(" ")[0]}`} subtitle="What would you like to do today?" />
+      <Hero title={`Welcome back, ${greetName(user.name)}`}
+        subtitle={awaitingMySig.length
+          ? `${awaitingMySig.length} document${awaitingMySig.length === 1 ? "" : "s"} waiting for your signature.`
+          : pending.length
+            ? `${pending.length} of your request${pending.length === 1 ? " is" : "s are"} out for signature.`
+            : "What would you like to do today?"} />
 
-      {/* Quick Actions */}
-      <div className="mt-10">
-        <div className="flex items-baseline justify-between mb-4">
-          <h3 className="font-display text-2xl">Quick Actions</h3>
-          <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
+      <StatStrip stats={[
+        { label: "Awaiting me", value: awaitingMySig.length, onClick: () => setTab("awaiting-sig"), color: "var(--c-gold)" },
+        { label: "Pending", value: pending.length, onClick: () => setTab("pending") },
+        { label: "In 1h window", value: inWindow, onClick: () => setTab("pending"), color: "#8B4A14" },
+        { label: "Approved", value: myApproved.length, onClick: () => setTab("approved"), color: "var(--c-forest)" },
+        { label: "Rejected", value: rejectedCount, onClick: () => setTab("rejected"), color: "var(--c-rust)" },
+      ]} />
+
+      {/* Action-first: documents waiting for MY signature come before everything */}
+      {awaitingMySig.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-baseline justify-between mb-4">
+            <h3 className="font-display text-2xl">Awaiting your signature</h3>
+            {awaitingMySig.length > 3 && (
+              <button className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 underline" onClick={() => setTab("awaiting-sig")}>
+                See all {awaitingMySig.length}
+              </button>
+            )}
+          </div>
+          <div className="card overflow-hidden">
+            {awaitingMySig.slice(0, 3).map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={props.teams} users={props.users} i={i}
+                actions={<button className="btn-primary text-xs" onClick={() => setTab("awaiting-sig")}>Review &amp; sign <ArrowRight size={12} /></button>} />
+            ))}
+          </div>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {REQUEST_TYPES.map(t => (
-            <button key={t.key} onClick={() => openNew(t.key)}
-              className="card p-4 text-left tile-hover"
-              style={{ borderLeft: `4px solid ${t.color}` }}>
-              <div className="text-sm font-medium">{t.label}</div>
-              <div className="text-xs opacity-60 mt-1">{t.desc}</div>
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
-      {my.filter(r => r.status === "rejected").length > 0 && (
+      {rejectedCount > 0 && (
         <div className="mt-8">
           <button className="btn-ghost text-sm" onClick={() => setTab("rejected")}>
-            View rejected requests ({my.filter(r => r.status === "rejected").length})
+            View rejected requests ({rejectedCount})
           </button>
         </div>
       )}
       <RecentActivity my={my} teams={props.teams} />
+    </div>
+  );
+}
+
+// Compact glance-strip: one chip per status, tappable. Zero-value chips stay
+// visible but muted so the layout is stable day to day.
+function StatStrip({ stats }) {
+  return (
+    <div className="flex flex-wrap gap-2 sm:gap-3 mt-6">
+      {stats.map((s, i) => (
+        <button key={i} onClick={s.onClick}
+          className="card px-3 sm:px-4 py-2 flex items-baseline gap-2 tile-hover"
+          style={{ opacity: s.value ? 1 : 0.5 }}>
+          <span className="font-display text-xl sm:text-2xl" style={{ color: s.value ? (s.color || "var(--c-ink)") : undefined }}>{s.value}</span>
+          <span className="text-[10px] sm:text-xs tracking-wider uppercase opacity-60">{s.label}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -465,43 +1226,43 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
                       <Undo2 size={12} /> Withdraw
                     </button>
                   )}
-                  {r.hasSignedFile && <DownloadBtn req={r} />}
+                  {r.hasSignedFile && <DownloadBtn req={r} user={user} />}
                   {r.hasSignedFile && <PrintBtn req={r} />}
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
 
-function ApprovedList({ items, teams, users, back }) {
+function ApprovedList({ items, teams, users, user, back, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
-      <BackHeader back={back} title="Approved requests" step={`${items.length} signed`} />
-      {items.length === 0 ? <Empty icon={Archive} text="No approved requests yet." /> : (
+      <BackHeader back={back} title={title} step={`${items.length} signed`} />
+      {items.length === 0 ? <Empty icon={Archive} text={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`} /> : (
         <div className="card mt-8 overflow-hidden">
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
-                  <DownloadBtn req={r} />
+                  <DownloadBtn req={r} user={user} />
                   <PrintBtn req={r} />
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
 
-function RejectedList({ items, teams, users, back }) {
+function RejectedList({ items, teams, users, user, back }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -515,11 +1276,16 @@ function RejectedList({ items, teams, users, back }) {
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 </div>
               )}
-              subtitle={r.rejectReason && `Reason: ${r.rejectReason}`} />
+              subtitle={(r.rejectReason || r.hasRejectVoice) && (
+                <>
+                  {r.rejectReason && <div>Reason: {r.rejectReason}</div>}
+                  {r.hasRejectVoice && <VoiceNote requestId={r.id} />}
+                </>
+              )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -536,7 +1302,12 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
 
   if (!req.workflow || req.workflow.length === 0) {
     const out = [];
-    if (req.marker) out.push({ ...req.marker, page: req.marker.page || 1, label: "SIGN HERE" });
+    // marker_json may hold one box (legacy) or an array (multi-sign approver)
+    const markerList = Array.isArray(req.marker) ? req.marker : (req.marker ? [req.marker] : []);
+    markerList.forEach((m, i) => out.push({
+      ...m, id: `approver-${i}`, page: m.page || 1,
+      label: markerList.length > 1 ? `SIGN HERE #${i + 1}` : "SIGN HERE"
+    }));
     (req.signerDateFields || []).forEach((d, i) => out.push(dateMark(d, `s-${i}`, req.approvedAt)));
     return out;
   }
@@ -544,25 +1315,35 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
   req.workflow.forEach((step, si) => {
     const team = teams.find(t => t.id === step.teamId);
     step.signers.forEach((s, gi) => {
-      out.push({
-        id: s.id || `s${si}-${gi}`,
-        page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h,
+      // A signer may have several signature boxes (multi-box). Hydration always
+      // provides `boxes`; fall back to the single legacy marker just in case.
+      const boxes = (s.boxes && s.boxes.length) ? s.boxes : [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
+      boxes.forEach((b, bi) => out.push({
+        id: `${s.id || `s${si}-${gi}`}-b${bi}`,
+        page: b.page || 1, x: b.x, y: b.y, w: b.w, h: b.h,
         color: STEP_COLORS[si % STEP_COLORS.length],
-        label: `${step.order}.${s.order} ${s.userName}${team ? ` · ${team.name}` : ""}${s.status === "signed" ? " ✓" : ""}`,
+        label: `${step.order}.${s.order} ${s.userName}${boxes.length > 1 ? ` #${bi + 1}` : ""}${team ? ` · ${team.name}` : ""}${s.status === "signed" ? " ✓" : ""}`,
         highlight: highlightUserId && s.userId === highlightUserId && s.status === "pending"
-      });
+      }));
       (s.dateFields || []).forEach((d, fi) => out.push(dateMark(d, `${si}-${gi}-${fi}`, s.status === "signed" ? s.signedAt : null)));
     });
   });
   return out;
 }
 
-function PreviewDrawer({ req, onClose, users, teams }) {
+function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
+  // One scroller only: the drawer. The website scrollbar disappears while the
+  // drawer is open (the page scroller is <html>, so both elements are locked).
+  useScrollLock();
   const [leaveStyles, setLeaveStyles] = useState(null);
+  // Confidential documents load only after the viewer enters their code; once
+  // unlocked they stay open (the timed re-lock was removed at owner request).
+  const [locked, setLocked] = useState(!!req.confidential);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
+    if (locked) { setFile(null); return; }
     let url = null;
     (async () => {
       try {
@@ -573,10 +1354,14 @@ function PreviewDrawer({ req, onClose, users, teams }) {
         if (req.requestType === "leave" && req.fileType !== "pdf") {
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        if (e.needsUnlock) setLocked(true);
+        else console.error(e);
+      }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [req.id, req.hasSignedFile]);
+  }, [req.id, req.hasSignedFile, locked]);
+
 
   const markers = req.hasSignedFile ? [] : buildWorkflowMarkers(req, teams);
 
@@ -593,22 +1378,53 @@ function PreviewDrawer({ req, onClose, users, teams }) {
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 sm:mt-1 truncate">
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
+            {req.status === "approved" && req.finalizedAt && (
+              <div className="text-[10px] sm:text-xs mt-0.5 font-medium" style={{ color: "var(--c-forest)" }}>
+                Completed {fmt(req.finalizedAt)} IST
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0">
+            {req.confidential && <ConfidentialBadge />}
+            {/* Take the document away right here — the approved email deep-links
+                into this drawer, so the download mustn't require backing out to
+                hunt for the row in a list. The buttons carry their own rules
+                (greyed inside the 1-hour window; confidential = requestor only,
+                once fully signed, and only while unlocked). */}
+            {!locked && <DownloadBtn req={req} user={user} />}
+            {!locked && <PrintBtn req={req} />}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
         </div>
         <div className="p-4 sm:p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
-          {file ? (
+          {locked ? (
+            <div className="card p-8 text-center">
+              <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
+              <div className="text-sm font-medium">This document is locked</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view it.</div>
+            </div>
+          ) : file ? (
             <Suspense fallback={<ViewerFallback />}>
-              <DocPreview file={file} markers={markers} styleMap={leaveStyles} />
+              <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
           {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
+          {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
+            <div className="mt-4 card p-4 text-sm" style={{ borderLeft: "3px solid var(--c-rust)" }}>
+              <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Rejection</div>
+              {req.rejectReason && <div>{req.rejectReason}</div>}
+              {req.hasRejectVoice && <VoiceNote requestId={req.id} />}
+            </div>
+          )}
         </div>
       </div>
+      {locked && (
+        <UnlockModal requestId={req.id}
+          onUnlocked={() => setLocked(false)}
+          onCancel={onClose} />
+      )}
     </div>
   );
 }
@@ -618,13 +1434,19 @@ function PreviewDrawer({ req, onClose, users, teams }) {
 //   APPROVER VIEW
 // ============================================================
 function ApproverView(props) {
-  const { user, requests, teams } = props;
+  const { user, requests, teams, users, notify, approveRequest, rejectRequest, undoApproval } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null);
+  const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
+  // "Awaiting your approval" sits first on the home screen; this opens the
+  // review drawer for an item directly from there.
+  const [quickOpenId, setQuickOpenId] = useState(null);
+  // Confidential is chosen via the checkbox inside the form (Section 00) —
+  // the up-front popup was removed at the owner's request (2026-08-12).
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
-  useBackHandler(tab !== "home", () => { setNewType(null); setTab("home"); });
+  useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
-  const iSignedInWorkflow = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id && s.status === "signed"));
+  const iSigned = r => iSignedInWorkflow(r, user.id);
   // Requests routed to me to SIGN — never my own (I don't approve what I raised).
   const mine = requests.filter(r => {
     if (r.requestorId === user.id) return false;
@@ -636,50 +1458,81 @@ function ApproverView(props) {
   // Requests I raised myself, to track.
   const myRequests = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length;
-  const pending = mine.filter(r => r.status === "pending");
-  const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSignedInWorkflow(r)));
-  const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSignedInWorkflow(r)));
-  const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSignedInWorkflow(r)));
+  // Only what I can act on NOW. Being on the route isn't enough — a request I've
+  // already signed, or one sitting with an earlier signer, is not my pending work.
+  const pending = mine.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
+  // On the route, still open, but waiting on somebody else.
+  const waitingOnOthers = mine.filter(r => r.status === "pending" && !isMyTurn(r, user.id, user.signingAuthorityTeams));
+  const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSigned(r)));
+  const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSigned(r)));
+  const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSigned(r)));
 
-  if (tab === "new") return <NewRequest {...props} defaultType={newType} onDone={() => { setNewType(null); setTab("home"); }} />;
+  if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
+    onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;
+  if (tab === "workflows") return <MyWorkflows {...props} back={() => setTab("home")}
+    onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
+  if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
   if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
-  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} back={() => setTab("home")} />;
+  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} waiting={waitingOnOthers} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
 
   const tiles = [
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
+    { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
+    { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
+    { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF or Excel file, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },
     { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length }
   ];
+  const quickOpen = pending.concat(pendingApproved).find(r => r.id === quickOpenId);
   return (
     <div>
-      <Hero title={`Good day, ${user.name.split(" ")[0]}`} subtitle="Review documents routed to you — or raise a request of your own." />
+      <Hero title={`Good day, ${greetName(user.name)}`}
+        subtitle={pending.length
+          ? `${pending.length} document${pending.length === 1 ? "" : "s"} awaiting your approval.`
+          : "Review documents routed to you — or raise a request of your own."} />
 
-      {/* Quick Actions — raise your own request for signature */}
-      <div className="mt-10">
+      <StatStrip stats={[
+        { label: "Awaiting me", value: pending.length, onClick: () => setTab("pending"), color: "var(--c-gold)" },
+        { label: "In 1h window", value: pendingApproved.length, onClick: () => setTab("pending"), color: "#8B4A14" },
+        { label: "Approved", value: approved.length, onClick: () => setTab("approved"), color: "var(--c-forest)" },
+        { label: "Rejected", value: rejected.length, onClick: () => setTab("rejected"), color: "var(--c-rust)" },
+        { label: "My requests", value: myOpen, onClick: () => setTab("my-requests") },
+      ]} />
+
+      {/* Awaiting your approval — FIRST, so what needs action is never buried */}
+      <div className="mt-8">
         <div className="flex items-baseline justify-between mb-4">
-          <h3 className="font-display text-2xl">Quick Actions</h3>
-          <div className="text-xs tracking-wider uppercase opacity-50">Start a request by type</div>
-        </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {REQUEST_TYPES.map(t => (
-            <button key={t.key} onClick={() => openNew(t.key)}
-              className="card p-4 text-left tile-hover"
-              style={{ borderLeft: `4px solid ${t.color}` }}>
-              <div className="text-sm font-medium">{t.label}</div>
-              <div className="text-xs opacity-60 mt-1">{t.desc}</div>
+          <h3 className="font-display text-2xl">Awaiting your approval</h3>
+          {pending.length > 0 && (
+            <button className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 underline" onClick={() => setTab("pending")}>
+              See all {pending.length + pendingApproved.length}
             </button>
-          ))}
+          )}
         </div>
+        {pending.length === 0 ? (
+          <div className="card p-5 text-sm opacity-50 flex items-center gap-2"><CheckCircle size={15} /> Nothing waiting — you're all caught up.</div>
+        ) : (
+          <div className="card overflow-hidden">
+            {pending.slice(0, 5).map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
+                actions={<button className="btn-primary text-xs" onClick={() => setQuickOpenId(r.id)}>Review &amp; sign <ArrowRight size={12} /></button>} />
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mt-8 sm:mt-10">
-        {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
+        {tiles.map(t => <Tile key={t.key} {...t} onClick={() => t.key === "new" ? openNew(null) : setTab(t.key)} />)}
       </div>
+
+      {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setQuickOpenId(null)} notify={notify} />}
     </div>
   );
 }
@@ -713,26 +1566,18 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
   );
 }
 
-function ApproverPending({ items, user, users, teams, approveRequest, rejectRequest, undoApproval, refresh, back, notify }) {
+function ApproverPending({ items, waiting = [], user, users, teams, approveRequest, rejectRequest, undoApproval, refresh, back, notify }) {
   const [openId, setOpenId] = useState(null);
   const [filterType, setFilterType] = useState("all");
   const [selected, setSelected] = useState(() => new Set());
   const [batching, setBatching] = useState(false);
 
-  // Only "pending" rows (where I'm the next signer) are batch-approvable. approved_pending rows are excluded.
-  const isMyTurn = (r) => {
-    if (r.status !== "pending") return false;
-    if (r.workflow && r.workflow.length > 0) {
-      const active = r.workflow.find(s => s.status === "active");
-      const next = active?.signers.find(s => s.status === "pending");
-      return next?.userId === user.id;
-    }
-    // Legacy: any approver with authority for the team can claim it
-    return (user.signingAuthorityTeams || []).includes(r.targetTeamId);
-  };
+  // Only rows where I'm the next signer are batch-approvable; approved_pending
+  // rows (already signed, inside the 1-hour window) are excluded.
+  const myTurn = (r) => isMyTurn(r, user.id, user.signingAuthorityTeams);
 
   const visible = items.filter(r => filterType === "all" || (r.requestType || "general") === filterType);
-  const selectable = visible.filter(isMyTurn);
+  const selectable = visible.filter(myTurn);
   const allSelected = selectable.length > 0 && selectable.every(r => selected.has(r.id));
 
   const toggle = (id) => {
@@ -810,24 +1655,45 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
       {visible.length === 0 ? <Empty icon={Inbox} text={items.length === 0 ? "Nothing awaiting your approval." : "No requests of this type."} /> : (
         <div className="card mt-2 overflow-hidden">
           {visible.map((r, i) => {
-            const myTurn = isMyTurn(r);
+            const mine = myTurn(r);
             return (
               <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
-                {myTurn && (
+                {mine && (
                   <label className="pl-5 pr-2 cursor-pointer flex items-center" title="Select for batch approval">
                     <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
                   </label>
                 )}
-                {!myTurn && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
+                {!mine && <div className="pl-5 pr-2 opacity-30 text-xs">—</div>}
                 <div className="flex-1 min-w-0">
                   <RequestRow r={r} teams={teams} users={users} i={0}
-                    actions={<button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review <ArrowRight size={12} /></button>} />
+                    actions={r.status === "approved_pending" && r.approverId === user.id
+                      ? <button className="btn-danger text-xs" onClick={() => setOpenId(r.id)} title="Still inside your 1-hour window"><XCircle size={12} /> Reject / Withdraw</button>
+                      : <button className="btn-primary text-xs" onClick={() => setOpenId(r.id)}>Review <ArrowRight size={12} /></button>} />
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Documents I've already signed that have moved on to the next signer.
+          Kept visible so signing isn't a dead end — but out of the count above,
+          since none of it is mine to act on. */}
+      {waiting.length > 0 && (
+        <div className="mt-8">
+          <div className="text-xs tracking-widest uppercase opacity-50 mb-2">
+            Signed by you · waiting on others ({waiting.length})
+          </div>
+          <div className="card overflow-hidden" style={{ opacity: 0.75 }}>
+            {waiting.map((r, i) => (
+              <div key={r.id} className={i > 0 ? "border-t" : ""} style={{ borderColor: "var(--c-ink-08)" }}>
+                <RequestRow r={r} teams={teams} users={users} i={0} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
         onClose={() => setOpenId(null)} notify={notify} />}
@@ -835,17 +1701,157 @@ function ApproverPending({ items, user, users, teams, approveRequest, rejectRequ
   );
 }
 
+// Record a short voice note with the device microphone (MediaRecorder). The
+// browser picks a supported container (webm on desktop/Android, mp4 on iOS).
+// mm:ss for short recordings.
+const fmtClock = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// <audio> that self-heals bogus durations. MediaRecorder's WebM has no duration
+// metadata, so browsers show garbage (a 3s note reading as 14min). New notes are
+// patched at record time; this covers notes saved before the fix: when the
+// reported duration is Infinity/absurd, seeking to a huge time forces the
+// browser to resolve the real one.
+function FixedAudio({ src, style, className }) {
+  const ref = useRef(null);
+  const fixedRef = useRef(false);
+  useEffect(() => { fixedRef.current = false; }, [src]);
+  return (
+    <audio ref={ref} controls src={src} style={style} className={className}
+      onClick={e => e.stopPropagation()}
+      onLoadedMetadata={() => {
+        const a = ref.current;
+        if (!a || fixedRef.current) return;
+        if (!isFinite(a.duration) || a.duration > 6 * 3600) {
+          fixedRef.current = true;
+          const onTU = () => { a.removeEventListener("timeupdate", onTU); a.currentTime = 0; };
+          a.addEventListener("timeupdate", onTU);
+          a.currentTime = 1e7;
+        }
+      }} />
+  );
+}
+
+function VoiceRecorder({ value, onChange }) {
+  const [recording, setRecording] = useState(false);
+  const [err, setErr] = useState(null);
+  const [url, setUrl] = useState(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(null);
+  const recRef = useRef(null);
+  const chunksRef = useRef([]);
+  const startedAtRef = useRef(0);
+  const tickRef = useRef(null);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); if (tickRef.current) clearInterval(tickRef.current); }, [url]);
+
+  const start = async () => {
+    setErr(null);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        setErr("Voice recording isn't supported in this browser."); return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(m => MediaRecorder.isTypeSupported(m)) || "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        const durMs = Date.now() - startedAtRef.current;
+        let blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        stream.getTracks().forEach(t => t.stop());
+        // Embed the real duration into the WebM header — without it, players
+        // show nonsense lengths for MediaRecorder output.
+        if ((blob.type || "").includes("webm")) {
+          try {
+            const { default: fixWebmDuration } = await import("fix-webm-duration");
+            blob = await new Promise(res => { try { fixWebmDuration(blob, durMs, b => res(b || blob)); } catch { res(blob); } });
+          } catch { /* patching is best-effort — the FixedAudio fallback still covers playback */ }
+        }
+        setDurationMs(durMs);
+        onChange(blob);
+        setUrl(u => { if (u) URL.revokeObjectURL(u); return URL.createObjectURL(blob); });
+      };
+      recRef.current = rec;
+      startedAtRef.current = Date.now();
+      setElapsedMs(0);
+      if (tickRef.current) clearInterval(tickRef.current);
+      tickRef.current = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 500);
+      rec.start();
+      setRecording(true);
+    } catch {
+      setErr("Microphone unavailable — allow microphone access and try again.");
+    }
+  };
+  const stop = () => {
+    try { recRef.current?.stop(); } catch { /* ignore */ }
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    setRecording(false);
+  };
+  const clear = () => { onChange(null); setDurationMs(null); setUrl(u => { if (u) URL.revokeObjectURL(u); return null; }); };
+
+  return (
+    <div className="mb-4">
+      <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Voice note (optional)</div>
+      {!value && !recording && (
+        <button type="button" className="btn-ghost text-xs" onClick={start}>
+          <Mic size={13} /> Record a voice note
+        </button>
+      )}
+      {recording && (
+        <button type="button" className="btn-danger text-xs" onClick={stop}>
+          <Square size={12} /> Stop recording · <span className="font-mono">{fmtClock(elapsedMs)}</span>
+          <span className="inline-block w-2 h-2 rounded-full ml-1 anim-pulse" style={{ backgroundColor: "#fff" }} />
+        </button>
+      )}
+      {value && url && !recording && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <FixedAudio src={url} style={{ height: 32, maxWidth: 230 }} />
+          {durationMs != null && <span className="text-xs font-mono opacity-60">{fmtClock(durationMs)}</span>}
+          <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={clear}>Remove</button>
+          <button type="button" className="text-xs underline opacity-60 hover:opacity-100" onClick={() => { clear(); start(); }}>Re-record</button>
+        </div>
+      )}
+      {err && <div className="text-xs mt-1" style={{ color: "var(--c-rust-deep)" }}>{err}</div>}
+    </div>
+  );
+}
+
+// Plays a rejection's recorded voice note (fetched with auth → blob URL).
+function VoiceNote({ requestId }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let u = null, dead = false;
+    api.getRejectVoiceBlob(requestId)
+      .then(x => { if (dead) { URL.revokeObjectURL(x); return; } u = x; setUrl(x); })
+      .catch(() => {});
+    return () => { dead = true; if (u) URL.revokeObjectURL(u); };
+  }, [requestId]);
+  if (!url) return null;
+  return <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" />;
+}
+
 function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
+  // Same single-scroller rule as PreviewDrawer.
+  useScrollLock();
   const [leaveStyles, setLeaveStyles] = useState(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [voiceBlob, setVoiceBlob] = useState(null);
+  const [rejBusy, setRejBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
+  // Confidential documents need the code before they can be read — and the
+  // server refuses to APPROVE without a verified unlock too. Once unlocked the
+  // document stays open (the timed re-lock was removed at owner request).
+  const [locked, setLocked] = useState(!!req.confidential);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
+    if (locked) { setFile(null); return; }
     let url = null;
     (async () => {
       try {
@@ -856,10 +1862,40 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         if (req.requestType === "leave" && req.fileType !== "pdf") {
           fetch("/leave-template-styles.json").then(r => r.json()).then(setLeaveStyles).catch(() => {});
         }
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        if (e.needsUnlock) setLocked(true);
+        else console.error(e);
+      }
     })();
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [req.id, req.hasSignedFile]);
+  }, [req.id, req.hasSignedFile, locked]);
+
+
+  // ---- which of my signatures to stamp ----
+  // The default (or only) one is pre-selected; a picker appears only when the
+  // signer actually has a choice to make.
+  const [mySigs, setMySigs] = useState([]);
+  const [sigId, setSigId] = useState(null);
+  const [sigThumbs, setSigThumbs] = useState({});
+  useEffect(() => {
+    let dead = false;
+    const urls = [];
+    (async () => {
+      try {
+        const list = await api.mySignatures();
+        if (dead) return;
+        setMySigs(list);
+        setSigId((list.find(s => s.isDefault) || list[0])?.id || null);
+        const t = {};
+        for (const s of list) {
+          const u = await api.mySignatureBlob(s.id);
+          if (u) { t[s.id] = u; urls.push(u); }
+        }
+        if (!dead) setSigThumbs(t);
+      } catch { /* picker simply stays hidden */ }
+    })();
+    return () => { dead = true; urls.forEach(u => URL.revokeObjectURL(u)); };
+  }, []);
 
   const pendingApproved = req.status === "approved_pending";
 
@@ -868,22 +1904,28 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   let mySlot = null;
   let nextPendingUser = null;
   if (isWorkflow) {
-    const activeStep = req.workflow.find(s => s.status === "active");
-    if (activeStep) {
-      const next = activeStep.signers.find(s => s.status === "pending");
-      nextPendingUser = next;
-      if (next?.userId === user.id) mySlot = next;
-    }
+    nextPendingUser = nextPendingSigner(req);
+    if (nextPendingUser?.userId === user.id) mySlot = nextPendingUser;
   }
   const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
 
   const enterPreview = async () => {
     try {
-      const url = await api.getSignatureBlob(user.id);
+      // Preview with the CHOSEN signature, not blindly the default.
+      const url = (sigId && await api.mySignatureBlob(sigId)) || await api.getSignatureBlob(user.id);
       if (!url) { notify("Could not load your signature", "error"); return; }
       setSigUrl(url);
       setPreviewing(true);
     } catch { notify("Failed to load signature preview", "error"); }
+  };
+
+  // Switching signatures while previewing swaps the stamped image live.
+  const pickSignature = async (id) => {
+    setSigId(id);
+    if (previewing) {
+      const url = await api.mySignatureBlob(id);
+      if (url) setSigUrl(url);
+    }
   };
 
   // Markers: highlight my slot, hide already-applied ones (the signed PDF preview shows them in-place).
@@ -940,7 +1982,14 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            {canApprove && markers.length > 0 && (
+            {req.confidential && <ConfidentialBadge />}
+            {/* An approver can take the document away, read it properly, and come
+                back to sign later. DownloadBtn returns null for a confidential
+                request unless you raised it and it is fully signed — and the
+                server refuses the same download independently, so this is a
+                convenience, never the control. */}
+            {!locked && <DownloadBtn req={req} user={user} />}
+            {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
                 <ChevronDown size={13} /> <span className="hidden sm:inline">Go to signature</span>
@@ -954,16 +2003,31 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {/* ── Single scrollable body ── */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
-          {file ? (
+          {/* The requestor's note explains WHY they are asking, so it belongs
+              before the document rather than after it — an approver should read
+              the ask before they read the paperwork, not scroll past a document
+              to find out what they were looking for. */}
+          {req.note && (
+            <div className="card p-4 text-sm mb-4">
+              <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Note from {users.find(u => u.id === req.requestorId)?.name || "the requestor"}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
+            </div>
+          )}
+          {locked ? (
+            <div className="card p-8 text-center">
+              <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
+              <div className="text-sm font-medium">This document is locked</div>
+              <div className="text-xs opacity-60 mt-1">Enter the emailed code to view and sign it.</div>
+            </div>
+          ) : file ? (
             <Suspense fallback={<ViewerFallback />}>
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading…</div>}
-          {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
         </div>
 
         {/* ── Pinned action bar(s) ── */}
-        {canApprove && (
+        {canApprove && !locked && (
           <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3"
             style={{
               borderColor: "var(--c-ink-10)",
@@ -972,22 +2036,51 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             }}>
             {previewing ? (
               <>
-                <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
-                  <Eye size={13} />
-                  <span className="hidden sm:inline">Review how your signature will appear on the document.</span>
-                  <span className="sm:hidden">Preview your signature</span>
+                <div className="flex flex-col gap-2 min-w-0">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: "var(--c-forest)" }}>
+                    <Eye size={13} />
+                    <span className="hidden sm:inline">How should this be approved?</span>
+                    <span className="sm:hidden">Choose how to approve</span>
+                  </div>
+                  {/* Pick WHICH signature to stamp — shown only when there is an
+                      actual choice; a single signature is auto-selected. */}
+                  {mySigs.length > 1 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] tracking-wider uppercase opacity-50">Sign with</span>
+                      {mySigs.map(s => (
+                        <button key={s.id} type="button" onClick={() => pickSignature(s.id)}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs"
+                          title={s.isDefault ? `${s.label} (default)` : s.label}
+                          style={{
+                            border: sigId === s.id ? "2px solid var(--c-gold)" : "2px solid rgba(15,26,46,.15)",
+                            backgroundColor: sigId === s.id ? "rgba(184,137,74,.10)" : "transparent",
+                          }}>
+                          {sigThumbs[s.id] && <img src={sigThumbs[s.id]} alt="" style={{ height: 20, maxWidth: 56, objectFit: "contain" }} />}
+                          <span className="font-medium">{s.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="flex gap-2 sm:gap-3 shrink-0">
+                <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id); onClose(); }}><CheckCircle size={14} /> <span className="hidden sm:inline">Confirm </span>approval</button>
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId); onClose(); }}
+                    title="Sign and finalise the document immediately">
+                    <Zap size={14} /> Instant Approval
+                  </button>
+                  <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
+                    onClick={async () => { await approveRequest(req.id, false, sigId); onClose(); }}
+                    title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
+                    <Clock size={14} /> Enable 1hr Rejection Window
+                  </button>
                 </div>
               </>
             ) : (
               <>
                 <div className="text-xs opacity-60 hidden sm:block">
                   {isWorkflow
-                    ? <>Your signature will be stamped at the highlighted position.{req.instantApproval && " Document finalises immediately."}</>
-                    : <>Your signature will be stamped at the marked position.{req.instantApproval && " Document finalises immediately."}</>}
+                    ? "Your signature will be stamped at the highlighted position."
+                    : "Your signature will be stamped at the marked position."}
                 </div>
                 <div className="flex gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
@@ -1021,24 +2114,46 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
       </div>
 
       {rejectOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}>
-          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }}>
+        // stopPropagation is load-bearing: this modal lives inside the drawer's
+        // click-outside-to-close root, so without it every tap on the textarea
+        // bubbled up and closed the whole drawer (the "comments not working" bug).
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}
+          onClick={e => e.stopPropagation()}>
+          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
             <div className="font-display text-2xl mb-2">Reject request</div>
-            <div className="text-sm opacity-60 mb-4">Let the requestor know why.</div>
-            <textarea rows={4} value={reason} onChange={e => setReason(e.target.value)} className="w-full mb-4" placeholder="Reason (optional)" />
+            <div className="text-sm opacity-60 mb-4">Let the requestor know why — type it, record it, or both.</div>
+            <textarea rows={4} value={reason} onChange={e => setReason(e.target.value)} className="w-full mb-4" placeholder="Reason (optional)" autoFocus />
+            <VoiceRecorder value={voiceBlob} onChange={setVoiceBlob} />
             <div className="flex justify-end gap-3">
-              <button className="btn-ghost" onClick={() => setRejectOpen(false)}>Cancel</button>
-              <button className="btn-danger" onClick={async () => { await rejectRequest(req.id, reason); setRejectOpen(false); onClose(); }}>Reject</button>
+              <button className="btn-ghost" onClick={() => setRejectOpen(false)} disabled={rejBusy}>Cancel</button>
+              <button className="btn-danger" disabled={rejBusy}
+                onClick={async () => {
+                  setRejBusy(true);
+                  try { await rejectRequest(req.id, reason, voiceBlob); setRejectOpen(false); onClose(); }
+                  finally { setRejBusy(false); }
+                }}>
+                {rejBusy ? "Rejecting…" : "Reject"}
+              </button>
             </div>
           </div>
         </div>
+      )}
+      {locked && (
+        <UnlockModal requestId={req.id}
+          onUnlocked={() => setLocked(false)}
+          onCancel={onClose} />
       )}
     </div>
   );
 }
 
-function ApproverApproved({ items, back, users, teams }) {
+function ApproverApproved({ items, back, users, teams, user, approveRequest, rejectRequest, undoApproval, notify }) {
   const [open, setOpen] = useState(null);
+  // Items still inside MY 1-hour rejection window open the action drawer (with
+  // Reject / Withdraw) — not the read-only preview — so the option is never lost.
+  const [actId, setActId] = useState(null);
+  const act = items.find(r => r.id === actId);
+  const inMyWindow = r => r.status === "approved_pending" && r.approverId === user.id && !r.instantApproval;
   return (
     <div>
       <BackHeader back={back} title="Approved requests" step={`${items.length} signed`} />
@@ -1048,20 +2163,30 @@ function ApproverApproved({ items, back, users, teams }) {
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
-                  <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
-                  <DownloadBtn req={r} />
+                  {inMyWindow(r) ? (
+                    <button className="btn-danger text-xs" onClick={() => setActId(r.id)}
+                      title="Still inside your 1-hour window — reject or withdraw">
+                      <XCircle size={12} /> Reject / Withdraw
+                    </button>
+                  ) : (
+                    <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
+                  )}
+                  <DownloadBtn req={r} user={user} />
                   <PrintBtn req={r} />
                 </div>
               )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {act && <ApproveDrawer req={act} user={user} users={users} teams={teams}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        onClose={() => setActId(null)} notify={notify} />}
     </div>
   );
 }
 
-function ApproverRejected({ items, back, users, teams }) {
+function ApproverRejected({ items, back, users, teams, user }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -1071,11 +2196,16 @@ function ApproverRejected({ items, back, users, teams }) {
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={<button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>}
-              subtitle={r.rejectReason && `Reason: ${r.rejectReason}`} />
+              subtitle={(r.rejectReason || r.hasRejectVoice) && (
+                <>
+                  {r.rejectReason && <div>Reason: {r.rejectReason}</div>}
+                  {r.hasRejectVoice && <VoiceNote requestId={r.id} />}
+                </>
+              )} />
           ))}
         </div>
       )}
-      {open && <PreviewDrawer req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
   );
 }
@@ -1114,6 +2244,8 @@ function ApproverAuthority({ user, teams, back, users, requests }) {
 function AdminView(props) {
   const [tab, setTab] = useState("home");
   const [docsTeamId, setDocsTeamId] = useState(null); // when set, opens AdminDocuments pre-filtered to this team
+  const [dupCount, setDupCount] = useState(null); // count of likely-duplicate accounts, for the tile badge
+  useEffect(() => { api.listDuplicateUsers().then(p => setDupCount(p.length)).catch(() => {}); }, []);
   useBackHandler(tab !== "home", () => { setDocsTeamId(null); setTab("home"); });
   if (tab === "onboard") return <OnboardTeam {...props} back={() => setTab("home")} />;
   if (tab === "users") return <AdminUsers {...props} back={() => setTab("home")} />;
@@ -1128,6 +2260,7 @@ function AdminView(props) {
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
   if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
   if (tab === "password-resets") return <AdminPasswordResets {...props} back={() => setTab("home")} />;
+  if (tab === "duplicates") return <AdminDuplicates {...props} back={() => setTab("home")} />;
   // if (tab === "expenses") return <AdminExpenses {...props} back={() => setTab("home")} />; // DISABLED: expense feature commented out
 
   const { users, teams, requests, emails } = props;
@@ -1140,7 +2273,8 @@ function AdminView(props) {
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
     { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
-    { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." }
+    { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." },
+    { key: "duplicates", icon: Users, title: "Accounts review", desc: "oneAccess sign-ins + possible duplicate accounts.", badge: dupCount ?? undefined }
     // DISABLED: expense feature commented out — Expenses dashboard tile
     // { key: "expenses", icon: Wallet, title: "Expenses", desc: "Consolidated expense submissions, with repayment tracking." }
   ];
@@ -1149,6 +2283,225 @@ function AdminView(props) {
       <Hero title="Administration" subtitle="Everything the organisation needs to run SignFlow." />
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mt-8 sm:mt-10">
         {tiles.map(t => <Tile key={t.key} {...t} onClick={() => setTab(t.key)} />)}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+//   DUPLICATE ACCOUNTS — read-only detector (merge tool comes next)
+// ============================================================
+function AdminDuplicates({ back, notify }) {
+  const [pairs, setPairs] = useState(null);
+  const [oa, setOa] = useState(null);
+  const [cands, setCands] = useState(null);      // ITS-collision merge candidates
+  const [mergeTarget, setMergeTarget] = useState(null); // preview shown in the merge modal
+  const [err, setErr] = useState(null);
+  const reload = useCallback(() => {
+    api.listDuplicateUsers().then(setPairs).catch(e => setErr(e.message || "Could not load"));
+    api.oneAccessUsers().then(setOa).catch(() => {});
+    api.mergeCandidates().then(setCands).catch(() => {});
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  const oaWithDocs = oa ? oa.filter(u => u.raised + u.signed > 0) : [];
+  return (
+    <div>
+      <BackHeader back={back} title="Accounts review" step={oa ? `${oa.length} via oneAccess` : "…"} />
+
+      {/* who signs in via oneAccess + their document footprint */}
+      <div className="card p-4 mt-5">
+        <div className="flex items-baseline justify-between mb-1">
+          <div className="text-[10px] tracking-widest uppercase opacity-50">oneAccess sign-ins</div>
+          <div className="text-xs opacity-60">{oa ? `${oa.length} account${oa.length === 1 ? "" : "s"}` : "…"}</div>
+        </div>
+        {!oa ? <div className="text-sm opacity-50 py-2">Loading…</div>
+          : oa.length === 0 ? <div className="text-sm opacity-60 py-2">No one has signed in via oneAccess yet.</div>
+          : (
+            <>
+              <div className="text-xs opacity-70 mb-3">
+                <b>{oaWithDocs.length}</b> of these own or have signed documents (handle with care); the other <b>{oa.length - oaWithDocs.length}</b> have none and are safe to link or merge freely.
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs" style={{ borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr className="text-left opacity-50 uppercase tracking-wider text-[10px]">
+                      <th className="py-1 pr-3">Name</th><th className="py-1 pr-3">Email</th><th className="py-1 pr-3">ITS</th><th className="py-1 pr-3">Role</th><th className="py-1 pr-3 text-right">Raised</th><th className="py-1 text-right">Signed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {oa.map(u => (
+                      <tr key={u.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                        <td className="py-1.5 pr-3 font-medium">{u.name}</td>
+                        <td className="py-1.5 pr-3 font-mono opacity-70 truncate max-w-[220px]">{u.email}</td>
+                        <td className="py-1.5 pr-3 font-mono">{u.its_id || "—"}</td>
+                        <td className="py-1.5 pr-3">{u.role}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono" style={u.raised ? { color: "var(--c-gold-deep)", fontWeight: 600 } : { opacity: 0.4 }}>{u.raised}</td>
+                        <td className="py-1.5 text-right font-mono" style={u.signed ? { color: "var(--c-gold-deep)", fontWeight: 600 } : { opacity: 0.4 }}>{u.signed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+      </div>
+
+      {/* ITS collisions ready to merge — the actionable list */}
+      {cands && cands.length > 0 && (
+        <div className="mt-8">
+          <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Merge candidates · same ITS</div>
+          <p className="text-sm opacity-70 mb-3 max-w-2xl">
+            These accounts share an ITS number — the same person, two sign-ins. Merge each into the <b>@hqhb.in</b> account: its documents move over and the duplicate is deactivated (reversible).
+          </p>
+          <div className="space-y-3">
+            {cands.map((c, i) => {
+              const [a, b] = c.accounts;
+              return (
+                <div key={i} className="card p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-[10px] tracking-widest uppercase opacity-50">ITS <span className="font-mono">{c.its}</span></div>
+                    <button className="btn-primary text-xs" onClick={() => setMergeTarget({ ...c, its: c.its })}><GitMerge size={12} /> Review &amp; merge</button>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    {[a, b].map(u => {
+                      const keeper = c.survivorId === u.id;
+                      return (
+                        <div key={u.id} className="rounded p-3" style={{ backgroundColor: keeper ? "var(--c-gold-15)" : "rgba(15,26,46,.04)" }}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium text-sm truncate">{u.name}</div>
+                            {keeper && <span className="pill text-[9px]" style={{ backgroundColor: "var(--c-gold)", color: "#1a1a1a" }}>keeper</span>}
+                          </div>
+                          <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+                          <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+                            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.role}</span>
+                            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.authProvider}</span>
+                            {u.isHqhb && <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>@hqhb.in</span>}
+                          </div>
+                          <div className="text-[11px] opacity-70 mt-2">{u.footprint.raised} raised · {u.footprint.approved} approved · {u.footprint.signed} signed</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {c.ambiguous && <div className="text-[11px] mt-2" style={{ color: "var(--c-rust-deep)" }}>Neither address is @hqhb.in — you'll choose the keeper in the review.</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="text-[10px] tracking-widest uppercase opacity-50 mt-8 mb-1">Possible duplicates · by name</div>
+      <p className="text-sm opacity-70 mb-2 max-w-2xl">
+        Same person likely split across two accounts, matched by name (not yet linked by ITS). To line one up for a merge, open <b>Users</b> and add the ITS number to the <b>@hqhb.in</b> account — a matching account then appears under “Merge candidates” above.
+      </p>
+      {err && <div className="card p-4 mt-4 text-sm" style={{ color: "var(--c-rust)" }}>{err}</div>}
+      {!pairs ? (
+        <div className="card p-8 mt-6 text-sm opacity-50 text-center">Scanning accounts…</div>
+      ) : pairs.length === 0 ? (
+        <Empty icon={CheckCircle} text="No duplicate accounts found." />
+      ) : (
+        <div className="space-y-3 mt-6">
+          {pairs.map((p, i) => (
+            <div key={i} className="card p-4">
+              <div className="text-[10px] tracking-widest uppercase opacity-50 mb-3">
+                {p.reason}{p.crossProvider ? " · local + oneAccess" : ""}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {[p.a, p.b].map(u => (
+                  <div key={u.id} className="rounded p-3" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+                    <div className="font-medium text-sm truncate">{u.name}</div>
+                    <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+                    <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+                      <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>{u.role}</span>
+                      <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.auth_provider}</span>
+                      {u.its_id ? <span className="pill font-mono" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>ITS {u.its_id}</span>
+                                : <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>no ITS</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mergeTarget && (
+        <MergeReviewModal preview={mergeTarget} notify={notify}
+          onClose={() => setMergeTarget(null)} onDone={reload} />
+      )}
+    </div>
+  );
+}
+
+// Review + confirm merging two accounts that share an ITS. `preview` matches the
+// server's shape: { its?, survivorId, ambiguous, accounts: [a, b] }. The kept
+// account keeps its role + login; the other's documents move onto it and it is
+// then deactivated (reversible). Reused by the Users page (on an ITS collision)
+// and the Accounts-review "Merge candidates" list.
+function MergeReviewModal({ preview, onClose, onDone, notify }) {
+  const [a, b] = preview.accounts;
+  const [keepId, setKeepId] = useState(preview.survivorId || "");
+  const [busy, setBusy] = useState(false);
+  useEscapeKey(onClose);
+  const keeper = [a, b].find(x => x.id === keepId) || null;
+  const dupe = [a, b].find(x => x.id !== keepId) || null;
+
+  const confirmMerge = async () => {
+    if (!keeper || !dupe) { notify("Choose which account to keep", "error"); return; }
+    setBusy(true);
+    try {
+      const r = await api.mergeUsers(keeper.id, dupe.id);
+      const m = r.moved || {};
+      const n = (m.requestsRaised || 0) + (m.requestsApproved || 0) + (m.signerRows || 0) + (m.signingAuthorities || 0);
+      notify(`Merged into ${keeper.email} — ${n} record${n === 1 ? "" : "s"} moved, duplicate deactivated`, "success");
+      onDone?.(); onClose();
+    } catch (e) { notify(e.message || "Merge failed", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const Card = ({ u }) => {
+    const isKeeper = keepId === u.id;
+    return (
+      <button type="button" onClick={() => setKeepId(u.id)} className="text-left rounded-lg p-3 border transition"
+        style={{ borderColor: isKeeper ? "var(--c-gold)" : "var(--c-ink-10)", backgroundColor: isKeeper ? "var(--c-gold-15)" : "rgba(15,26,46,.03)" }}>
+        <div className="flex items-center justify-between gap-2 mb-0.5">
+          <div className="font-medium text-sm truncate">{u.name}</div>
+          {isKeeper
+            ? <span className="pill" style={{ backgroundColor: "var(--c-gold)", color: "#1a1a1a" }}>KEEP</span>
+            : <span className="pill" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>deactivate</span>}
+        </div>
+        <div className="text-xs font-mono opacity-60 truncate">{u.email}</div>
+        <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+          <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.role}</span>
+          <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{u.authProvider}</span>
+          {u.isHqhb && <span className="pill" style={{ backgroundColor: "var(--c-gold-15)", color: "var(--c-sand)" }}>@hqhb.in</span>}
+        </div>
+        <div className="text-[11px] opacity-70 mt-2">{u.footprint.raised} raised · {u.footprint.approved} approved · {u.footprint.signed} signed</div>
+      </button>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }} onClick={onClose}>
+      <div className="card p-6 max-w-lg w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+        <div className="font-display text-2xl mb-1">Merge duplicate accounts</div>
+        <div className="text-sm opacity-60 mb-4">
+          {preview.its ? <>Both accounts share ITS <span className="font-mono">{preview.its}</span>. </> : null}
+          The kept account keeps its role and password login; the other's documents move onto it, then it's deactivated. This can be undone.
+        </div>
+        {preview.ambiguous && (
+          <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>
+            Neither address is <b>@hqhb.in</b> — choose which account to keep.
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3 mb-1"><Card u={a} /><Card u={b} /></div>
+        <div className="text-[11px] opacity-50 mb-4">Tap a card to choose which account survives.</div>
+        <div className="flex justify-end gap-3">
+          <button className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-primary" onClick={confirmMerge} disabled={busy || !keeper}>
+            <GitMerge size={14} /> {busy ? "Merging…" : "Merge & deactivate duplicate"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1654,6 +3007,16 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   // Default is hidden — admins click the eye icon to reveal.
   const [revealedIds, setRevealedIds] = useState(() => new Set());
   const [refreshing, setRefreshing] = useState(false);
+  // Inline ITS editing + the merge-review modal that opens when a saved ITS
+  // collides with another active account.
+  const [editingItsId, setEditingItsId] = useState(null);
+  const [itsDraft, setItsDraft] = useState("");
+  const [mergePreview, setMergePreview] = useState(null);
+  // Inline email editing.
+  const [editingEmailId, setEditingEmailId] = useState(null);
+  const [emailDraft, setEmailDraft] = useState("");
+  // Role change — target user for the RoleChangeModal.
+  const [roleTarget, setRoleTarget] = useState(null);
   const confirm = useConfirmation();
 
   // Auto-refresh every 20 seconds while the admin is on this page. Keeps the
@@ -1696,6 +3059,18 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
   const add = async data => {
     try { await api.createUser(data); notify("User added", "success"); await saveUsers(); return true; }
     catch (e) { notify(e.message, "error"); return false; }
+  };
+
+  // Grant or revoke the high-contrast (inverted) display for one user. The
+  // feature is per-user by design; revoking also switches their screen back.
+  const toggleDarkAccess = async (u) => {
+    try {
+      await api.setDarkModeAccess(u.id, !u.darkModeAllowed);
+      notify(u.darkModeAllowed
+        ? `High-contrast display revoked for ${u.name}`
+        : `High-contrast display allowed for ${u.name} — they'll find the switch in their profile menu`, "success");
+      await saveUsers();
+    } catch (e) { notify(e.message, "error"); }
   };
   const remove = async (id, name) => {
     const ok = await confirm({
@@ -1748,6 +3123,75 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
     setResetTarget(null);
   };
 
+  // Set/clear a user's ITS. If the server reports another active account with the
+  // same ITS, open the merge-review modal so the admin can reconcile them.
+  const startEditIts = (u) => { setEditingItsId(u.id); setItsDraft(u.itsId || ""); };
+  const saveIts = async (u) => {
+    const val = itsDraft.trim();
+    try {
+      const r = await api.setUserItsId(u.id, val);
+      setEditingItsId(null);
+      await saveUsers();
+      if (r.collision) setMergePreview({ ...r.collision, its: val });
+      else notify(val ? "ITS saved" : "ITS cleared", "success");
+    } catch (e) { notify(e.message || "Could not save ITS", "error"); }
+  };
+  const reactivate = async (u) => {
+    try { await api.reactivateUser(u.id); notify("Account reactivated", "success"); await saveUsers(); }
+    catch (e) { notify(e.message || "Could not reactivate", "error"); }
+  };
+  // ITS display / inline editor — shared by the desktop table and mobile cards.
+  const renderIts = (u) => editingItsId === u.id ? (
+    <div className="flex items-center gap-1 mt-1">
+      <input autoFocus value={itsDraft} onChange={e => setItsDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") saveIts(u); else if (e.key === "Escape") setEditingItsId(null); }}
+        placeholder="ITS id" className="text-xs font-mono px-1.5 py-0.5 rounded border w-32" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }} />
+      <button className="opacity-60 hover:opacity-100" onClick={() => saveIts(u)} title="Save ITS"><Check size={12} /></button>
+      <button className="opacity-40 hover:opacity-100" onClick={() => setEditingItsId(null)} title="Cancel"><X size={12} /></button>
+    </div>
+  ) : (
+    <button onClick={() => startEditIts(u)} className="mt-1 inline-flex items-center gap-1 text-[10px] opacity-60 hover:opacity-100"
+      title="Set the ITS id used to match this person's oneAccess sign-in">
+      {u.itsId ? <span className="font-mono">ITS {u.itsId}</span> : <span style={{ color: "var(--c-gold-deep)" }}>+ Add ITS</span>}
+      <Pencil size={9} />
+    </button>
+  );
+
+  // Change a user's primary email (sign-in + all notifications).
+  const saveEmail = async (u) => {
+    const val = emailDraft.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val)) { notify("Enter a valid email address", "error"); return; }
+    try {
+      await api.setUserEmail(u.id, val);
+      setEditingEmailId(null);
+      await saveUsers();
+      notify("Email updated", "success");
+    } catch (e) { notify(e.message || "Could not update email", "error"); }
+  };
+  // Change a user's role — opens the RoleChangeModal (role cards + spelled-out
+  // side effects). A dialog is reliable everywhere the inline dropdown wasn't.
+  const renderRole = (u) => (
+    <span className="inline-flex items-center gap-1">
+      <span className="pill pill-pending">{u.role}</span>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setRoleTarget(u)} title="Change role"><Pencil size={10} /></button>
+    </span>
+  );
+
+  const renderEmail = (u) => editingEmailId === u.id ? (
+    <div className="flex items-center gap-1">
+      <input autoFocus type="email" value={emailDraft} onChange={e => setEmailDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") saveEmail(u); else if (e.key === "Escape") setEditingEmailId(null); }}
+        className="text-xs font-mono px-1.5 py-0.5 rounded border w-full min-w-0" style={{ borderColor: "var(--c-ink-10)", background: "var(--c-cream)" }} />
+      <button className="opacity-60 hover:opacity-100 shrink-0" onClick={() => saveEmail(u)} title="Save email"><Check size={12} /></button>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => setEditingEmailId(null)} title="Cancel"><X size={12} /></button>
+    </div>
+  ) : (
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="font-mono text-xs opacity-70 truncate">{u.email}</span>
+      <button className="opacity-40 hover:opacity-100 shrink-0" onClick={() => { setEditingEmailId(u.id); setEmailDraft(u.email); }} title="Edit email"><Pencil size={10} /></button>
+    </div>
+  );
+
   return (
     <div>
       <BackHeader back={back} title="Users" step={`${users.length} total · auto-refresh 20s`} />
@@ -1774,15 +3218,19 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         {users.map(u => {
           const revealed = revealedIds.has(u.id);
           return (
-          <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+          <div key={u.id} className="grid grid-cols-12 items-center px-5 py-3 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)", opacity: u.active === false ? 0.55 : 1 }}>
             <div className="col-span-3 font-medium flex items-center gap-2">
               {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} />}
-              {u.name}
+              <span className="truncate">{u.name}</span>
+              {u.active === false && <span className="pill text-[9px]" style={{ backgroundColor: "rgba(15,26,46,.08)" }}>merged</span>}
             </div>
-            <div className="col-span-3 font-mono text-xs opacity-70 truncate">{u.email}</div>
-            <div className="col-span-1"><span className="pill pill-pending">{u.role}</span></div>
+            <div className="col-span-3 min-w-0">
+              {renderEmail(u)}
+              {renderIts(u)}
+            </div>
+            <div className="col-span-1">{renderRole(u)}</div>
             <div className="col-span-2 text-xs opacity-70 truncate">
-              {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
+              {(u.role === "approver" || u.role === "executive") && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
               {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
               {u.role === "admin" && "—"}
             </div>
@@ -1804,21 +3252,35 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
               ) : <span className="text-xs opacity-40 italic">— not set —</span>}
             </div>
             <div className="col-span-1 text-right flex items-center justify-end gap-2">
-              {u.role !== "admin" && (
-                <button className="opacity-50 hover:opacity-100"
-                  onClick={() => sendInvite(u.id, u.name, u.email)}
-                  disabled={invitingId === u.id}
-                  title="Send / resend invite — generates a fresh password and emails it">
-                  {invitingId === u.id
-                    ? <span className="text-xs">…</span>
-                    : <Mail size={13} />}
-                </button>
+              {u.active === false ? (
+                <button className="opacity-60 hover:opacity-100" onClick={() => reactivate(u)}
+                  title="Reactivate — restore sign-in (migrated documents stay on the keeper)"><RotateCcw size={13} /></button>
+              ) : (
+                <>
+                  {u.role !== "admin" && (
+                    <button className="opacity-50 hover:opacity-100"
+                      onClick={() => sendInvite(u.id, u.name, u.email)}
+                      disabled={invitingId === u.id}
+                      title="Send / resend invite — generates a fresh password and emails it">
+                      {invitingId === u.id
+                        ? <span className="text-xs">…</span>
+                        : <Mail size={13} />}
+                    </button>
+                  )}
+                  <button className="opacity-50 hover:opacity-100"
+                    onClick={() => setResetTarget(u)}
+                    title="Reset password — choose a new password or auto-generate">
+                    <KeyRound size={13} />
+                  </button>
+                  <button className={u.darkModeAllowed ? "opacity-100" : "opacity-40 hover:opacity-100"}
+                    onClick={() => toggleDarkAccess(u)}
+                    title={u.darkModeAllowed
+                      ? "High-contrast display: ALLOWED — click to revoke"
+                      : "Allow the high-contrast (inverted) display for this user"}>
+                    <Moon size={13} style={u.darkModeAllowed ? { color: "var(--c-gold)" } : undefined} />
+                  </button>
+                </>
               )}
-              <button className="opacity-50 hover:opacity-100"
-                onClick={() => setResetTarget(u)}
-                title="Reset password — choose a new password or auto-generate">
-                <KeyRound size={13} />
-              </button>
               <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
             </div>
           </div>
@@ -1830,34 +3292,49 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
         {users.map(u => {
           const revealed = revealedIds.has(u.id);
           return (
-          <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
+          <div key={u.id} className="px-4 py-3 border-b" style={{ borderColor: "rgba(15,26,46,.06)", opacity: u.active === false ? 0.55 : 1 }}>
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 {u.hasSignature && <PenTool size={11} style={{ color: "var(--c-gold)" }} className="shrink-0" />}
                 <div className="font-medium text-sm truncate">{u.name}</div>
+                {u.active === false && <span className="pill text-[9px] shrink-0" style={{ backgroundColor: "rgba(15,26,46,.08)" }}>merged</span>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {u.role !== "admin" && (
-                  <button className="opacity-50 hover:opacity-100"
-                    onClick={() => sendInvite(u.id, u.name, u.email)}
-                    disabled={invitingId === u.id}
-                    title="Send / resend invite">
-                    {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
-                  </button>
+                {u.active === false ? (
+                  <button className="opacity-60 hover:opacity-100" onClick={() => reactivate(u)} title="Reactivate account"><RotateCcw size={13} /></button>
+                ) : (
+                  <>
+                    {u.role !== "admin" && (
+                      <button className="opacity-50 hover:opacity-100"
+                        onClick={() => sendInvite(u.id, u.name, u.email)}
+                        disabled={invitingId === u.id}
+                        title="Send / resend invite">
+                        {invitingId === u.id ? <span className="text-xs">…</span> : <Mail size={13} />}
+                      </button>
+                    )}
+                    <button className="opacity-50 hover:opacity-100"
+                      onClick={() => setResetTarget(u)}
+                      title="Reset password">
+                      <KeyRound size={13} />
+                    </button>
+                    <button className={u.darkModeAllowed ? "opacity-100" : "opacity-40 hover:opacity-100"}
+                      onClick={() => toggleDarkAccess(u)}
+                      title={u.darkModeAllowed ? "High-contrast display: ALLOWED — tap to revoke" : "Allow high-contrast display"}>
+                      <Moon size={13} style={u.darkModeAllowed ? { color: "var(--c-gold)" } : undefined} />
+                    </button>
+                  </>
                 )}
-                <button className="opacity-50 hover:opacity-100"
-                  onClick={() => setResetTarget(u)}
-                  title="Reset password">
-                  <KeyRound size={13} />
-                </button>
                 <button className="opacity-40 hover:opacity-100" onClick={() => remove(u.id, u.name)} title="Remove"><Trash2 size={13} /></button>
               </div>
             </div>
-            <div className="text-xs font-mono opacity-70 truncate mb-2">{u.email}</div>
+            <div className="mb-2">
+              {renderEmail(u)}
+              {renderIts(u)}
+            </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <span className="pill pill-pending">{u.role}</span>
+              {renderRole(u)}
               <span className="text-xs opacity-70">
-                {u.role === "approver" && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
+                {(u.role === "approver" || u.role === "executive") && ((u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ") || "—")}
                 {u.role === "requestor" && (teams.find(t => t.id === u.team)?.name || "—")}
                 {u.role === "admin" && "—"}
               </span>
@@ -1887,10 +3364,15 @@ function AdminUsers({ users, teams, saveUsers, back, notify }) {
           onSubmit={submitReset} />
       )}
       {adding && <OnboardUserWizard teams={teams} users={users} onCancel={() => setAdding(false)} onSave={async d => { const ok = await add(d); if (ok) setAdding(false); }} />}
+      {roleTarget && <RoleChangeModal target={roleTarget} notify={notify} onClose={() => setRoleTarget(null)} onSaved={saveUsers} />}
       {bulkOpen && <BulkUserModal teams={teams} onClose={() => setBulkOpen(false)} onImport={async rows => {
         try { const { imported } = await api.bulkCreateUsers(rows); notify(`Imported ${imported} user${imported === 1 ? "" : "s"}`, "success"); await saveUsers(); setBulkOpen(false); }
         catch (e) { notify(e.message, "error"); }
       }} />}
+      {mergePreview && (
+        <MergeReviewModal preview={mergePreview} notify={notify}
+          onClose={() => setMergePreview(null)} onDone={saveUsers} />
+      )}
     </div>
   );
 }
@@ -1935,11 +3417,25 @@ function BulkUserModal({ teams, onClose, onImport }) {
 
 function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDocuments }) {
   const [name, setName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const nameRef = useRef(null);
   const confirm = useConfirmation();
   const add = async () => {
-    if (!name.trim()) return;
-    try { await api.createTeam(name.trim()); setName(""); notify("Team added", "success"); await saveTeams(); }
-    catch (e) { notify(e.message, "error"); }
+    const clean = name.trim();
+    // Never fail silently: an empty box used to make this button a dead click.
+    if (!clean) { notify("Type a team name first", "info"); nameRef.current?.focus(); return; }
+    if (teams.some(t => t.name.trim().toLowerCase() === clean.toLowerCase())) {
+      notify(`"${clean}" already exists`, "error"); nameRef.current?.focus(); return;
+    }
+    setAdding(true);
+    try {
+      await api.createTeam(clean);
+      setName("");
+      await saveTeams();
+      notify(`Team "${clean}" added — assign members and approvers below`, "success");
+    }
+    catch (e) { notify(e.message || "Could not add the team", "error"); }
+    finally { setAdding(false); }
   };
   const remove = async (id, teamName) => {
     const ok = await confirm({
@@ -1956,8 +3452,13 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDo
     <div>
       <BackHeader back={back} title="Teams & authority" step={`${teams.length} teams`} />
       <div className="flex gap-3 mt-6 max-w-md">
-        <input placeholder="New team name" value={name} onChange={e => setName(e.target.value)} className="flex-1" />
-        <button className="btn-primary" onClick={add}><Plus size={14} /> Add team</button>
+        <input ref={nameRef} placeholder="New team name" value={name} disabled={adding}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") add(); }}
+          className="flex-1" maxLength={191} />
+        <button className="btn-primary shrink-0" onClick={add} disabled={adding}>
+          <Plus size={14} /> {adding ? "Adding…" : "Add team"}
+        </button>
       </div>
       {teams.length === 0 && (
         <div className="card p-10 text-sm opacity-60 text-center mt-8">
@@ -1983,22 +3484,30 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDo
 function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, notify }) {
   const [addApproverOpen, setAddApproverOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [approverQuery, setApproverQuery] = useState("");
+  const [memberQuery, setMemberQuery] = useState("");
   const [busy, setBusy] = useState(null); // userId currently being mutated
   const confirm = useConfirmation();
+  // Any-role pickers can be long (every user is eligible) — searchable by name/email.
+  const matches = (u, q) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return (u.name || "").toLowerCase().includes(s) || (u.email || "").toLowerCase().includes(s);
+  };
 
-  const approvers = users.filter(u => u.role === "approver" && (u.signingAuthorityTeams || []).includes(team.id));
+  // Anyone holding this team's signing authority is an approver for it —
+  // whatever their role. Authority is what confers the right to sign, so an
+  // admin can appoint a requestor, assistant or executive just the same.
+  const approvers = users.filter(u => (u.signingAuthorityTeams || []).includes(team.id));
   const members = users.filter(u => u.team === team.id);
 
-  // Eligible to grant approver authority on this team:
-  //   any approver not already authorised here
+  // Eligible to be appointed: any active user not already authorised here.
   const eligibleApprovers = users.filter(u =>
-    u.role === "approver" && !(u.signingAuthorityTeams || []).includes(team.id)
+    u.active !== false && !(u.signingAuthorityTeams || []).includes(team.id)
   );
-
-  // Eligible to assign as a department member:
-  //   any requestor not already in this team
+  // Eligible as a department member: any active user not already in this team.
   const eligibleMembers = users.filter(u =>
-    u.role === "requestor" && u.team !== team.id
+    u.active !== false && u.team !== team.id
   );
 
   const grant = async (userId) => {
@@ -2073,12 +3582,16 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
         ) : (
           <div className="space-y-1">
             {approvers.map(a => (
-              <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+              <div key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded text-sm min-w-0" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
                 {a.hasSignature
-                  ? <PenTool size={11} style={{ color: "var(--c-gold)" }} />
-                  : <PenTool size={11} className="opacity-30" />}
-                <span className="flex-1">{a.name}</span>
-                {!a.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
+                  ? <PenTool size={11} className="shrink-0" style={{ color: "var(--c-gold)" }} />
+                  : <PenTool size={11} className="opacity-30 shrink-0" />}
+                <span className="flex-1 truncate min-w-0" title={a.email}>{a.name}</span>
+                {a.role !== "approver" && (
+                  <span className="pill text-[9px] shrink-0" title="Appointed as an approver for this team"
+                    style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{ROLE_LABELS[a.role] || a.role}</span>
+                )}
+                {!a.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no sig</span>}
                 <button onClick={() => revoke(a.id, a.name)} disabled={busy === a.id}
                   className="opacity-40 hover:opacity-100 text-xs" title="Revoke authority">
                   {busy === a.id ? "…" : <X size={12} />}
@@ -2088,16 +3601,24 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addApproverOpen && eligibleApprovers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
-            {eligibleApprovers.map(u => (
-              <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
-                onClick={() => grant(u.id)} disabled={busy === u.id}>
-                <PenTool size={11} className={u.hasSignature ? "" : "opacity-30"} style={u.hasSignature ? { color: "var(--c-gold)" } : {}} />
-                <span className="flex-1">{u.name}</span>
-                {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no sig</span>}
-                <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
-              </button>
-            ))}
+          <div className="card p-2 mt-2" style={{ backgroundColor: "var(--c-paper)" }}>
+            <input autoFocus value={approverQuery} onChange={e => setApproverQuery(e.target.value)}
+              placeholder={`Search ${eligibleApprovers.length} users…`} className="w-full text-xs mb-2" />
+            <div className="max-h-48 overflow-auto">
+              {eligibleApprovers.filter(u => matches(u, approverQuery)).slice(0, 60).map(u => (
+                <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70 min-w-0"
+                  onClick={() => grant(u.id)} disabled={busy === u.id}>
+                  <PenTool size={11} className={`shrink-0 ${u.hasSignature ? "" : "opacity-30"}`} style={u.hasSignature ? { color: "var(--c-gold)" } : {}} />
+                  <span className="flex-1 truncate min-w-0" title={u.email}>{u.name}</span>
+                  <span className="pill text-[9px] shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{ROLE_LABELS[u.role] || u.role}</span>
+                  {!u.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no sig</span>}
+                  <span className="text-xs opacity-50 shrink-0">{busy === u.id ? "…" : "+"}</span>
+                </button>
+              ))}
+              {eligibleApprovers.filter(u => matches(u, approverQuery)).length === 0 && (
+                <div className="text-xs opacity-50 italic px-2 py-2">No users match "{approverQuery}".</div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -2129,19 +3650,26 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
           </div>
         )}
         {addMemberOpen && eligibleMembers.length > 0 && (
-          <div className="card p-2 mt-2 max-h-48 overflow-auto" style={{ backgroundColor: "var(--c-paper)" }}>
-            {eligibleMembers.map(u => {
-              const currentTeam = teams.find(t => t.id === u.team);
-              return (
-                <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70"
-                  onClick={() => assignMember(u.id)} disabled={busy === u.id}>
-                  <UserPlus size={11} className="opacity-50" />
-                  <span className="flex-1">{u.name}</span>
-                  {currentTeam && <span className="text-[10px] opacity-50">from {currentTeam.name}</span>}
-                  <span className="text-xs opacity-50">{busy === u.id ? "…" : "+"}</span>
-                </button>
-              );
-            })}
+          <div className="card p-2 mt-2" style={{ backgroundColor: "var(--c-paper)" }}>
+            <input autoFocus value={memberQuery} onChange={e => setMemberQuery(e.target.value)}
+              placeholder={`Search ${eligibleMembers.length} users…`} className="w-full text-xs mb-2" />
+            <div className="max-h-48 overflow-auto">
+              {eligibleMembers.filter(u => matches(u, memberQuery)).slice(0, 60).map(u => {
+                const currentTeam = teams.find(t => t.id === u.team);
+                return (
+                  <button key={u.id} className="w-full text-left px-2.5 py-1.5 text-sm flex items-center gap-2 hover:opacity-70 min-w-0"
+                    onClick={() => assignMember(u.id)} disabled={busy === u.id}>
+                    <UserPlus size={11} className="opacity-50 shrink-0" />
+                    <span className="flex-1 truncate min-w-0" title={u.email}>{u.name}</span>
+                    {currentTeam && <span className="text-[10px] opacity-50 shrink-0 truncate max-w-[90px]">from {currentTeam.name}</span>}
+                    <span className="text-xs opacity-50 shrink-0">{busy === u.id ? "…" : "+"}</span>
+                  </button>
+                );
+              })}
+              {eligibleMembers.filter(u => matches(u, memberQuery)).length === 0 && (
+                <div className="text-xs opacity-50 italic px-2 py-2">No users match "{memberQuery}".</div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -2250,7 +3778,7 @@ function BulkSignatureModal({ users, onClose, onDone }) {
   );
 }
 
-function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
+function AdminDocuments({ requests, users, teams, user, back, defaultTeamId }) {
   const [filter, setFilter] = useState("all");
   const [teamId, setTeamId] = useState(defaultTeamId || "all");
   const teamName = teamId === "all" ? "All teams" : (teams.find(t => t.id === teamId)?.name || "—");
@@ -2306,84 +3834,324 @@ function AdminDocuments({ requests, users, teams, back, defaultTeamId }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} /><PrintBtn req={r} /></div>} />
+              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} user={user} /><PrintBtn req={r} /></div>} />
           ))}
       </div>
     </div>
   );
 }
 
-function AdminReports({ requests, users, teams, back }) {
-  const byTeam = useMemo(() => teams.map(t => {
-    const rs = requests.filter(r => r.targetTeamId === t.id);
-    return {
-      team: t.name,
-      total: rs.length,
-      pending: rs.filter(r => r.status === "pending").length,
-      approved: rs.filter(r => r.status === "approved").length,
-      pending_finalise: rs.filter(r => r.status === "approved_pending").length,
-      rejected: rs.filter(r => r.status === "rejected").length
-    };
-  }), [requests, teams]);
+// Human duration: "2d 3h" / "5h 12m" / "45m" / "<1m".
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return "—";
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), rm = mins % 60;
+  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
 
-  const exportCsv = async () => {
-    try {
-      const url = await api.downloadReportCsv();
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `signflow-report-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch (e) { alert(e.message); }
+// Build a CSV from a header + rows (arrays of cells) and trigger a download.
+function downloadCsv(filename, header, rows) {
+  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [header, ...rows].map(r => r.map(esc).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+const REPORT_TABS = [
+  { key: "approver", label: "By approver" },
+  { key: "department", label: "By department" },
+  { key: "delays", label: "Approval delays" },
+  { key: "requestor", label: "By requestor" },
+];
+
+function AdminReports({ requests, users, teams, back }) {
+  const [reportType, setReportType] = useState("approver");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [approverId, setApproverId] = useState("");
+  const [deptTeamId, setDeptTeamId] = useState("");
+
+  // Date inputs are interpreted in the viewer's clock (IST for this app).
+  const from = fromDate ? new Date(fromDate + "T00:00:00").getTime() : null;
+  const to = toDate ? new Date(toDate + "T23:59:59.999").getTime() : null;
+  const pass = (ts) => {
+    if (from == null && to == null) return true;
+    if (ts == null) return false;
+    return (from == null || ts >= from) && (to == null || ts <= to);
   };
+  const teamName = (id) => teams.find(t => t.id === id)?.name || "—";
+  const userDept = (uid) => { const u = users.find(x => x.id === uid); return teams.find(t => t.id === u?.team)?.name || u?.department || "—"; };
+
+  // Every approval action — the direct team-approver OR each workflow signature —
+  // as one event per actor per request, with the time taken from raise to approve.
+  const approvalEvents = useMemo(() => {
+    const ev = [];
+    for (const r of requests) {
+      const hasWf = (r.workflow || []).some(s => s.signers.length);
+      if (hasWf) {
+        for (const st of r.workflow) for (const sg of st.signers) if (sg.status === "signed")
+          ev.push({ userId: sg.userId, userName: sg.userName, r, ts: sg.signedAt || null });
+      } else if (r.approverId && (r.status === "approved" || r.status === "approved_pending")) {
+        ev.push({ userId: r.approverId, userName: r.approverName, r, ts: r.approvedAt || r.finalizedAt || null });
+      }
+    }
+    return ev.map(e => ({ ...e, timeMs: (e.ts != null && e.r.createdAt != null) ? e.ts - e.r.createdAt : null }));
+  }, [requests]);
+
+  const approverOptions = useMemo(() => {
+    const seen = new Map();
+    for (const e of approvalEvents) if (e.userId && !seen.has(e.userId))
+      seen.set(e.userId, e.userName || users.find(u => u.id === e.userId)?.name || e.userId);
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [approvalEvents, users]);
+
+  const approverData = useMemo(() =>
+    approverId ? approvalEvents.filter(e => e.userId === approverId && pass(e.ts)).sort((a, b) => (b.ts || 0) - (a.ts || 0)) : [],
+    [approvalEvents, approverId, from, to]);
+  const approverAvg = useMemo(() => {
+    const t = approverData.map(e => e.timeMs).filter(v => v != null);
+    return t.length ? t.reduce((a, b) => a + b, 0) / t.length : null;
+  }, [approverData]);
+
+  const deptData = useMemo(() =>
+    deptTeamId ? requests.filter(r => r.targetTeamId === deptTeamId && pass(r.createdAt)).sort((a, b) => b.createdAt - a.createdAt) : [],
+    [requests, deptTeamId, from, to]);
+  const deptSummary = useMemo(() => ({
+    total: deptData.length,
+    approved: deptData.filter(r => r.status === "approved").length,
+    pending: deptData.filter(r => r.status === "pending" || r.status === "approved_pending").length,
+    rejected: deptData.filter(r => r.status === "rejected").length,
+    withdrawn: deptData.filter(r => r.status === "withdrawn").length,
+  }), [deptData]);
+
+  const delayData = useMemo(() => {
+    const map = new Map();
+    for (const e of approvalEvents) {
+      if (e.timeMs == null || !pass(e.ts)) continue;
+      if (!map.has(e.userId)) map.set(e.userId, { id: e.userId, name: e.userName || users.find(u => u.id === e.userId)?.name || "—", times: [] });
+      map.get(e.userId).times.push(e.timeMs);
+    }
+    return [...map.values()].map(a => {
+      const n = a.times.length, sum = a.times.reduce((x, y) => x + y, 0);
+      return { id: a.id, name: a.name, count: n, avg: sum / n, min: Math.min(...a.times), max: Math.max(...a.times) };
+    }).sort((x, y) => y.avg - x.avg);
+  }, [approvalEvents, users, from, to]);
+
+  const requestorData = useMemo(() => {
+    const map = new Map();
+    for (const r of requests) {
+      if (!pass(r.createdAt)) continue;
+      const id = r.requestorId;
+      if (!map.has(id)) map.set(id, { id, name: r.requestorName || users.find(u => u.id === id)?.name || "—", total: 0, approved: 0, pending: 0, rejected: 0 });
+      const m = map.get(id); m.total++;
+      if (r.status === "approved") m.approved++;
+      else if (r.status === "rejected") m.rejected++;
+      else m.pending++;
+    }
+    return [...map.values()].map(m => ({ ...m, dept: userDept(m.id) })).sort((a, b) => b.total - a.total);
+  }, [requests, users, teams, from, to]);
+
+  const activeData = reportType === "approver" ? approverData : reportType === "department" ? deptData : reportType === "delays" ? delayData : requestorData;
+  const rangeTag = `${fromDate || "start"}_${toDate || "today"}`;
+
+  const doDownload = () => {
+    if (reportType === "approver") {
+      const who = approverOptions.find(a => a.id === approverId)?.name || "approver";
+      downloadCsv(`approver-${who}-${rangeTag}.csv`,
+        ["File", "Requestor", "Approving team", "Type", "Status", "Submitted (IST)", "Approved (IST)", "Time taken"],
+        approverData.map(e => [e.r.fileName, e.r.requestorName || "", teamName(e.r.targetTeamId), requestTypeLabel(e.r.requestType), e.r.status, fmt(e.r.createdAt), e.ts ? fmt(e.ts) : "", fmtDur(e.timeMs)]));
+    } else if (reportType === "department") {
+      downloadCsv(`department-${teamName(deptTeamId)}-${rangeTag}.csv`,
+        ["File", "Requestor", "Type", "Status", "Submitted (IST)", "Completed (IST)"],
+        deptData.map(r => [r.fileName, r.requestorName || "", requestTypeLabel(r.requestType), r.status, fmt(r.createdAt), r.finalizedAt ? fmt(r.finalizedAt) : ""]));
+    } else if (reportType === "delays") {
+      downloadCsv(`approval-delays-${rangeTag}.csv`,
+        ["Approver", "Approved count", "Average time", "Fastest", "Slowest"],
+        delayData.map(a => [a.name, a.count, fmtDur(a.avg), fmtDur(a.min), fmtDur(a.max)]));
+    } else {
+      downloadCsv(`requestor-${rangeTag}.csv`,
+        ["Requestor", "Department", "Total", "Approved", "Pending", "Rejected"],
+        requestorData.map(m => [m.name, m.dept, m.total, m.approved, m.pending, m.rejected]));
+    }
+  };
+
+  const th = "px-3 sm:px-4 py-2 text-left text-[10px] uppercase tracking-wider opacity-50 whitespace-nowrap";
+  const td = "px-3 sm:px-4 py-2 whitespace-nowrap";
 
   return (
     <div>
-      <BackHeader back={back} title="Reports" step="Team-wise" />
-      <div className="flex justify-end mt-6 mb-4">
-        <button className="btn-primary" onClick={exportCsv}><Download size={14} /> Download full CSV</button>
-      </div>
-      <div className="card overflow-hidden">
-        <div className="grid grid-cols-6 text-[10px] tracking-wider uppercase opacity-50 px-5 py-3 border-b" style={{ borderColor: "var(--c-ink-08)" }}>
-          <div className="col-span-2">Team</div>
-          <div>Total</div><div>Pending</div><div>Approved</div><div>Rejected</div>
+      <BackHeader back={back} title="Reports" step={REPORT_TABS.find(t => t.key === reportType)?.label} />
+
+      <div className="card p-4 sm:p-5 mt-6">
+        <div className="flex flex-wrap gap-2 mb-4">
+          {REPORT_TABS.map(t => (
+            <button key={t.key} onClick={() => setReportType(t.key)}
+              className={`text-xs ${reportType === t.key ? "btn-primary" : "btn-ghost"}`}>{t.label}</button>
+          ))}
         </div>
-        {byTeam.map((b, i) => (
-          <div key={i} className="grid grid-cols-6 items-center px-5 py-4 border-b" style={{ borderColor: "rgba(15,26,46,.06)" }}>
-            <div className="col-span-2 font-medium">{b.team}</div>
-            <div className="font-display text-xl">{b.total}</div>
-            <div className="text-sm"><span className="font-mono">{b.pending}</span> <span className="opacity-40 text-xs">({b.pending_finalise} in window)</span></div>
-            <div className="text-sm font-mono" style={{ color: "var(--c-forest)" }}>{b.approved}</div>
-            <div className="text-sm font-mono" style={{ color: "var(--c-rust)" }}>{b.rejected}</div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">From</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="text-sm" style={{ minWidth: 140 }} />
           </div>
-        ))}
+          <div>
+            <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">To</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="text-sm" style={{ minWidth: 140 }} />
+          </div>
+          {(fromDate || toDate) && <button className="btn-ghost text-xs" onClick={() => { setFromDate(""); setToDate(""); }}>Clear</button>}
+          {reportType === "approver" && (
+            <div>
+              <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">Approver</label>
+              <select value={approverId} onChange={e => setApproverId(e.target.value)} className="text-sm" style={{ minWidth: 200 }}>
+                <option value="">Select approver…</option>
+                {approverOptions.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
+          )}
+          {reportType === "department" && (
+            <div>
+              <label className="block text-[10px] tracking-wider uppercase opacity-50 mb-1">Department (approving team)</label>
+              <select value={deptTeamId} onChange={e => setDeptTeamId(e.target.value)} className="text-sm" style={{ minWidth: 200 }}>
+                <option value="">Select department…</option>
+                {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="flex-1" />
+          <button className="btn-primary text-sm" onClick={doDownload} disabled={activeData.length === 0}>
+            <Download size={14} /> Download CSV
+          </button>
+        </div>
+        <div className="text-[11px] opacity-50 mt-2">
+          {(!fromDate && !toDate) ? "All dates · times shown in IST. Pick a range to narrow." : `${fromDate || "start"} → ${toDate || "today"} · times in IST`}
+        </div>
       </div>
 
-      {/* Top approvers */}
-      <div className="mt-10">
-        <div className="font-display text-2xl mb-4">Top approvers</div>
-        <div className="card overflow-hidden">
-          {users.filter(u => u.role === "approver").map((u, i) => {
-            const n = requests.filter(r => r.approverId === u.id && r.status === "approved").length;
-            const rej = requests.filter(r => r.approverId === u.id && r.status === "rejected").length;
-            return (
-              <div key={u.id} className={`px-5 py-4 flex items-center justify-between ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "rgba(15,26,46,.06)" }}>
-                <div className="flex items-center gap-3">
-                  {u.hasSignature ? <SignatureImage userId={u.id} height={28} maxWidth={80} /> : <PenTool size={14} className="opacity-30" />}
-                  <div>
-                    <div className="font-medium text-sm">{u.name}</div>
-                    <div className="text-xs opacity-60">{(u.signingAuthorityTeams || []).map(id => teams.find(t => t.id === id)?.name).filter(Boolean).join(", ")}</div>
-                  </div>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div><span className="font-display text-lg" style={{ color: "var(--c-forest)" }}>{n}</span> <span className="opacity-60 text-xs">approved</span></div>
-                  <div><span className="font-display text-lg" style={{ color: "var(--c-rust)" }}>{rej}</span> <span className="opacity-60 text-xs">rejected</span></div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* ---- By approver ---- */}
+      {reportType === "approver" && (
+        !approverId ? <Empty icon={BarChart3} text="Select an approver to list everything they've approved." />
+        : approverData.length === 0 ? <Empty icon={BarChart3} text="No approvals for this approver in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">{approverData.length} document{approverData.length === 1 ? "" : "s"} approved{approverAvg != null && <> · average <b>{fmtDur(approverAvg)}</b> to approve</>}</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["File", "Requestor", "Team", "Submitted", "Approved", "Time taken"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {approverData.map((e, i) => (
+                    <tr key={i} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{e.r.fileName}</td>
+                      <td className={`${td} opacity-70`}>{e.r.requestorName || "—"}</td>
+                      <td className={`${td} opacity-70`}>{teamName(e.r.targetTeamId)}</td>
+                      <td className={`${td} opacity-70`}>{fmt(e.r.createdAt)}</td>
+                      <td className={td}>{e.ts ? fmt(e.ts) : "—"}</td>
+                      <td className={`${td} font-medium`}>{fmtDur(e.timeMs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- By department (approving team) ---- */}
+      {reportType === "department" && (
+        !deptTeamId ? <Empty icon={BarChart3} text="Select a department to list the requests routed to it." />
+        : deptData.length === 0 ? <Empty icon={BarChart3} text="No requests for this department in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">
+              {deptSummary.total} request{deptSummary.total === 1 ? "" : "s"} ·
+              <span style={{ color: "var(--c-forest)" }}> {deptSummary.approved} approved</span> ·
+              <span> {deptSummary.pending} pending</span> ·
+              <span style={{ color: "var(--c-rust)" }}> {deptSummary.rejected} rejected</span>
+              {deptSummary.withdrawn > 0 && <span className="opacity-60"> · {deptSummary.withdrawn} withdrawn</span>}
+            </div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["File", "Requestor", "Type", "Status", "Submitted", "Completed"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {deptData.map((r, i) => (
+                    <tr key={i} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{r.fileName}</td>
+                      <td className={`${td} opacity-70`}>{r.requestorName || "—"}</td>
+                      <td className={`${td} opacity-70`}>{requestTypeLabel(r.requestType)}</td>
+                      <td className={td}><StatusPill status={r.status} /></td>
+                      <td className={`${td} opacity-70`}>{fmt(r.createdAt)}</td>
+                      <td className={`${td} opacity-70`}>{r.finalizedAt ? fmt(r.finalizedAt) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- Approval delays ---- */}
+      {reportType === "delays" && (
+        delayData.length === 0 ? <Empty icon={Clock} text="No approvals in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">Ranked slowest → fastest by average time from request to approval.</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["Approver", "Approved", "Average", "Fastest", "Slowest"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {delayData.map((a, i) => (
+                    <tr key={a.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`}>
+                        {a.name}
+                        {delayData.length > 1 && i === 0 && <span className="pill ml-2 text-[9px]" style={{ backgroundColor: "rgba(155,44,44,.10)", color: "var(--c-rust-deep)" }}>slowest</span>}
+                        {delayData.length > 1 && i === delayData.length - 1 && <span className="pill ml-2 text-[9px]" style={{ backgroundColor: "rgba(45,95,47,.10)", color: "var(--c-forest)" }}>fastest</span>}
+                      </td>
+                      <td className={`${td} font-mono`}>{a.count}</td>
+                      <td className={`${td} font-medium`}>{fmtDur(a.avg)}</td>
+                      <td className={td} style={{ color: "var(--c-forest)" }}>{fmtDur(a.min)}</td>
+                      <td className={td} style={{ color: "var(--c-rust)" }}>{fmtDur(a.max)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ---- By requestor ---- */}
+      {reportType === "requestor" && (
+        requestorData.length === 0 ? <Empty icon={BarChart3} text="No requests submitted in the selected range." />
+        : (
+          <>
+            <div className="text-sm opacity-70 mt-6 mb-2">{requestorData.length} requestor{requestorData.length === 1 ? "" : "s"} · {requestorData.reduce((n, m) => n + m.total, 0)} request{requestorData.reduce((n, m) => n + m.total, 0) === 1 ? "" : "s"} total.</div>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+                <thead><tr>{["Requestor", "Department", "Total", "Approved", "Pending", "Rejected"].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {requestorData.map(m => (
+                    <tr key={m.id} className="border-t" style={{ borderColor: "var(--c-ink-08)" }}>
+                      <td className={`${td} font-medium`}>{m.name}</td>
+                      <td className={`${td} opacity-70`}>{m.dept}</td>
+                      <td className={`${td} font-mono`}>{m.total}</td>
+                      <td className={`${td} font-mono`} style={{ color: "var(--c-forest)" }}>{m.approved}</td>
+                      <td className={`${td} font-mono`}>{m.pending}</td>
+                      <td className={`${td} font-mono`} style={{ color: "var(--c-rust)" }}>{m.rejected}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
     </div>
   );
 }

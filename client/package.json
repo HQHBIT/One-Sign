@@ -7,9 +7,13 @@
     "postinstall": "node -e \"require('fs').copyFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs','public/pdf.worker.min.js')\"",
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "prebuild": "npm run lint"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
+    "fix-webm-duration": "^1.0.6",
     "lucide-react": "^0.454.0",
     "pdfjs-dist": "^4.0.379",
     "react": "^18.3.1",
@@ -19,6 +23,9 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^17.9.0",
     "tailwindcss": "^4.0.0",
     "vite": "^5.4.10"
   }

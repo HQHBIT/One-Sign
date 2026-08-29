@@ -1,8 +1,20 @@
 import { Router } from "express";
+import { healthCheck as storageHealthCheck } from "../storage.js";
 import { query } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 
 const router = Router();
+
+// Object storage diagnostic. Does a real write / read-back / delete rather than
+// only pinging the bucket — credentials that can reach a bucket but not write to
+// it would otherwise look healthy right up until the first upload failed.
+// Admin-only: it names the endpoint and bucket, and reports whether credentials
+// are present. It never returns the secret itself.
+router.get("/storage-health", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    res.json(await storageHealthCheck());
+  } catch (e) { next(e); }
+});
 
 router.get("/emails", authRequired, requireRole("admin"), async (req, res, next) => {
   try {

@@ -3,7 +3,20 @@ import { Printer } from "lucide-react";
 import { api } from "../api.js";
 
 export function PrintBtn({ req }) {
+  // Printing produces a copy that leaves every control behind.
+  if (req.confidential) return null;
   const [busy, setBusy] = useState(false);
+  // Inside the 1-hour rejection window the document isn't final — the approver
+  // can still reject or withdraw — so printing is held until it completes.
+  if (req.status === "approved_pending") {
+    return (
+      <button className="btn-ghost text-xs" disabled aria-disabled="true"
+        title="Available once the 1-hour rejection window completes"
+        style={{ opacity: 0.35, cursor: "not-allowed" }}>
+        <Printer size={12} /> Print
+      </button>
+    );
+  }
   const print = async () => {
     setBusy(true);
     // Open the window SYNCHRONOUSLY before any await — this preserves the

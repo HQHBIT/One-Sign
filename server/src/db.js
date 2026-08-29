@@ -70,8 +70,9 @@ export async function initDb() {
   console.log(`[db] MySQL connected → ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}`);
 }
 
-async function tryExec(sql) {
-  try { await pool.query(sql); }
+// `params` is optional — DDL never needs it, but a seeding INSERT does.
+async function tryExec(sql, params) {
+  try { await pool.query(sql, params); }
   catch (e) {
     const code = e?.code || "";
     const ignorable = [
@@ -275,6 +276,9 @@ async function runSchema() {
   // Raw department string as sent by oneAccess (e.g. "IT"). Resolved to a team on
   // login; kept for audit + re-mapping. Locally-created users may leave it null.
   await tryExec(`ALTER TABLE users ADD COLUMN department VARCHAR(120) DEFAULT NULL`);
+  // oneAccess community identifiers (reference only — not used for routing).
+  await tryExec(`ALTER TABLE users ADD COLUMN jamaat VARCHAR(120) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN jamiaat VARCHAR(120) DEFAULT NULL`);
 
   // Allow user deletion: make user-referencing columns nullable + change FKs to ON DELETE SET NULL.
   // Each ALTER is independent and idempotent (tryExec swallows "duplicate"/"unknown FK" errors).
@@ -306,11 +310,282 @@ async function runSchema() {
   //  - per-signer date fields for direct / workflow requests (JSON [{page,x,y,w,h}])
   //  - the team-approver's date fields for the legacy single/team path (stored on the request)
   await tryExec(`ALTER TABLE request_step_signers ADD COLUMN date_fields_json TEXT NULL`);
+  // A signer may have MORE THAN ONE signature box on the document (multiple
+  // signatures from the same person). boxes_json holds the full list; the legacy
+  // marker_x/y/w/h columns keep the first box for back-compat. Null => single box.
+  await tryExec(`ALTER TABLE request_step_signers ADD COLUMN boxes_json TEXT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
 
   // Requestor can withdraw a still-pending request ('withdrawn' status + timestamp).
   await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn') NOT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
+
+  // Optional voice note recorded by the approver when rejecting.
+  await tryExec(`ALTER TABLE requests ADD COLUMN reject_voice_path VARCHAR(255) DEFAULT NULL`);
+
+  // Per-user toggle: receive workflow emails or not (in-app always arrives).
+  await tryExec(`ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) NOT NULL DEFAULT 1`);
+
+  // High-contrast (inverted) display for low-vision users. The ADMIN grants
+  // access per user (dark_mode_allowed); the user then flips it on or off
+  // (dark_mode_on), and the choice follows them across phone and web.
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_allowed TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_on TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE users ADD COLUMN dark_mode_variant VARCHAR(16) NOT NULL DEFAULT 'invert'`);
+
+  // A user may keep several signatures (e.g. official + initials), each with a
+  // label the approver picks from at signing time. users.signature_path stays
+  // the DEFAULT and is kept in sync, so every legacy path — stamping, previews,
+  // self-sign — keeps working unchanged; this table adds the named alternatives.
+  await tryExec(`CREATE TABLE IF NOT EXISTS user_signatures (
+    id         VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id    VARCHAR(64)  NOT NULL,
+    label      VARCHAR(60)  NOT NULL,
+    file_path  VARCHAR(255) NOT NULL,
+    aspect     DOUBLE       DEFAULT NULL,
+    is_default TINYINT(1)   NOT NULL DEFAULT 0,
+    created_at BIGINT       NOT NULL,
+    INDEX idx_us_user (user_id),
+    CONSTRAINT fk_us_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Signatures uploaded before background removal existed have their paper baked
+  // into the stored PNG, so they stamp as an opaque rectangle of someone's
+  // notebook. They are cleaned once, on their owner's next sign-in.
+  //   bg_cleaned    — processed (cleaned, or inspected and found already clean)
+  //   original_path — the pre-clean file, kept so the change is reversible
+  //   bg_cleaned_at — when it happened; with original_path this IS the audit trail
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN bg_cleaned TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN original_path VARCHAR(255) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE user_signatures ADD COLUMN bg_cleaned_at BIGINT DEFAULT NULL`);
+
+  // ---------- confidential documents ----------
+  // The file is stored encrypted (see confidential.js) and the IT Admin is
+  // locked out in code. Viewing needs a fresh emailed code and lasts 60s.
+  await tryExec(`ALTER TABLE requests ADD COLUMN confidential TINYINT(1) NOT NULL DEFAULT 0`);
+
+  // An issued unlock code and, once used, the short window it opened. The code
+  // itself is never stored — only its bcrypt hash.
+  await tryExec(`CREATE TABLE IF NOT EXISTS confidential_unlocks (
+    id              VARCHAR(64)  NOT NULL PRIMARY KEY,
+    request_id      VARCHAR(64)  NOT NULL,
+    user_id         VARCHAR(64)  NOT NULL,
+    code_hash       VARCHAR(255) NOT NULL,
+    issued_at       BIGINT       NOT NULL,
+    code_expires_at BIGINT       NOT NULL,
+    consumed_at     BIGINT       DEFAULT NULL,
+    window_ends_at  BIGINT       DEFAULT NULL,
+    attempts        INT          NOT NULL DEFAULT 0,
+    INDEX idx_cu_req_user (request_id, user_id),
+    CONSTRAINT fk_cu_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    CONSTRAINT fk_cu_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Who opened what, and when. Records the ACT of access only — never content.
+  await tryExec(`CREATE TABLE IF NOT EXISTS confidential_access_log (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    request_id VARCHAR(64) NOT NULL,
+    user_id    VARCHAR(64) NOT NULL,
+    action     VARCHAR(24) NOT NULL,
+    at         BIGINT      NOT NULL,
+    ip         VARCHAR(64) DEFAULT NULL,
+    INDEX idx_cal_request (request_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Saved workflow templates: a requestor's reusable routing (steps + signers).
+  // Box placements are per-document, so only the ROUTE is stored; the requestor
+  // attaches a document and places boxes each time they use it.
+  await tryExec(`CREATE TABLE IF NOT EXISTS workflow_templates (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    owner_id    VARCHAR(64)  NOT NULL,
+    name        VARCHAR(120) NOT NULL,
+    steps_json  TEXT         NOT NULL,
+    created_at  BIGINT       NOT NULL,
+    updated_at  BIGINT       NOT NULL,
+    INDEX idx_wft_owner (owner_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // In-app notification centre — one row per workflow event per recipient.
+  await tryExec(`CREATE TABLE IF NOT EXISTS notifications (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id     VARCHAR(64)  NOT NULL,
+    type        VARCHAR(32)  NOT NULL,
+    title       VARCHAR(255) NOT NULL,
+    body        VARCHAR(500) DEFAULT NULL,
+    request_id  VARCHAR(64)  DEFAULT NULL,
+    created_at  BIGINT       NOT NULL,
+    read_at     BIGINT       DEFAULT NULL,
+    INDEX idx_notifications_user (user_id, read_at),
+    INDEX idx_notifications_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // --- oneAccess identity reconciliation ------------------------------------
+  // A person can end up with a local @hqhb.in account AND a separate oneAccess
+  // account (different email). We reconcile by ITS: the @hqhb.in account is the
+  // keeper, the other's data is migrated onto it, then the duplicate is
+  // DEACTIVATED (reversible) — never hard-deleted. active=0 hides it from login
+  // and every picker; merged_into points at the survivor; user_merges records
+  // exactly what moved. secondary_email lets the surviving account still be
+  // found by the person's oneAccess (e.g. gmail) address without that address
+  // displacing their primary work email.
+  await tryExec(`ALTER TABLE users ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1`);
+  await tryExec(`ALTER TABLE users ADD COLUMN secondary_email VARCHAR(191) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN merged_into VARCHAR(64) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD COLUMN deactivated_at BIGINT DEFAULT NULL`);
+  await tryExec(`ALTER TABLE users ADD INDEX idx_users_secondary_email (secondary_email)`);
+
+  // oneAccess users confirm their WORK email on first sign-in — it becomes the
+  // primary address used for every notification. DEFAULT 1 grandfathers every
+  // existing account at add-time (they're never prompted); only brand-new
+  // oneAccess sign-ins are inserted with 0, which is what triggers the prompt.
+  await tryExec(`ALTER TABLE users ADD COLUMN work_email_set TINYINT(1) NOT NULL DEFAULT 1`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS user_merges (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    survivor_id    VARCHAR(64)  NOT NULL,
+    survivor_email VARCHAR(191) NOT NULL,
+    merged_id      VARCHAR(64)  NOT NULL,
+    merged_email   VARCHAR(191) NOT NULL,
+    its_id         VARCHAR(120) DEFAULT NULL,
+    moved_json     TEXT         NULL,
+    performed_by   VARCHAR(64)  DEFAULT NULL,
+    created_at     BIGINT       NOT NULL,
+    INDEX idx_user_merges_survivor (survivor_id),
+    INDEX idx_user_merges_merged (merged_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // oneAccess accounts are never admins — admin access is via the local
+  // email/password login only. Downgrade any oneAccess-provider admin (e.g. an SSO
+  // super-admin auto-promoted under the earlier rule) to requestor so it signs in
+  // as a normal user; the admin role stays on the local account (it@hqhb.in).
+  // Idempotent: updates 0 rows once none remain. Guarded so a transient error
+  // never blocks boot.
+  try { await pool.query("UPDATE users SET role = 'requestor' WHERE auth_provider = 'oneaccess' AND role = 'admin'"); }
+  catch { /* users table shape not ready on a brand-new schema — next boot applies it */ }
+
+  // Self-service password reset via a one-time email code (no admin approval).
+  await tryExec(`CREATE TABLE IF NOT EXISTS password_otps (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    email       VARCHAR(191) NOT NULL,
+    otp_hash    VARCHAR(255) NOT NULL,
+    expires_at  BIGINT       NOT NULL,
+    attempts    INT          NOT NULL DEFAULT 0,
+    used        TINYINT(1)   NOT NULL DEFAULT 0,
+    created_at  BIGINT       NOT NULL,
+    INDEX idx_password_otps_email (email)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // WebAuthn / passkeys — biometric sign-in on a trusted device. We store ONLY a
+  // public key + signature counter per enrolled device; never any biometric data.
+  await tryExec(`CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id      VARCHAR(64)  NOT NULL,
+    cred_id      VARCHAR(255) NOT NULL,
+    public_key   TEXT         NOT NULL,
+    counter      BIGINT       NOT NULL DEFAULT 0,
+    transports   VARCHAR(255) DEFAULT NULL,
+    device_label VARCHAR(120) DEFAULT NULL,
+    created_at   BIGINT       NOT NULL,
+    UNIQUE KEY uq_webauthn_cred (cred_id),
+    INDEX idx_webauthn_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    purpose     VARCHAR(16)  NOT NULL,
+    user_id     VARCHAR(64)  DEFAULT NULL,
+    challenge   VARCHAR(400) NOT NULL,
+    expires_at  BIGINT       NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // --- Executive Assistant ---------------------------------------------------
+  // Two new roles: 'executive' (a senior Approver — same signing/routing flow)
+  // and 'executive_assistant' (acts on behalf of one or more executives). The
+  // enum widening is additive: every existing role value stays valid, so a code
+  // revert leaves the column fine. executive_assistants maps an assistant to an
+  // executive and carries that link's delegation settings — can_approve (the
+  // executive's standing on/off switch) and signature_source (whose signature is
+  // stamped when the assistant signs). ON DELETE CASCADE cleans links when either
+  // user is removed.
+  await tryExec(`ALTER TABLE users MODIFY COLUMN role ENUM('admin','requestor','approver','executive','executive_assistant') NOT NULL`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS executive_assistants (
+    id               VARCHAR(64)  NOT NULL PRIMARY KEY,
+    executive_id     VARCHAR(64)  NOT NULL,
+    assistant_id     VARCHAR(64)  NOT NULL,
+    can_approve      TINYINT(1)   NOT NULL DEFAULT 0,
+    signature_source ENUM('executive','assistant') NOT NULL DEFAULT 'executive',
+    created_at       BIGINT       NOT NULL,
+    created_by       VARCHAR(64)  DEFAULT NULL,
+    UNIQUE KEY uq_exec_assistant (executive_id, assistant_id),
+    KEY idx_ea_assistant (assistant_id),
+    KEY idx_ea_executive (executive_id),
+    CONSTRAINT fk_ea_exec FOREIGN KEY (executive_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_asst FOREIGN KEY (assistant_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // When an assistant approves on behalf of an executive, the request records the
+  // executive as approver (their name/signature is on the document) AND the real
+  // actor here, for the audit trail. Nullable → normal approvals leave it NULL.
+  await tryExec(`ALTER TABLE requests ADD COLUMN acted_by_assistant_id VARCHAR(64) DEFAULT NULL`);
+  // Granular per-link rights the executive grants their assistant. Defaults keep
+  // prior behavior: viewing on, everything else opt-in.
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_view TINYINT(1) NOT NULL DEFAULT 1`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_update_signature TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_notify TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_dashboard TINYINT(1) NOT NULL DEFAULT 0`);
+
+  // ---------- organisations (multi-tenancy) ----------
+  // SignFlow serves more than one organisation. Each has its own people and its
+  // own login door; a member of one cannot sign in to another. The row id IS the
+  // URL slug — this table has a handful of rows that are referenced by name in
+  // URLs, so a separate opaque id would buy nothing.
+  await tryExec(`CREATE TABLE IF NOT EXISTS organisations (
+    id              VARCHAR(32)  NOT NULL PRIMARY KEY,
+    name            VARCHAR(120) NOT NULL,
+    logo_path       VARCHAR(255) DEFAULT NULL,
+    allow_oneaccess TINYINT(1)   NOT NULL DEFAULT 0,
+    allow_local     TINYINT(1)   NOT NULL DEFAULT 1,
+    active          TINYINT(1)   NOT NULL DEFAULT 1,
+    sort_order      INT          NOT NULL DEFAULT 0,
+    created_at      BIGINT       NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // allow_oneaccess is a per-organisation permission, not a guarantee: the login
+  // config endpoint ANDs it with oneAccessEnabled(), so an unconfigured server
+  // still offers only local login.
+  await tryExec(
+    `INSERT IGNORE INTO organisations (id, name, logo_path, allow_oneaccess, allow_local, active, sort_order, created_at)
+     VALUES ('hqhb', 'HQHB', '/org/hqhb.png', 1, 1, 1, 1, ?),
+            ('waqf', 'WAQF Department', '/org/waqf.png', 0, 1, 1, 2, ?)`,
+    [Date.now(), Date.now()]);
+
+  // Home organisation. DEFAULT 'hqhb' is a backstop only — every insert path sets
+  // it explicitly. Without a default, the many existing INSERTs that predate this
+  // column would start failing outright.
+  await tryExec(`ALTER TABLE users ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+  // A global user is selectable as an approver in OTHER organisations. It grants
+  // approval reach only — never the ability to sign in to, or browse, that space.
+  await tryExec(`ALTER TABLE users ADD COLUMN is_global TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE teams ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+  // Denormalised from the requestor: derivable by join, but every list query
+  // filters on it and the join is not worth paying each time.
+  await tryExec(`ALTER TABLE requests ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
+
+  // Everything that existed before this feature belongs to HQHB.
+  await tryExec(`UPDATE users    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+  await tryExec(`UPDATE teams    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+  await tryExec(`UPDATE requests SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
+
+  // A team name is unique WITHIN an organisation, not globally — otherwise only
+  // one of the two "IT" departments could exist. MySQL names the implicit index
+  // after the column, hence DROP INDEX `name`. Backfill above must come first, or
+  // the new key would be built over NULLs.
+  await tryExec(`ALTER TABLE teams DROP INDEX name`);
+  await tryExec(`ALTER TABLE teams ADD UNIQUE KEY uq_teams_org_name (org_id, name)`);
+
+  await tryExec(`ALTER TABLE users    ADD INDEX idx_users_org (org_id)`);
+  await tryExec(`ALTER TABLE users    ADD INDEX idx_users_global (is_global)`);
+  await tryExec(`ALTER TABLE requests ADD INDEX idx_requests_org (org_id)`);
+  await tryExec(`ALTER TABLE users    ADD CONSTRAINT fk_users_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
+  await tryExec(`ALTER TABLE teams    ADD CONSTRAINT fk_teams_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
+  await tryExec(`ALTER TABLE requests ADD CONSTRAINT fk_requests_org FOREIGN KEY (org_id) REFERENCES organisations(id)`);
 
   // DISABLED: expense feature commented out — description column migration
   // await tryExec(`ALTER TABLE expenses ADD COLUMN description VARCHAR(500) DEFAULT NULL`);
@@ -374,6 +649,33 @@ async function seedIfEmpty() {
 // ============================================================
 //   Hydrators — shape rows for the API
 // ============================================================
+// The organisations a user may choose between on the landing page. Ordered for
+// display; inactive ones are hidden rather than deleted so their data survives.
+export async function listOrganisations({ includeInactive = false } = {}) {
+  const rows = await query(
+    `SELECT * FROM organisations ${includeInactive ? "" : "WHERE active = 1"} ORDER BY sort_order ASC, name ASC`
+  );
+  return rows.map(shapeOrganisation);
+}
+
+export async function getOrganisation(id) {
+  const row = await queryOne("SELECT * FROM organisations WHERE id = ?", [String(id || "")]);
+  return row ? shapeOrganisation(row) : null;
+}
+
+function shapeOrganisation(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    logoPath: r.logo_path || null,
+    // A permission, not a promise: the login-config endpoint ANDs this with
+    // oneAccessEnabled() so an unconfigured server still offers local only.
+    allowOneAccess: !!Number(r.allow_oneaccess),
+    allowLocal: !!Number(r.allow_local),
+    active: !!Number(r.active)
+  };
+}
+
 export async function hydrateUser(row) {
   if (!row) return null;
   const [auth] = await pool.execute("SELECT team_id FROM signing_authority WHERE user_id = ?", [row.id]);
@@ -382,8 +684,29 @@ export async function hydrateUser(row) {
     email: row.email,
     name: row.name,
     role: row.role,
+    // Home organisation. Every non-admin query scopes to this; it is also what a
+    // login attempt is checked against, so a member of one organisation cannot
+    // sign in through another's door.
+    orgId: row.org_id || "hqhb",
+    // Selectable as an approver in OTHER organisations. Approval reach only — it
+    // grants no ability to sign in to, or browse, that organisation.
+    isGlobal: !!Number(row.is_global),
     team: row.team_id,
     department: row.department || null,
+    jamaat: row.jamaat || null,
+    jamiaat: row.jamiaat || null,
+    itsId: row.its_id || null,
+    secondaryEmail: row.secondary_email || null,
+    authProvider: row.auth_provider || "local",
+    active: row.active == null ? true : !!Number(row.active),
+    mergedInto: row.merged_into || null,
+    // True only for a brand-new oneAccess account that hasn't confirmed its work
+    // email yet — drives the one-time "enter your work email" prompt.
+    needsWorkEmail: (row.auth_provider === "oneaccess") && Number(row.work_email_set) === 0,
+    emailNotifications: row.email_notifications == null ? true : !!Number(row.email_notifications),
+    darkModeAllowed: !!Number(row.dark_mode_allowed),
+    darkModeOn: !!Number(row.dark_mode_allowed) && !!Number(row.dark_mode_on),
+    darkModeVariant: row.dark_mode_variant || "invert",
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
     signingAuthorityTeams: auth.map(r => r.team_id),
@@ -451,7 +774,12 @@ export async function hydrateRequest(row) {
       rotation: Number(s.rotation || 0),
       status: s.status,
       signedAt: s.signed_at ? Number(s.signed_at) : null,
-      dateFields: parseJsonArr(s.date_fields_json)
+      dateFields: parseJsonArr(s.date_fields_json),
+      // All signature boxes for this signer (multi-box). Falls back to the single
+      // legacy marker box so older requests hydrate unchanged.
+      boxes: (parseJsonArr(s.boxes_json).length
+        ? parseJsonArr(s.boxes_json)
+        : [{ page: s.page, x: Number(s.marker_x), y: Number(s.marker_y), w: Number(s.marker_w), h: Number(s.marker_h) }])
     }))
   }));
 
@@ -473,9 +801,13 @@ export async function hydrateRequest(row) {
     finalizedAt: row.finalized_at ? Number(row.finalized_at) : null,
     rejectedAt: row.rejected_at ? Number(row.rejected_at) : null,
     rejectReason: row.reject_reason,
-    hasSignedFile: !!row.signed_file_path,
+    hasRejectVoice: !!row.reject_voice_path,
+    // Excel requests signed before real .xlsx stamping existed point at a
+    // ".signed.json" manifest, not a document — those still serve the original.
+    hasSignedFile: !!row.signed_file_path && !/\.json$/i.test(row.signed_file_path),
     reminders: rems.map(r => Number(r.sent_at)),
     requestType: row.request_type || "general",
+    confidential: !!row.confidential,
     instantApproval: !!row.instant_approval,
     currentStep: Number(row.current_step || 0),
     workflow: stepsHydrated

@@ -65,3 +65,29 @@ export function useBackHandler(active, onBack) {
     };
   }, [active]);
 }
+
+// Locks the WEBSITE scroll while a full-screen drawer is open, so the only
+// scrollbar on screen is the drawer's own. The page scroller here is <html>,
+// not <body> — index.css sets overflow-x:hidden on html, which makes html the
+// viewport scroller, so a body-only lock leaves the website scrollbar alive.
+// Compensates for the vanished scrollbar's width so content doesn't jump.
+export function useScrollLock(active = true) {
+  useEffect(() => {
+    if (!active) return;
+    const html = document.documentElement, body = document.body;
+    const gutter = window.innerWidth - html.clientWidth;
+    const prev = {
+      htmlOverflow: html.style.overflow,
+      bodyOverflow: body.style.overflow,
+      bodyPad: body.style.paddingRight,
+    };
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    if (gutter > 0) body.style.paddingRight = gutter + "px";
+    return () => {
+      html.style.overflow = prev.htmlOverflow;
+      body.style.overflow = prev.bodyOverflow;
+      body.style.paddingRight = prev.bodyPad;
+    };
+  }, [active]);
+}

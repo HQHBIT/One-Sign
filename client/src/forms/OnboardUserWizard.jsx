@@ -8,7 +8,7 @@
 import { useState } from "react";
 import {
   X, Check, ArrowLeft, ArrowRight, UserPlus, Stamp, Shield, Building2,
-  Eye as EyeIcon, EyeOff
+  Briefcase, UserCog, Eye as EyeIcon, EyeOff
 } from "lucide-react";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
@@ -60,6 +60,8 @@ export function OnboardUserWizard({ teams, users, onCancel, onSave }) {
   const roleCards = [
     { key: "requestor", icon: UserPlus, label: "Requestor",  desc: "Submits documents for approval. Belongs to a single department." },
     { key: "approver",  icon: Stamp,    label: "Approver",   desc: "Signs documents. Can hold signing authority over multiple teams." },
+    { key: "executive", icon: Briefcase, label: "Executive", desc: "A senior signer. Signs like an approver and can have an assistant act on their behalf." },
+    { key: "executive_assistant", icon: UserCog, label: "Executive Assistant", desc: "Views and (when allowed) signs documents on behalf of one or more executives." },
     { key: "admin",     icon: Shield,   label: "Administrator", desc: "Full control of users, teams, signatures, and audit." }
   ];
 
@@ -149,7 +151,7 @@ export function OnboardUserWizard({ teams, users, onCancel, onSave }) {
           {step === 1 && (
             <div className="anim-in">
               <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Role</div>
-              <div className="grid sm:grid-cols-3 gap-2 mb-5">
+              <div className="grid sm:grid-cols-2 gap-2 mb-5">
                 {roleCards.map(rc => {
                   const active = f.role === rc.key;
                   const Icon = rc.icon;
@@ -169,10 +171,10 @@ export function OnboardUserWizard({ teams, users, onCancel, onSave }) {
                 })}
               </div>
 
-              {/* Approver — multi-select signing authority */}
-              {f.role === "approver" && (
+              {/* Approver / Executive — multi-select signing authority */}
+              {(f.role === "approver" || f.role === "executive") && (
                 <div>
-                  <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Approver's list — sign for which teams?</div>
+                  <div className="text-xs tracking-wider uppercase opacity-70 mb-2">Signing authority — sign for which teams?</div>
                   {teams.length === 0 ? (
                     <div className="card p-4 text-sm opacity-60">No teams exist yet. Create teams from the "Teams & authority" tab first.</div>
                   ) : (
@@ -239,6 +241,15 @@ export function OnboardUserWizard({ teams, users, onCancel, onSave }) {
                 <div className="card p-4 text-sm opacity-70">
                   <Shield size={14} className="inline-block mr-1.5 opacity-70" />
                   Administrators have full access — no team assignment needed.
+                </div>
+              )}
+
+              {/* Executive Assistant — linked to executives separately */}
+              {f.role === "executive_assistant" && (
+                <div className="card p-4 text-sm opacity-70">
+                  <UserCog size={14} className="inline-block mr-1.5 opacity-70" />
+                  After creating this assistant, link them to one or more executives from
+                  the “Assistants” menu (or the executive can add them from “My assistant”).
                 </div>
               )}
             </div>

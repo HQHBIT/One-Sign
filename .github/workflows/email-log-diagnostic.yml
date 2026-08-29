@@ -1,0 +1,59 @@
+name: Email log diagnostic (temporary)
+
+# One-shot, manual-only: prints the most recent rows of the emails log
+# (recipient, subject, template, delivered flag, SendGrid error) so email
+# delivery problems can be diagnosed without DB access. Bodies are never
+# printed. Remove this workflow once the investigation is done.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read recent email log on EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server || exit 1
+            echo "SENDGRID_API_KEY present in .env: $(grep -qE '^SENDGRID_API_KEY=.+' .env && echo YES || echo NO)"
+            echo "SENDGRID_FROM_EMAIL: $(grep -E '^SENDGRID_FROM_EMAIL=' .env | cut -d= -f2-)"
+            node -e '
+              const mysql = require("mysql2/promise");
+              require("dotenv").config();
+              (async () => {
+                const cfg = {
+                  host: process.env.DB_HOST || "localhost",
+                  port: parseInt(process.env.DB_PORT || "3306", 10),
+                  user: process.env.DB_USER || "root",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME || "signflow"
+                };
+                if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
+                const c = await mysql.createConnection(cfg);
+                const [rows] = await c.execute(
+                  "SELECT to_email, LEFT(subject, 45) AS subject, template, sent_at, delivered, LEFT(COALESCE(error, \"\"), 90) AS error FROM emails ORDER BY sent_at DESC LIMIT 15"
+                );
+                console.log("recent email log (newest first):");
+                for (const r of rows) {
+                  console.log(
+                    new Date(Number(r.sent_at)).toISOString(), "|",
+                    r.delivered ? "DELIVERED" : "FAILED/LOGGED", "|",
+                    r.template, "|", r.to_email, "|", r.subject, r.error ? "| ERR: " + r.error : ""
+                  );
+                }
+                const [agg] = await c.execute(
+                  "SELECT delivered, COUNT(*) AS n FROM emails WHERE sent_at > ? GROUP BY delivered",
+                  [Date.now() - 7 * 24 * 3600 * 1000]
+                );
+                console.log("last 7 days:", JSON.stringify(agg));
+                await c.end();
+              })().catch(e => { console.error(e.message); process.exit(1); });
+            '

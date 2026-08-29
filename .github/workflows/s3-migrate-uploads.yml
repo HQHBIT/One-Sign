@@ -1,0 +1,149 @@
+name: Migrate uploads to S3 (manual)
+
+# ============================================================
+# Copies the stored files on the UAT box into the object-storage bucket.
+#
+# Manual only, and staged on purpose. The three modes run in order, and each one
+# tells you whether the next is safe:
+#
+#   inventory  read-only. Counts files, pairs them with the rows that reference
+#              them, lists orphans and missing files. Touches nothing.
+#   dry-run    reports exactly what would be uploaded. Writes nothing.
+#   upload     uploads and verifies each object by reading it back.
+#
+# THE DATABASE IS NEVER MODIFIED by any mode, and nothing in the application
+# reads from the bucket yet. A completed upload therefore changes no behaviour —
+# it is a verified copy, and it is reversible by emptying the bucket. Repointing
+# the columns is a separate, later, riskier step that is deliberately not here.
+#
+# Confidential documents are copied exactly as they sit on disk, still
+# encrypted. Their bytes are never decrypted in the course of moving them.
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to do"
+        required: true
+        default: inventory
+        type: choice
+        options: [inventory, find-missing, dry-run, upload, repoint-dry-run, repoint]
+      confirm:
+        description: 'For "upload" only: type UPLOAD to proceed'
+        required: false
+        default: ""
+      only_user:
+        description: 'Optional: limit the upload to one person, by email'
+        required: false
+        default: ""
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a live upload without explicit confirmation
+        if: inputs.mode == 'upload' && inputs.confirm != 'UPLOAD'
+        run: |
+          echo "mode=upload requires confirm=UPLOAD. Nothing done."
+          exit 1
+
+      - name: Run on EC2
+        uses: appleboy/ssh-action@v1
+        env:
+          MODE: ${{ inputs.mode }}
+          ONLY_USER: ${{ inputs.only_user }}
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          envs: MODE,ONLY_USER
+          command_timeout: 30m
+          script: |
+            # Sourcing nvm.sh returns a non-zero status of its own, and the
+            # `[ -s … ] &&` guard returns 1 when the file is absent. Under a
+            # blanket `set -e` either one kills the script in the preamble,
+            # before a single line of output — which is exactly what happened
+            # the first time this ran. So the preamble is unguarded, and
+            # `set -e` is turned on only once the environment is ready.
+            export NVM_DIR="$HOME/.nvm"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh" || true; fi
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            set -e
+            cd /home/ubuntu/OneSign/server
+            echo "node $(node -v) in $(pwd)"
+
+            # Storage config lives in .env, synced there by the deploy workflow
+            # from the STORAGE_* repository secrets. Without it there is nothing
+            # to upload to, so stop before doing half a job.
+            if ! grep -q '^STORAGE_BUCKET=' .env 2>/dev/null; then
+              echo "STORAGE_BUCKET is not in .env."
+              echo "Add the STORAGE_* repository secrets and re-run the deploy first."
+              exit 1
+            fi
+
+            DUMP=/home/ubuntu/s3-migration/dump-latest
+            # A scoped run uploads one person's files and leaves everyone
+            # else's untouched — for proving the bucket works before moving
+            # the whole estate.
+            SCOPE=""
+            if [ -n "$ONLY_USER" ]; then
+              SCOPE="--only-user $ONLY_USER"
+              echo "Scoped to $ONLY_USER"
+            fi
+
+            if [ "$MODE" = "inventory" ]; then
+              rm -rf "$DUMP"
+              mkdir -p "$(dirname "$DUMP")"
+              node --env-file=.env scripts/dump-uploads.mjs --out "$DUMP"
+              echo
+              echo "Inventory written to $DUMP. Read the ORPHANS and MISSING sections:"
+              echo "they are decisions, not noise."
+              exit 0
+            fi
+
+            # Repointing works from the database and the bucket, not the
+            # inventory, so it is exempt from this guard.
+            case "$MODE" in
+              repoint|repoint-dry-run) ;;
+              *)
+                if [ ! -f "$DUMP/manifest.csv" ]; then
+                  echo "No inventory at $DUMP. Run this workflow with mode=inventory first."
+                  exit 1
+                fi
+                ;;
+            esac
+
+            # Read-only. Sweeps the whole machine for files the database
+            # references but which are absent from uploads/, so a file that is
+            # merely in the wrong place is not written off as lost.
+            if [ "$MODE" = "find-missing" ]; then
+              node --env-file=.env scripts/find-missing-files.mjs --dump "$DUMP"
+              exit 0
+            fi
+
+            if [ "$MODE" = "dry-run" ]; then
+              node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" $SCOPE
+              exit 0
+            fi
+
+            # Repointing is the ONLY mode that writes to the database. It is
+            # scoped to one person, refuses to run without one, changes a column
+            # only after the bucket object has been read back and matched against
+            # the file still on disk, and records a rollback before it starts.
+            if [ "$MODE" = "repoint-dry-run" ] || [ "$MODE" = "repoint" ]; then
+              if [ -z "$ONLY_USER" ]; then
+                echo "repoint requires only_user. Nothing done."
+                exit 1
+              fi
+              cd /home/ubuntu/OneSign/server
+              if [ "$MODE" = "repoint-dry-run" ]; then
+                node --env-file=.env scripts/repoint-to-s3.mjs --only-user "$ONLY_USER"
+              else
+                node --env-file=.env scripts/repoint-to-s3.mjs --only-user "$ONLY_USER" --confirm
+              fi
+              exit 0
+            fi
+
+            echo "Uploading. The database will not be touched."
+            node --env-file=.env scripts/upload-to-s3.mjs --dump "$DUMP" $SCOPE --confirm

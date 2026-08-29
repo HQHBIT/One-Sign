@@ -8,12 +8,16 @@
 export const ROLES = Object.freeze({
   ADMIN: "admin",
   REQUESTOR: "requestor",
-  APPROVER: "approver"
+  APPROVER: "approver",
+  EXECUTIVE: "executive",
+  EXECUTIVE_ASSISTANT: "executive_assistant"
 });
 export const ROLE_LABELS = Object.freeze({
   [ROLES.ADMIN]: "Administrator",
   [ROLES.REQUESTOR]: "Requestor",
-  [ROLES.APPROVER]: "Approver"
+  [ROLES.APPROVER]: "Approver",
+  [ROLES.EXECUTIVE]: "Executive",
+  [ROLES.EXECUTIVE_ASSISTANT]: "Executive Assistant"
 });
 
 // ---------- Request statuses ----------
@@ -25,8 +29,8 @@ export const STATUS = Object.freeze({
 });
 export const STATUS_LABELS = Object.freeze({
   [STATUS.PENDING]: "Pending",
-  [STATUS.APPROVED]: "Approved",
-  [STATUS.APPROVED_PENDING]: "Approved · 1h window",
+  [STATUS.APPROVED]: "Approved!",
+  [STATUS.APPROVED_PENDING]: "Approved! · 1h window",
   [STATUS.REJECTED]: "Rejected"
 });
 

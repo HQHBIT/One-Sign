@@ -21,11 +21,11 @@ const trimSlash = (s) => (s || "").replace(/\/+$/, "");
 // The redirect SSO flow only needs these four PUBLIC values + the public key
 // (fetched at runtime). client_id/secret are for the server-to-server External
 // API only, which SignFlow doesn't use — so they're optional here. Defaults point
-// at the UAT oneAccess with the `signflow-uat` app so the prod deployment has SSO
-// on out of the box; local dev overrides them via server/.env (signflow-local).
+// at the PRODUCTION oneAccess (the live user base) with the `signflow-uat` app;
+// local dev overrides them via server/.env (signflow-local).
 export const oneAccess = {
-  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL || "https://uat-oneaccess.umooriqtesadiyah.org/api"),
-  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL || "https://uat-oneaccess.umooriqtesadiyah.org"),
+  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL || "https://oneaccess.umooriqtesadiyah.org/api"),
+  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL || "https://oneaccess.umooriqtesadiyah.org"),
   appSlug: process.env.ONEACCESS_APP_SLUG || "signflow-uat",   // redirect=<slug>
   appId: process.env.ONEACCESS_APP_ID || "",
   redirectUrl: process.env.ONEACCESS_REDIRECT_URL || "https://signflow.umooriqtesadiyah.org", // registered base_url
@@ -88,10 +88,37 @@ export async function getPublicKey() {
 // For tests / key rotation.
 export function _setPublicKeyForTest(pem) { _publicKey = pem; }
 
+// Force-refresh the key from the oneAccess API, replacing the memory + disk
+// cache. Used when verification fails: after a key rotation OR a domain switch
+// (e.g. UAT → production oneAccess) the cached PEM belongs to the old issuer and
+// every token would fail forever without this.
+async function refetchPublicKey() {
+  if (!oneAccess.apiBase) throw new Error("ONEACCESS_API_BASE_URL not set");
+  const res = await fetch(oneAccess.apiBase + "/public-key");
+  if (!res.ok) throw new Error("oneAccess public-key fetch failed: " + res.status);
+  const pem = (await res.text()).trim();
+  if (!pem.includes("BEGIN")) throw new Error("oneAccess public-key response was not a PEM");
+  _publicKey = pem;
+  try {
+    const p = path.resolve(oneAccess.publicKeyPath);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, pem);
+  } catch { /* cache write is best-effort */ }
+  return pem;
+}
+
 // Verify an oneAccess access token locally (RS256). Returns the claims or throws.
+// On a signature failure, refetches the key once and retries — self-heals stale
+// cached keys; a genuinely bad token still fails on the retry.
 export async function verifyOneAccessToken(token) {
   const key = await getPublicKey();
-  return jwt.verify(token, key, { algorithms: ["RS256"] });
+  try {
+    return jwt.verify(token, key, { algorithms: ["RS256"] });
+  } catch (e) {
+    if (e?.name !== "JsonWebTokenError") throw e; // expired etc. — a fresh key won't help
+    const fresh = await refetchPublicKey();
+    return jwt.verify(token, fresh, { algorithms: ["RS256"] });
+  }
 }
 
 // Authoritative profile for the token holder. Best-effort: if it can't be reached
@@ -108,9 +135,29 @@ export function toLocalIdentity(claims, profile) {
   const src = { ...(claims || {}), ...(profile || {}) };
   const its = String(profile?.its_id ?? claims?.its_id ?? "").trim();
   const email = String(profile?.email ?? claims?.email ?? "").trim().toLowerCase();
+  // Every email oneAccess knows for this person — used to match an existing local
+  // account even when their primary oneAccess email differs from their work email.
+  const emails = [...new Set(
+    [profile?.email, profile?.secondary_email, profile?.email_default, claims?.email]
+      .map(e => String(e || "").trim().toLowerCase()).filter(Boolean)
+  )];
   const name = String(profile?.fullname ?? claims?.fullname ?? claims?.name ?? email ?? "oneAccess user").trim();
   const department = pickDepartment(src);
-  return { its, email, name, department };
+  const isAdmin = pickIsAdmin(src);
+  // Community identifiers (region + local congregation). Reference only — SignFlow
+  // routes on team/department, so these are stored but not used for access control.
+  const jamaat = String(src?.jamaat ?? "").trim();
+  const jamiaat = String(src?.jamiaat ?? "").trim();
+  return { its, email, emails, name, department, isAdmin, jamaat, jamiaat };
+}
+
+// Whether the oneAccess identity is an administrator. The token carries the
+// authoritative signals (`is_admin: true`, `central_role: "super_admin"`); the
+// profile's `role_name` is a fallback. Any of them being admin-ish → true.
+export function pickIsAdmin(src) {
+  if (src?.is_admin === true || src?.is_admin === 1 || src?.is_admin === "true") return true;
+  const roleText = `${src?.central_role ?? ""} ${src?.role_name ?? ""}`.toLowerCase();
+  return /\b(super[\s_-]?admin|administrator|admin)\b/.test(roleText);
 }
 
 // oneAccess may label the department under different keys across environments;

@@ -56,8 +56,28 @@ const longIts = "sso.admin." + Date.now() + "@onelogin.example";
 const u6 = await upsertOneAccessUser({ its: longIts, email: longIts, name: "OA Admin", department: "" });
 check("email-style its_id is accepted (its_id column widened)", !!u6?.id && u6.its_id === longIts);
 
+// oneAccess admin (is_admin / super_admin) maps to a SignFlow admin, and the
+// community fields are stored for reference.
+const itsAdmin = "A" + String(Date.now()).slice(-7);
+const uAdmin = await upsertOneAccessUser({ its: itsAdmin, email: "sso.superadmin." + Date.now() + "@oneaccess.test", name: "OA Super Admin", department: "", isAdmin: true, jamaat: "Mumbai", jamiaat: "Saifee" });
+check("oneAccess admin becomes a SignFlow admin", uAdmin.role === "admin");
+check("jamaat is stored", uAdmin.jamaat === "Mumbai");
+check("jamiaat is stored", uAdmin.jamiaat === "Saifee");
+
+// Promote-only: a later non-admin login must NOT demote an existing admin.
+const uAdmin2 = await upsertOneAccessUser({ its: itsAdmin, email: uAdmin.email, name: "OA Super Admin", isAdmin: false });
+check("existing admin is not demoted by a non-admin login", uAdmin2.role === "admin");
+
+// A returning requestor IS promoted when oneAccess later flags them admin.
+const itsPromote = "P" + String(Date.now()).slice(-7);
+const pEmail = "sso.promote." + Date.now() + "@oneaccess.test";
+const p1 = await upsertOneAccessUser({ its: itsPromote, email: pEmail, name: "Promote Me", isAdmin: false });
+check("non-admin SSO user starts as requestor", p1.role === "requestor");
+const p2 = await upsertOneAccessUser({ its: itsPromote, email: pEmail, name: "Promote Me", isAdmin: true });
+check("requestor is promoted to admin when oneAccess flags is_admin", p2.role === "admin");
+
 // cleanup
-await execute("DELETE FROM users WHERE its_id IN (?, ?, ?) OR id = ?", [its, its5, longIts, seedId]);
+await execute("DELETE FROM users WHERE its_id IN (?, ?, ?, ?, ?) OR id = ?", [its, its5, longIts, itsAdmin, itsPromote, seedId]);
 await execute("DELETE FROM teams WHERE id = ?", [u5.team_id]);
 console.log(fail ? `\n${fail} check(s) failed` : "\nAll oneAccess upsert checks passed");
 process.exit(fail ? 1 : 0);

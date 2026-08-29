@@ -31,3 +31,21 @@ export function requireRole(...roles) {
     next();
   };
 }
+
+// A "signer" is anyone in the approve/sign flow. An Executive is a senior
+// Approver, so it shares every code path that today checks for 'approver'.
+// Use this instead of a bare role === "approver" comparison.
+export const SIGNER_ROLES = ["approver", "executive"];
+export const isSigner = (role) => SIGNER_ROLES.includes(role);
+
+// Single-purpose signed tokens for links in emails (e.g. approve-from-email).
+// Scoped by `purpose` so a token minted for one action can never be replayed
+// against another endpoint, and short-lived relative to session tokens.
+export function signActionToken(purpose, payload, ttl = "7d") {
+  return jwt.sign({ purpose, ...payload }, SECRET, { expiresIn: ttl });
+}
+export function verifyActionToken(purpose, token) {
+  const claims = jwt.verify(token, SECRET);
+  if (claims.purpose !== purpose) throw new Error("Wrong token purpose");
+  return claims;
+}
