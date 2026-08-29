@@ -112,3 +112,21 @@ jobs:
             echo "=============== 8. client build freshness ==============="
             ls -la /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || echo "NO client/dist/index.html"
             ls -la /home/ubuntu/OneSign/client/dist/assets/ 2>/dev/null | head -6
+
+            echo
+            echo "=============== 9. nginx static serving ==============="
+            echo "--- nginx error log (last 25) ---"
+            sudo tail -25 /var/log/nginx/error.log 2>/dev/null || echo "cannot read nginx error log"
+            echo "--- nginx worker user ---"
+            grep -E '^\s*user\s' /etc/nginx/nginx.conf 2>/dev/null || echo "user directive not set (defaults to nginx/www-data)"
+            echo "--- permissions along the document root ---"
+            namei -l /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || ls -ld /home /home/ubuntu /home/ubuntu/OneSign /home/ubuntu/OneSign/client /home/ubuntu/OneSign/client/dist 2>/dev/null
+            echo "--- can the nginx user actually read index.html? ---"
+            NGX_USER=$(ps -o user= -C nginx 2>/dev/null | grep -v root | head -1)
+            echo "nginx worker runs as: ${NGX_USER:-unknown}"
+            [ -n "$NGX_USER" ] && sudo -u "$NGX_USER" test -r /home/ubuntu/OneSign/client/dist/index.html && echo "READABLE by $NGX_USER" || echo "NOT readable by ${NGX_USER:-nginx user}"
+            echo "--- reproduce the request on the box ---"
+            for h in signflow.waqftrust.com signflow.umooriqtesadiyah.org; do
+              echo -n "  Host: $h  /  -> HTTP "
+              curl -s -o /dev/null -w "%{http_code}\n" --max-time 6 -H "Host: $h" http://127.0.0.1/ 2>/dev/null || echo "fail"
+            done
