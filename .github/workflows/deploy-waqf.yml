@@ -96,9 +96,9 @@ jobs:
           STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.WAQF_DB_USER }}
+          DB_PASSWORD: ${{ secrets.WAQF_DB_PASSWORD }}
+          DB_NAME: ${{ secrets.WAQF_DB_NAME }}
           JWT_SECRET: ${{ secrets.WAQF_JWT_SECRET }}
         with:
           host: ${{ secrets.WAQF_EC2_HOST }}
@@ -184,7 +184,7 @@ jobs:
               mv .env.tmp .env
               echo "Database config synced to .env (db=$DB_NAME user=$DB_USER)."
             else
-              echo "No DB_NAME secret set — database config left as the box has it."
+              echo "No WAQF_DB_NAME secret set — database config left as the box has it."
             fi
             # Token-signing key, per environment on purpose: one shared value would
             # make a token minted on UAT valid on production.
