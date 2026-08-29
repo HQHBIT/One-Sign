@@ -1,7 +1,7 @@
 name: Box diagnostic (temporary)
 
-# One-shot, manual-only, READ-ONLY. Written to diagnose the 500 on the WAQF box
-# after its first deploy. Touches nothing: no writes, no restart, no .env edit.
+# Manual-only, READ-ONLY. Inspects one of the three boxes. Touches nothing:
+# no writes, no restart, no .env edit, no pm2 command that changes state.
 #
 # Values are never printed. The .env dump shows key NAMES only, with every value
 # replaced by <set>, because DB_PASSWORD and JWT_SECRET are not GitHub secrets
@@ -15,7 +15,7 @@ on:
       box:
         description: "Which box to inspect"
         required: true
-        default: waqf
+        default: uat
         type: choice
         options: [uat, hqhb, waqf]
 
@@ -34,49 +34,56 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
 
-            echo "=============== 1. pm2 process state ==============="
-            # restart_time climbing is the tell for a crash loop.
-            pm2 jlist 2>/dev/null | node -e '
-              let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-                let l=[];try{l=JSON.parse(s)}catch(e){return console.log("could not parse pm2 jlist")}
-                if(!l.length) return console.log("NO PM2 PROCESSES");
-                for(const p of l) console.log(
-                  p.name,"| status:",p.pm2_env.status,
-                  "| restarts:",p.pm2_env.restart_time,
-                  "| unstable:",p.pm2_env.unstable_restarts,
-                  "| uptime:",p.pm2_env.pm_uptime?Math.round((Date.now()-p.pm2_env.pm_uptime)/1000)+"s":"n/a",
-                  "| PORT:",(p.pm2_env.env&&p.pm2_env.env.PORT)||"unset");
-              })' || echo "pm2 not available"
+            echo "=============== 1. pm2 processes ==============="
+            # pm2 prints an out-of-date banner to stdout, which corrupts jlist,
+            # so read the plain table instead and note the version skew.
+            pm2 list 2>&1 | head -25 || echo "pm2 not available"
+            echo "--- pm2 versions (a skew means restarts may not take effect) ---"
+            pm2 -v 2>&1 | tail -1
+            pm2 ping 2>&1 | tail -3
 
             echo
-            echo "=============== 2. last 80 error log lines ==============="
-            for n in onesign_backend_uat onesign_backend_hqhb onesign_backend_waqf; do
-              pm2 describe "$n" >/dev/null 2>&1 && { echo "--- $n ---"; pm2 logs "$n" --nostream --lines 60 --err 2>/dev/null; }
+            echo "=============== 2. EVERY listening TCP port ==============="
+            # Unfiltered on purpose: a narrow grep is how the app's real port was
+            # missed the first time round.
+            (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | sed 's/  */ /g' | head -30
+
+            echo
+            echo "=============== 3. which local port answers the API ==============="
+            for port in 3000 3001 5000 5001 5101 8080; do
+              CODE=$(curl -s -o /tmp/o.out -w "%{http_code}" --max-time 5 "http://127.0.0.1:$port/api/auth/organisations" 2>/dev/null || echo "conn-fail")
+              if [ "$CODE" != "conn-fail" ] && [ "$CODE" != "000" ]; then
+                echo "  :$port -> HTTP $CODE"
+                echo -n "     body: "; head -c 260 /tmp/o.out 2>/dev/null; echo
+              else
+                echo "  :$port -> no listener"
+              fi
+              rm -f /tmp/o.out
             done
 
             echo
-            echo "=============== 3. does the app answer on 127.0.0.1:5000 ==============="
-            echo -n "GET /api/auth/config -> HTTP "
-            curl -s -o /tmp/cfg.out -w "%{http_code}\n" --max-time 8 http://127.0.0.1:5000/api/auth/config || echo "(curl failed)"
-            echo "body (first 400 chars):"
-            head -c 400 /tmp/cfg.out 2>/dev/null; echo
-            rm -f /tmp/cfg.out
-
-            echo
-            echo "=============== 4. what is listening ==============="
-            (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep -E ':(80|443|3000|5000|5101|3306)\b' || echo "nothing on 80/443/3000/5000/5101/3306"
+            echo "=============== 4. nginx: which domain, which upstream ==============="
+            sudo nginx -T 2>/dev/null | grep -E '^\s*(server_name|proxy_pass|listen|root)' | sed 's/^[[:space:]]*//' | sort -u | head -30 || echo "cannot dump nginx config"
 
             echo
             echo "=============== 5. .env keys present (values redacted) ==============="
             cd /home/ubuntu/OneSign/server 2>/dev/null || { echo "MISSING /home/ubuntu/OneSign/server"; exit 0; }
             if [ -f .env ]; then
               sed -E 's/^([A-Za-z0-9_]+)=.*/\1=<set>/' .env | grep -E '^[A-Za-z0-9_]+=' | sort
+              echo "--- PORT value (not a secret) ---"
+              grep -E '^PORT=' .env || echo "PORT not set in .env"
             else
               echo "NO .env FILE"
             fi
 
             echo
-            echo "=============== 6. can the app reach its database ==============="
+            echo "=============== 6. error log, whichever process exists ==============="
+            for n in onesign_backend_uat onesign_backend_hqhb onesign_backend_waqf; do
+              pm2 describe "$n" >/dev/null 2>&1 && { echo "--- $n ---"; pm2 logs "$n" --nostream --lines 40 --err 2>/dev/null | tail -25; }
+            done
+
+            echo
+            echo "=============== 7. database reachability and org data ==============="
             node -e '
               const mysql = require("mysql2/promise");
               require("dotenv").config();
@@ -89,8 +96,7 @@ jobs:
                   database: process.env.DB_NAME || "signflow"
                 };
                 if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
-                console.log("connecting to host=" + cfg.host + " port=" + cfg.port +
-                            " db=" + cfg.database + " user=" + cfg.user + " (password not shown)");
+                console.log("connecting host=" + cfg.host + " db=" + cfg.database + " user=" + cfg.user);
                 const c = await mysql.createConnection(cfg);
                 const [t] = await c.execute("SHOW TABLES");
                 console.log("connected OK — " + t.length + " tables");
@@ -100,18 +106,9 @@ jobs:
                 console.log("users by org: " + JSON.stringify(u));
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
-            ' 2>&1 | tail -20
+            ' 2>&1 | tail -12
 
             echo
-            echo "=============== 7. client build + nginx target ==============="
+            echo "=============== 8. client build freshness ==============="
             ls -la /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || echo "NO client/dist/index.html"
-            echo "--- nginx server_name / proxy_pass (which domain this box serves) ---"
-            grep -rhE 'server_name|proxy_pass|listen ' /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -25 || echo "cannot read nginx sites-enabled"
-
-            echo
-            echo "=============== 8. MySQL accounts and auth plugin ==============="
-            # Decides whether a password can work at all: auth_socket rejects
-            # password auth regardless of what DB_PASSWORD is set to.
-            sudo mysql -N -e "SELECT CONCAT(user,'@',host,' -> ',plugin, CASE WHEN authentication_string='' THEN '  (NO PASSWORD SET)' ELSE '  (password set)' END) FROM mysql.user WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema');" 2>&1 | head -15 || echo "cannot query mysql.user (no passwordless sudo?)"
-            echo "--- databases ---"
-            sudo mysql -N -e "SHOW DATABASES;" 2>&1 | head -10 || echo "cannot list databases"
+            ls -la /home/ubuntu/OneSign/client/dist/assets/ 2>/dev/null | head -6
