@@ -1,0 +1,190 @@
+name: Deploy SignFlow to EC2 (WAQF)
+on:
+  push:
+    branches: [master]
+  # master is the WAQF production release branch: push UAT to test, then
+  # fast-forward master to release. Pushing UAT never touches this box.
+  #
+  # Secrets change without any code changing. A manual run lets a rotated
+  # key reach the server without inventing a dummy commit.
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: changes
+        run: |
+          BASE=${{ github.event.before }}
+          # Empty on a manual run, all-zeros on the first push to a new branch.
+          # Both mean "nothing to compare against" — fall back to the parent, so a
+          # dispatch redeploys the app instead of only syncing secrets.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git rev-parse HEAD~1)
+          fi
+          echo "Comparing $BASE..HEAD"
+          if git diff --name-only "$BASE" HEAD | grep -q '^client/'; then
+            echo "client=true" >> $GITHUB_OUTPUT
+          else
+            echo "client=false" >> $GITHUB_OUTPUT
+          fi
+          if git diff --name-only "$BASE" HEAD | grep -q '^server/'; then
+            echo "server=true" >> $GITHUB_OUTPUT
+          else
+            echo "server=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install client dependencies
+        if: steps.changes.outputs.client == 'true'
+        run: cd client && npm ci
+
+      - name: Build client
+        if: steps.changes.outputs.client == 'true'
+        run: cd client && npm run build
+        env:
+          CI: false
+          GENERATE_SOURCEMAP: false
+
+      - name: Copy client build to EC2
+        if: steps.changes.outputs.client == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.WAQF_EC2_SSH_KEY }}
+          source: "client/dist/"
+          target: "/home/ubuntu/OneSign"
+          overwrite: true
+
+      - name: Copy server to EC2
+        if: steps.changes.outputs.server == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.WAQF_EC2_SSH_KEY }}
+          source: "server/"
+          target: "/home/ubuntu/OneSign"
+          overwrite: true
+
+      # Always runs: this step syncs secrets into .env, and a secret can change
+      # with no server file touched. Gating it on server changes meant a rotated
+      # key silently never applied. Restart is a couple of seconds via pm2.
+      - name: Sync secrets and restart backend on EC2
+        uses: appleboy/ssh-action@v1
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
+          SENDGRID_FROM_NAME: ${{ secrets.SENDGRID_FROM_NAME }}
+          CONFIDENTIAL_KEY: ${{ secrets.CONFIDENTIAL_KEY }}
+          STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
+          STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
+          STORAGE_BUCKET: ${{ secrets.WAQF_STORAGE_BUCKET }}
+          STORAGE_FORCE_PATH_STYLE: ${{ secrets.STORAGE_FORCE_PATH_STYLE }}
+          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+        with:
+          host: ${{ secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.WAQF_EC2_SSH_KEY }}
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server
+            # Sync SendGrid config from CI secrets into .env. Only writes when a key is
+            # provided; leaves all other .env vars (DB creds, JWT_SECRET) untouched.
+            if [ -n "$SENDGRID_API_KEY" ]; then
+              touch .env
+              grep -v -E '^SENDGRID_(API_KEY|FROM_EMAIL|FROM_NAME)=' .env > .env.tmp || true
+              echo "SENDGRID_API_KEY=$SENDGRID_API_KEY" >> .env.tmp
+              [ -n "$SENDGRID_FROM_EMAIL" ] && echo "SENDGRID_FROM_EMAIL=$SENDGRID_FROM_EMAIL" >> .env.tmp
+              [ -n "$SENDGRID_FROM_NAME" ] && echo "SENDGRID_FROM_NAME=$SENDGRID_FROM_NAME" >> .env.tmp
+              mv .env.tmp .env
+              echo "SendGrid config synced to .env (LIVE email)."
+            else
+              echo "No SENDGRID_API_KEY secret set — email stays in log-only mode."
+            fi
+            # Sync the confidential-documents key. Without it the feature fails
+            # CLOSED: the toggle is hidden and the API refuses confidential uploads,
+            # so a missing secret can never mean a document is silently unprotected.
+            # WARNING: rotating or losing this key makes every existing
+            # confidential document permanently unreadable.
+            if [ -n "$CONFIDENTIAL_KEY" ]; then
+              touch .env
+              grep -v -E '^CONFIDENTIAL_KEY=' .env > .env.tmp || true
+              echo "CONFIDENTIAL_KEY=$CONFIDENTIAL_KEY" >> .env.tmp
+              mv .env.tmp .env
+              echo "Confidential documents: key synced (feature ENABLED)."
+            else
+              echo "No CONFIDENTIAL_KEY secret set — confidential documents stay disabled."
+            fi
+            # Sync object-storage config. Fails CLOSED in the same spirit as the
+            # key above: with no STORAGE_BUCKET the application keeps using the
+            # filesystem, so a missing secret degrades to the previous behaviour
+            # rather than losing uploads.
+            if [ -n "$STORAGE_BUCKET" ]; then
+              touch .env
+              grep -v -E '^STORAGE_' .env > .env.tmp || true
+              echo "STORAGE_ENDPOINT=$STORAGE_ENDPOINT" >> .env.tmp
+              echo "STORAGE_REGION=$STORAGE_REGION" >> .env.tmp
+              echo "STORAGE_BUCKET=$STORAGE_BUCKET" >> .env.tmp
+              echo "STORAGE_FORCE_PATH_STYLE=$STORAGE_FORCE_PATH_STYLE" >> .env.tmp
+              echo "STORAGE_ACCESS_KEY=$STORAGE_ACCESS_KEY" >> .env.tmp
+              echo "STORAGE_SECRET_KEY=$STORAGE_SECRET_KEY" >> .env.tmp
+              mv .env.tmp .env
+              echo "Object storage: config synced (bucket $STORAGE_BUCKET)."
+            else
+              echo "No STORAGE_BUCKET secret set — files stay on the local filesystem."
+            fi
+            # WAQF is password-only: there is no SSO door for this organisation, so
+            # this workflow syncs no ONEACCESS_* config and actively strips any that is
+            # left in .env — a stale value here would aim WAQF's box at HQHB's
+            # registered oneAccess app. AUTH_LOCAL_LOGIN_ENABLED is pinned on, so the
+            # password door can never be closed on the one organisation that needs it.
+            #
+            # This does NOT by itself disable SSO: oneAccessEnabled() in
+            # server/src/oneaccess.js falls back to hardcoded defaults when the env
+            # vars are absent. The real gate is the organisation's allow_oneaccess
+            # column, applied when the client calls /auth/config?org=waqf.
+            touch .env
+            grep -v -E '^(ONEACCESS_[A-Z_]+|AUTH_LOCAL_LOGIN_ENABLED)=' .env > .env.tmp || true
+            echo "AUTH_LOCAL_LOGIN_ENABLED=true" >> .env.tmp
+            mv .env.tmp .env
+            echo "WAQF: password-only login; no oneAccess config written."
+            npm ci --omit=dev
+            pm2 delete onesign_backend_waqf 2>/dev/null || true
+            PORT=5000 pm2 start src/index.js --name onesign_backend_waqf --cwd /home/ubuntu/OneSign/server
+            pm2 save
+
+      - name: Ensure nginx serves .mjs + .webmanifest with correct MIME type
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.WAQF_EC2_SSH_KEY }}
+          script: |
+            if ! grep -q 'mjs' /etc/nginx/mime.types 2>/dev/null; then
+              sudo sed -i 's|application/javascript\s\+js;|application/javascript  js mjs;|' /etc/nginx/mime.types
+            fi
+            # PWA manifest must be served as application/manifest+json (default is
+            # octet-stream, which trips Chrome's manifest warning + Lighthouse).
+            if ! grep -q 'webmanifest' /etc/nginx/mime.types 2>/dev/null; then
+              sudo sed -i '/types {/a application/manifest+json webmanifest;' /etc/nginx/mime.types
+            fi
+            sudo nginx -t && sudo systemctl reload nginx
+            # Retired asset: Leave Approval no longer uses a template. scp does not
+            # prune deleted files, so remove the stale copy explicitly (exact name only).
+            find /home/ubuntu/OneSign -name 'leave-template.xlsx' -delete 2>/dev/null || true
