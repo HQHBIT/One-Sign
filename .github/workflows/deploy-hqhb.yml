@@ -189,15 +189,28 @@ jobs:
             # Sync database credentials from CI secrets. Fails CLOSED: with no
             # DB_NAME the box keeps the .env it has, so a missing secret can never
             # silently repoint a running box at a different database.
-            if [ -n "$DB_NAME" ]; then
+            # Write one key, and ONLY when a value was actually supplied. An unset
+            # secret must never change the box: the earlier version stripped all five
+            # keys and rewrote them unconditionally, so unset DB_HOST/DB_PORT secrets
+            # blanked a working localhost/3306 and the app could not resolve its
+            # database at all.
+            set_env() {
+              [ -z "$2" ] && return 0
               touch .env
-              grep -v -E '^DB_(HOST|PORT|USER|PASSWORD|NAME)=' .env > .env.tmp || true
-              echo "DB_HOST=$DB_HOST" >> .env.tmp
-              echo "DB_PORT=$DB_PORT" >> .env.tmp
-              echo "DB_USER=$DB_USER" >> .env.tmp
-              echo "DB_PASSWORD=$DB_PASSWORD" >> .env.tmp
-              echo "DB_NAME=$DB_NAME" >> .env.tmp
+              grep -v -E "^$1=" .env > .env.tmp || true
+              echo "$1=$2" >> .env.tmp
               mv .env.tmp .env
+            }
+            if [ -n "$DB_NAME" ]; then
+              # Host and port are shared secrets; when they are not set, the only
+              # sensible values are the ones db.js itself defaults to.
+              : "${DB_HOST:=localhost}"
+              : "${DB_PORT:=3306}"
+              set_env DB_HOST "$DB_HOST"
+              set_env DB_PORT "$DB_PORT"
+              set_env DB_USER "$DB_USER"
+              set_env DB_PASSWORD "$DB_PASSWORD"
+              set_env DB_NAME "$DB_NAME"
               echo "Database config synced to .env (db=$DB_NAME user=$DB_USER)."
             else
               echo "No HQHB_DB_NAME secret set — database config left as the box has it."
@@ -205,10 +218,7 @@ jobs:
             # Token-signing key, per environment on purpose: one shared value would
             # make a token minted on UAT valid on production.
             if [ -n "$JWT_SECRET" ]; then
-              touch .env
-              grep -v -E '^JWT_SECRET=' .env > .env.tmp || true
-              echo "JWT_SECRET=$JWT_SECRET" >> .env.tmp
-              mv .env.tmp .env
+              set_env JWT_SECRET "$JWT_SECRET"
               echo "Token key synced to .env."
             else
               echo "No HQHB_JWT_SECRET secret set — token key left as the box has it."
