@@ -221,10 +221,41 @@ jobs:
               echo "Set them as CI secrets, or put them in .env on the box, then re-run."
               exit 1
             fi
+            # Everything above has been written to .env where it was set. Unset it
+            # all now: pm2 hands its own environment to the app, and dotenv does NOT
+            # overwrite a variable that already exists there. An unset secret arrives
+            # as an EMPTY STRING, which silently overrides the box's own .env value —
+            # and db.js destructures with defaults, which apply to undefined but not
+            # to "". That is what took UAT down on 2026-08-29: DB_USER arrived empty
+            # and the app tried to connect as ''@'localhost'.
+            unset SENDGRID_API_KEY SENDGRID_FROM_EMAIL SENDGRID_FROM_NAME \
+                  CONFIDENTIAL_KEY STORAGE_ENDPOINT STORAGE_REGION STORAGE_BUCKET \
+                  STORAGE_FORCE_PATH_STYLE STORAGE_ACCESS_KEY STORAGE_SECRET_KEY \
+                  DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME JWT_SECRET \
+                  ONEACCESS_API_BASE_URL ONEACCESS_FRONTEND_URL ONEACCESS_APP_SLUG \
+                  ONEACCESS_REDIRECT_URL ONEACCESS_APP_ID ONEACCESS_CLIENT_ID \
+                  ONEACCESS_CLIENT_SECRET ONEACCESS_PUBLIC_KEY_PATH \
+                  ONEACCESS_ACCESS_TOKEN_TTL AUTH_LOCAL_LOGIN_ENABLED
             npm ci --omit=dev
             pm2 delete onesign_backend_uat 2>/dev/null || true
             PORT=5101 pm2 start src/index.js --name onesign_backend_uat --cwd /home/ubuntu/OneSign/server
             pm2 save
+            # A start is not a success. pm2 reports "online" the instant it forks, so
+            # a process that dies on its first database call still looks healthy —
+            # which is how both UAT and WAQF sat crash-looping behind green runs.
+            # Poll the real endpoint and fail the deploy if it never answers.
+            echo "waiting for the app to answer on 127.0.0.1:5101 ..."
+            HEALTHY=""
+            for i in $(seq 1 15); do
+              sleep 2
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "http://127.0.0.1:5101/api/auth/organisations" 2>/dev/null || true)
+              if [ "$CODE" = "200" ]; then HEALTHY="yes"; echo "healthy after $((i*2))s (HTTP 200)"; break; fi
+            done
+            if [ -z "$HEALTHY" ]; then
+              echo "DEPLOY FAILED — onesign_backend_uat never answered on 5101. Recent errors:"
+              pm2 logs onesign_backend_uat --nostream --lines 30 --err 2>/dev/null | tail -20
+              exit 1
+            fi
 
       - name: Ensure nginx serves .mjs + .webmanifest with correct MIME type
         uses: appleboy/ssh-action@v1
