@@ -1,4 +1,4 @@
-name: WAQF box diagnostic (temporary)
+name: Box diagnostic (temporary)
 
 # One-shot, manual-only, READ-ONLY. Written to diagnose the 500 on the WAQF box
 # after its first deploy. Touches nothing: no writes, no restart, no .env edit.
@@ -11,17 +11,24 @@ name: WAQF box diagnostic (temporary)
 
 on:
   workflow_dispatch:
+    inputs:
+      box:
+        description: "Which box to inspect"
+        required: true
+        default: waqf
+        type: choice
+        options: [uat, hqhb, waqf]
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect the WAQF box
+      - name: Inspect the ${{ inputs.box }} box
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.WAQF_EC2_HOST }}
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.WAQF_EC2_SSH_KEY }}
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
@@ -43,7 +50,9 @@ jobs:
 
             echo
             echo "=============== 2. last 80 error log lines ==============="
-            pm2 logs onesign_backend_waqf --nostream --lines 80 --err 2>/dev/null || echo "no pm2 error log"
+            for n in onesign_backend_uat onesign_backend_hqhb onesign_backend_waqf; do
+              pm2 describe "$n" >/dev/null 2>&1 && { echo "--- $n ---"; pm2 logs "$n" --nostream --lines 60 --err 2>/dev/null; }
+            done
 
             echo
             echo "=============== 3. does the app answer on 127.0.0.1:5000 ==============="
@@ -96,7 +105,8 @@ jobs:
             echo
             echo "=============== 7. client build + nginx target ==============="
             ls -la /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || echo "NO client/dist/index.html"
-            grep -rhE 'proxy_pass|listen |root ' /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -20 || echo "cannot read nginx sites-enabled"
+            echo "--- nginx server_name / proxy_pass (which domain this box serves) ---"
+            grep -rhE 'server_name|proxy_pass|listen ' /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -25 || echo "cannot read nginx sites-enabled"
 
             echo
             echo "=============== 8. MySQL accounts and auth plugin ==============="
