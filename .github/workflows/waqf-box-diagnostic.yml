@@ -97,3 +97,11 @@ jobs:
             echo "=============== 7. client build + nginx target ==============="
             ls -la /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || echo "NO client/dist/index.html"
             grep -rhE 'proxy_pass|listen |root ' /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -20 || echo "cannot read nginx sites-enabled"
+
+            echo
+            echo "=============== 8. MySQL accounts and auth plugin ==============="
+            # Decides whether a password can work at all: auth_socket rejects
+            # password auth regardless of what DB_PASSWORD is set to.
+            sudo mysql -N -e "SELECT CONCAT(user,'@',host,' -> ',plugin, CASE WHEN authentication_string='' THEN '  (NO PASSWORD SET)' ELSE '  (password set)' END) FROM mysql.user WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema');" 2>&1 | head -15 || echo "cannot query mysql.user (no passwordless sudo?)"
+            echo "--- databases ---"
+            sudo mysql -N -e "SHOW DATABASES;" 2>&1 | head -10 || echo "cannot list databases"
