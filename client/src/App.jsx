@@ -1352,7 +1352,12 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [leaveStyles, setLeaveStyles] = useState(null);
   // Confidential documents load only after the viewer enters their code; once
   // unlocked they stay open (the timed re-lock was removed at owner request).
-  const [locked, setLocked] = useState(!!req.confidential);
+  // Start open and let the SERVER decide. A confidential document that
+  // still requires a code answers the file request with needsUnlock, and the
+  // catch below raises the gate. Assuming locked here instead meant the client
+  // demanded a code even when the server had stopped asking for one — so the
+  // unlock requirement can now be turned on or off server-side alone.
+  const [locked, setLocked] = useState(false);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
@@ -1860,7 +1865,12 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   // Confidential documents need the code before they can be read — and the
   // server refuses to APPROVE without a verified unlock too. Once unlocked the
   // document stays open (the timed re-lock was removed at owner request).
-  const [locked, setLocked] = useState(!!req.confidential);
+  // Start open and let the SERVER decide. A confidential document that
+  // still requires a code answers the file request with needsUnlock, and the
+  // catch below raises the gate. Assuming locked here instead meant the client
+  // demanded a code even when the server had stopped asking for one — so the
+  // unlock requirement can now be turned on or off server-side alone.
+  const [locked, setLocked] = useState(false);
   useBackHandler(true, onClose);
   useEscapeKey(true, onClose);
   useEffect(() => {
