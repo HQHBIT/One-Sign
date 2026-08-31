@@ -125,7 +125,7 @@ export async function resolveTeamIdForDepartment(dept) {
   const match = teams.find((t) => normDept(t.name) === target);
   if (match) return match.id;
   const id = "t_oa_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await execute("INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?)", [id, raw, Date.now()]);
+  await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, ?, ?, 'hqhb')", [id, raw, Date.now()]);
   return id;
 }
 
@@ -182,7 +182,9 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
   const role = "requestor"; // oneAccess users are never admins — admin access is email/password only
   await execute(
-    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, work_email_set, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', 0, ?)",
+    // org_id pinned to 'hqhb': oneAccess is offered by HQHB alone, so an SSO
+    // login must never create an account in another organisation.
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, work_email_set, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', 0, ?, 'hqhb')",
     [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now()]
   );
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
