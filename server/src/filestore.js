@@ -69,19 +69,24 @@ export async function readStored(area, storedValue) {
   if (!AREAS.includes(area)) throw new Error(`Unknown storage area: ${area}`);
   if (!storedValue) throw new Error("No stored file recorded");
 
-  let bytes = null;
+  const open = (bytes) => (looksEncrypted(bytes) ? decryptBuffer(bytes) : bytes);
+
   if (isKey(storedValue) && storage.isEnabled()) {
     try {
-      bytes = await storage.getFileBytes(String(storedValue));
+      // Decrypt INSIDE the try. A bucket object that is truncated or otherwise
+      // damaged reads back fine and only then fails its authentication tag, and
+      // treating that as fatal threw away the intact disk copy lying next to it
+      // — which is how a confidential document became unopenable while a
+      // perfectly good copy sat on the filesystem.
+      return open(await storage.getFileBytes(String(storedValue)));
     } catch (e) {
-      // The disk copy is still there through the transition, so a bucket that
-      // is unreachable or missing an object is survivable. Say so loudly —
-      // silently serving from disk would hide a broken migration.
-      console.warn(`[filestore] bucket read failed for ${storedValue} (${e?.name || e?.message}); falling back to disk`);
+      // Say so loudly: silently serving from disk would hide a broken migration.
+      console.warn(`[filestore] bucket copy of ${storedValue} unusable (${e?.name || e?.message}); falling back to disk`);
     }
   }
-  if (bytes === null) bytes = await fs.readFile(diskPathFor(area, storedValue));
-  return looksEncrypted(bytes) ? decryptBuffer(bytes) : bytes;
+  // If the key itself is wrong the disk copy fails too, and THAT error is the
+  // one that surfaces — an honest one rather than a misleading bucket error.
+  return open(await fs.readFile(diskPathFor(area, storedValue)));
 }
 
 /**
