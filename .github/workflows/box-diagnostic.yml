@@ -321,3 +321,24 @@ jobs:
               node scripts/.audit-tmp.mjs 2>&1 || echo "audit could not run on this box"
               rm -f scripts/.audit-tmp.mjs
             fi
+
+            echo "=============== 11. can the older key be recovered? (opt-in) ==============="
+            if [ "${AUDIT_CONFIDENTIAL}" != "true" ]; then
+              echo "skipped (set audit_confidential=true to run it)"
+            else
+              # Run from the checkout rather than carried inline like section 10.
+              # Section 10 is inline because a box must be diagnosable without
+              # shipping to it first; this one only makes sense AFTER the audit has
+              # already reported that the current key opens nothing, by which point
+              # the box is running code new enough to contain it.
+              #
+              # It prints no key material of any kind — this repository is public
+              # and so are these logs. It names the file holding a working key,
+              # which is all a human needs in order to go and copy it.
+              cd /home/ubuntu/OneSign/server || exit 0
+              if [ -f scripts/recover-confidential-key.mjs ]; then
+                node scripts/recover-confidential-key.mjs 2>&1 || echo "recovery probe could not run on this box"
+              else
+                echo "not deployed to this box yet (it ships with the confidential fix)"
+              fi
+            fi
