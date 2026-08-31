@@ -18,6 +18,12 @@ on:
         default: uat
         type: choice
         options: [uat, hqhb, waqf]
+      audit_confidential:
+        description: "Also check which confidential documents still decrypt"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   inspect:
@@ -25,10 +31,13 @@ jobs:
     steps:
       - name: Inspect the ${{ inputs.box }} box
         uses: appleboy/ssh-action@v1
+        env:
+          AUDIT_CONFIDENTIAL: ${{ inputs.audit_confidential }}
         with:
           host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
           key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
+          envs: AUDIT_CONFIDENTIAL
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
@@ -130,3 +139,12 @@ jobs:
               echo -n "  Host: $h  /  -> HTTP "
               curl -s -o /dev/null -w "%{http_code}\n" --max-time 6 -H "Host: $h" http://127.0.0.1/ 2>/dev/null || echo "fail"
             done
+            echo
+            echo "=============== 10. confidential decryption audit (opt-in) ==============="
+            if [ "${AUDIT_CONFIDENTIAL}" = "true" ]; then
+              cd /home/ubuntu/OneSign/server 2>/dev/null && \
+                node --env-file=.env scripts/audit-confidential.mjs 2>&1 || \
+                echo "audit could not run on this box"
+            else
+              echo "skipped (set audit_confidential=true to run it)"
+            fi
