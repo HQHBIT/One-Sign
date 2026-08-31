@@ -7,6 +7,13 @@ name: Email log diagnostic (temporary)
 
 on:
   workflow_dispatch:
+    inputs:
+      box:
+        description: "Which box to inspect"
+        required: true
+        default: uat
+        type: choice
+        options: [uat, hqhb, waqf]
 
 jobs:
   inspect:
@@ -15,9 +22,9 @@ jobs:
       - name: Read recent email log on EC2
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.UAT_EC2_HOST }}
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
