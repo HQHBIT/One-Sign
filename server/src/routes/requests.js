@@ -157,18 +157,21 @@ function redactConfidential(hydrated, row, user) {
 }
 
 // null when the viewer may proceed; otherwise the JSON body to return with 403.
-// TEMPORARY, 2026-08-31, at the owner's request: the emailed unlock code is
-// bypassed because executives were unable to open confidential documents at all.
-// A confidential document is still restricted to the people on its route by
-// authoriseAccess, and still encrypted at rest, and still cannot be DOWNLOADED
-// by anyone but the requestor once fully signed. What is suspended is only the
-// second proof of identity before viewing or signing.
+// Viewing or signing a confidential document takes a second proof of identity:
+// a code emailed to the viewer, verified once, opening a window that stays open
+// for the rest of that read.
 //
-// TO RESTORE: set this default back to "true" — one word, and every one of the
-// three gates below comes back at once. A single box can also re-enable it
-// without a deploy by setting CONFIDENTIAL_UNLOCK_REQUIRED=true in its .env.
+// This was suspended on 2026-08-31 because executives could not open
+// confidential documents at all. It made no difference, and could not have: the
+// documents were sealed with a key the server no longer holds, so they failed
+// after the gate, not at it. Restored the same day once the box itself settled
+// the diagnosis.
+//
+// A single box can still suspend it without a deploy by setting
+// CONFIDENTIAL_UNLOCK_REQUIRED=false in its .env — but reach for that only with
+// evidence that this gate is what is failing, which last time it was not.
 const UNLOCK_REQUIRED =
-  String(process.env.CONFIDENTIAL_UNLOCK_REQUIRED ?? "false").trim().toLowerCase() === "true";
+  String(process.env.CONFIDENTIAL_UNLOCK_REQUIRED ?? "true").trim().toLowerCase() === "true";
 
 async function requireUnlocked(req, row) {
   if (!UNLOCK_REQUIRED) return null;
