@@ -157,7 +157,21 @@ function redactConfidential(hydrated, row, user) {
 }
 
 // null when the viewer may proceed; otherwise the JSON body to return with 403.
+// TEMPORARY, 2026-08-31, at the owner's request: the emailed unlock code is
+// bypassed because executives were unable to open confidential documents at all.
+// A confidential document is still restricted to the people on its route by
+// authoriseAccess, and still encrypted at rest, and still cannot be DOWNLOADED
+// by anyone but the requestor once fully signed. What is suspended is only the
+// second proof of identity before viewing or signing.
+//
+// TO RESTORE: set this default back to "true" — one word, and every one of the
+// three gates below comes back at once. A single box can also re-enable it
+// without a deploy by setting CONFIDENTIAL_UNLOCK_REQUIRED=true in its .env.
+const UNLOCK_REQUIRED =
+  String(process.env.CONFIDENTIAL_UNLOCK_REQUIRED ?? "false").trim().toLowerCase() === "true";
+
 async function requireUnlocked(req, row) {
+  if (!UNLOCK_REQUIRED) return null;
   const live = await queryOne(
     `SELECT 1 AS ok FROM confidential_unlocks
       WHERE request_id = ? AND user_id = ? AND consumed_at IS NOT NULL AND window_ends_at > ?`,
