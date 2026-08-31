@@ -62,6 +62,7 @@ async function probe(get) {
 }
 
 const tally = { diskOnly: [], bothBad: [], bothOk: [], other: [] };
+let sample = null;   // raw bytes of one failing document, for the key probe below
 
 for (const r of rows) {
   const when = new Date(Number(r.created_at)).toISOString().slice(0, 10);
@@ -75,6 +76,9 @@ for (const r of rows) {
     `disk:${disk.state}${disk.len ? "/" + disk.len + "B/" + disk.sha : ""}  ` +
     `bucket:${buck.state}${buck.len ? "/" + buck.len + "B/" + buck.sha : ""}`;
 
+  if (disk.state === "bad" && !sample) {
+    sample = await fs.readFile(diskPathFor("documents", r.file_path)).catch(() => null);
+  }
   if (disk.state === "ok" && buck.state === "bad") tally.diskOnly.push(line);
   else if (disk.state === "bad" && buck.state === "bad") tally.bothBad.push(line);
   else if (disk.state === "bad" && buck.state !== "ok") tally.bothBad.push(line);
@@ -104,5 +108,59 @@ if (tally.bothBad.length && !tally.diskOnly.length && !tally.bothOk.length) {
 } else if (tally.bothOk.length && !tally.bothBad.length) {
   console.log("  VERDICT: every confidential document decrypts. The fault is elsewhere.");
 }
+
+// ---- which derivation of the secret would open these? ----
+// The secret in CONFIDENTIAL_KEY has not changed, but the way a key is COMPUTED
+// from it has: the feature originally used the secret's base64 decoding verbatim
+// and later switched to deriving it with scrypt. Both schemes write an identical
+// envelope — same magic byte, same version, same key id — so a file sealed under
+// one and opened under the other gets all the way to the authentication tag and
+// only fails there. That is precisely the error being seen.
+//
+// So try the candidates against a file that is actually failing. Reports only
+// WHICH scheme authenticates. No key material and no plaintext is ever printed.
+if (sample && looksEncrypted(sample)) {
+  const raw = (process.env.CONFIDENTIAL_KEY || "")
+    .replace(/^﻿/, "").replace(/^['\"]|['\"]$/g, "").trim();
+  const untrimmed = process.env.CONFIDENTIAL_KEY || "";
+  const sized = (b) => (b && b.length === 32 ? b : null);
+  const candidates = [
+    ["scrypt(secret) — the scheme in use now",
+      crypto.scryptSync(raw, Buffer.from("signflow.confidential.v1"), 32, { N: 16384, r: 8, p: 1 })],
+    ["base64(secret) — the ORIGINAL scheme, before the key was derived",
+      sized(Buffer.from(raw, "base64"))],
+    ["base64(secret, untrimmed) — same, with whitespace left on",
+      sized(Buffer.from(untrimmed, "base64"))],
+    ["hex(secret)", sized(Buffer.from(raw, "hex"))],
+    ["utf8(secret)", sized(Buffer.from(raw, "utf8"))],
+    ["sha256(secret)", crypto.createHash("sha256").update(raw).digest()],
+  ];
+
+  const iv = sample.subarray(3, 15);
+  const tag = sample.subarray(sample.length - 16);
+  const body = sample.subarray(15, sample.length - 16);
+
+  console.log("\n  Which derivation opens a failing document?");
+  console.log(rule);
+  let winner = null;
+  for (const [name, k] of candidates) {
+    if (!k) { console.log(`    n/a     ${name} (not 32 bytes)`); continue; }
+    try {
+      const d = crypto.createDecipheriv("aes-256-gcm", k, iv);
+      d.setAuthTag(tag);
+      Buffer.concat([d.update(body), d.final()]);
+      console.log(`    OPENS   ${name}`);
+      winner = winner || name;
+    } catch { console.log(`    no      ${name}`); }
+  }
+  if (winner) {
+    console.log(`\n  The documents were sealed under: ${winner}`);
+    console.log("  They are RECOVERABLE — the secret is right, only the derivation moved.");
+  } else {
+    console.log("\n  No derivation of the CURRENT secret opens them. The secret itself");
+    console.log("  differs from the one they were sealed with, and must be recovered.");
+  }
+}
+
 console.log("");
 process.exit(0);
