@@ -1,0 +1,185 @@
+name: Demo data cleanup (one-shot)
+
+# ============================================================
+# Removes the accounts and teams that seedIfEmpty() creates, from one box.
+#
+# A box that booted against an empty database minted three demo accounts whose
+# passwords are written in server/src/db.js — including admin it@hqhb.in. The
+# seed is now opt-in (SEED_DEMO_DATA), so this cleans up what already exists.
+#
+# Deliberately narrow: it can only ever act on the exact seeded identities
+# listed below, matched by BOTH id and email. It cannot touch anything else,
+# and it never touches it@hqhb.in — that account is the way in.
+#
+#   report      read-only. Says what exists and what references it. Default.
+#   deactivate  sets active = 0 on the demo users. Reversible; login refuses an
+#               inactive account, so it achieves the same thing as deleting.
+#   delete      removes the rows. Irreversible. Requires typing DELETE.
+#
+# Teams are only ever removed when nothing references them.
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      box:
+        description: "Which box"
+        required: true
+        default: waqf
+        type: choice
+        options: [waqf, hqhb, uat]
+      mode:
+        description: "What to do"
+        required: true
+        default: report
+        type: choice
+        options: [report, deactivate, delete]
+      confirm:
+        description: 'For "delete" only: type DELETE to proceed'
+        required: false
+        default: ""
+      include_teams:
+        description: "Also remove the three demo teams (only if unreferenced)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ${{ inputs.mode }} demo data on the ${{ inputs.box }} box
+        uses: appleboy/ssh-action@v1
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          INCLUDE_TEAMS: ${{ inputs.include_teams }}
+        with:
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
+          envs: MODE,CONFIRM,INCLUDE_TEAMS
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server || { echo "MISSING server directory"; exit 1; }
+
+            if [ "$MODE" = "delete" ] && [ "$CONFIRM" != "DELETE" ]; then
+              echo "REFUSING: mode=delete needs confirm=DELETE. Nothing was changed."
+              exit 1
+            fi
+
+            node -e '
+              const mysql = require("mysql2/promise");
+              require("dotenv").config();
+
+              // The exact seed identities from seedIfEmpty(). Matched on id AND
+              // email so a real person who happens to share an address is never
+              // caught. u_admin / it@hqhb.in is deliberately absent.
+              const DEMO_USERS = [
+                { id: "u_req", email: "mufaddal.safdari@hqhb.in" },
+                { id: "u_app", email: "moiz.barwani@hqhb.in" },
+              ];
+              const DEMO_TEAMS = ["t_finance", "t_it", "t_ops"];
+              const KEEP = "it@hqhb.in";
+
+              const MODE = process.env.MODE || "report";
+              const WITH_TEAMS = String(process.env.INCLUDE_TEAMS) === "true";
+
+              (async () => {
+                const c = await mysql.createConnection({
+                  host: process.env.DB_HOST || "localhost",
+                  port: parseInt(process.env.DB_PORT || "3306", 10),
+                  user: process.env.DB_USER || "root",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME || "signflow",
+                });
+
+                const [all] = await c.execute("SELECT id, email, role, org_id, active FROM users ORDER BY created_at");
+                console.log("users on this box (" + all.length + "):");
+                for (const u of all) {
+                  console.log("  " + u.id + " | " + u.email + " | " + u.role +
+                              " | org=" + u.org_id + " | active=" + u.active);
+                }
+                console.log("");
+
+                const present = [];
+                for (const d of DEMO_USERS) {
+                  const [r] = await c.execute(
+                    "SELECT id, email, active FROM users WHERE id = ? AND LOWER(email) = LOWER(?)",
+                    [d.id, d.email]);
+                  if (r.length) present.push(r[0]);
+                }
+                console.log("demo accounts found: " + (present.length ? present.map(p => p.email).join(", ") : "none"));
+
+                const [keep] = await c.execute("SELECT id, role, active FROM users WHERE LOWER(email) = LOWER(?)", [KEEP]);
+                console.log("keeping " + KEEP + ": " + (keep.length
+                  ? "present, role=" + keep[0].role + ", active=" + keep[0].active
+                  : "*** NOT PRESENT — do not remove anything until this exists ***"));
+                console.log("");
+
+                // Teams, and what points at them.
+                const teamRefs = {};
+                for (const t of DEMO_TEAMS) {
+                  const [ex] = await c.execute("SELECT id, name FROM teams WHERE id = ?", [t]);
+                  if (!ex.length) { teamRefs[t] = null; continue; }
+                  const [uc] = await c.execute("SELECT COUNT(*) n FROM users WHERE team_id = ?", [t]);
+                  const [sc] = await c.execute("SELECT COUNT(*) n FROM signing_authority WHERE team_id = ?", [t]);
+                  let rc = 0;
+                  try { const [x] = await c.execute("SELECT COUNT(*) n FROM requests WHERE team_id = ?", [t]); rc = x[0].n; }
+                  catch { rc = 0; }
+                  teamRefs[t] = { name: ex[0].name, users: uc[0].n, signing: sc[0].n, requests: rc };
+                  console.log("team " + t + " (" + ex[0].name + "): users=" + uc[0].n +
+                              " signing_authority=" + sc[0].n + " requests=" + rc);
+                }
+                console.log("");
+
+                if (MODE === "report") {
+                  console.log("report only — nothing was changed.");
+                  await c.end();
+                  return;
+                }
+
+                if (!keep.length) {
+                  console.log("ABORTING: " + KEEP + " is not on this box. Refusing to remove the only other accounts.");
+                  await c.end();
+                  process.exit(1);
+                }
+
+                for (const p of present) {
+                  if (MODE === "deactivate") {
+                    await c.execute("UPDATE users SET active = 0 WHERE id = ?", [p.id]);
+                    console.log("deactivated " + p.email + " (reversible: set active = 1)");
+                  } else {
+                    await c.execute("DELETE FROM signing_authority WHERE user_id = ?", [p.id]);
+                    await c.execute("DELETE FROM users WHERE id = ?", [p.id]);
+                    console.log("deleted " + p.email);
+                  }
+                }
+
+                if (WITH_TEAMS && MODE === "delete") {
+                  for (const [t, info] of Object.entries(teamRefs)) {
+                    if (!info) continue;
+                    const [uc] = await c.execute("SELECT COUNT(*) n FROM users WHERE team_id = ?", [t]);
+                    const [sc] = await c.execute("SELECT COUNT(*) n FROM signing_authority WHERE team_id = ?", [t]);
+                    if (uc[0].n || sc[0].n || info.requests) {
+                      console.log("kept team " + t + " — still referenced");
+                      continue;
+                    }
+                    await c.execute("DELETE FROM teams WHERE id = ?", [t]);
+                    console.log("deleted team " + t + " (" + info.name + ")");
+                  }
+                }
+
+                const [after] = await c.execute("SELECT id, email, role, org_id, active FROM users ORDER BY created_at");
+                console.log("");
+                console.log("users remaining (" + after.length + "):");
+                for (const u of after) {
+                  console.log("  " + u.id + " | " + u.email + " | " + u.role +
+                              " | org=" + u.org_id + " | active=" + u.active);
+                }
+                await c.end();
+              })().catch(e => { console.log("ERROR: " + e.message); process.exit(1); });
+            '
