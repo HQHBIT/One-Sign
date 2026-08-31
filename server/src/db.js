@@ -603,6 +603,16 @@ async function runSchema() {
 }
 
 async function seedIfEmpty() {
+  // Opt-in only, and deliberately so. The accounts below carry passwords
+  // written in plain sight in this file, so a box that seeds itself comes up
+  // with a publicly known admin credential. That is exactly what happened when
+  // the WAQF box first booted against an empty database: it minted
+  // it@hqhb.in with the password below and served it on the public internet.
+  //
+  // Local development opts in with SEED_DEMO_DATA=true in server/.env. No
+  // deploy workflow sets it, so no box can ever seed itself again.
+  if (String(process.env.SEED_DEMO_DATA || "").toLowerCase() !== "true") return;
+
   const [rows] = await pool.query("SELECT COUNT(*) AS n FROM users");
   if (rows[0].n > 0) return;
 
