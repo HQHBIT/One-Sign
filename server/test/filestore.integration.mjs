@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isKey, keyFor, readStored, writeStored, deleteStored } from "../src/filestore.js";
 import * as storage from "../src/storage.js";
-import { encryptBuffer, isEnabled as confidentialEnabled } from "../src/confidential.js";
+import { encryptBuffer, decryptBuffer, isEnabled as confidentialEnabled } from "../src/confidential.js";
 
 const UPLOADS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "uploads");
 const made = [];
@@ -131,6 +131,35 @@ if (confidentialEnabled()) {
   await deleteStored("documents", stored);
 }
 
+// ---- a DAMAGED bucket copy must not cost us the good disk copy ----
+// This is the production failure, reproduced. A bucket object that was cut
+// off partway reads back without error and only fails at its authentication
+// tag — so the read succeeded and the DECRYPT is what threw. The old code
+// only fell back to disk when the read itself threw, so this exception
+// escaped and the document became unopenable even though an intact copy was
+// sitting on the filesystem the whole time.
+if (confidentialEnabled()) {
+  const name = tmpName(".pdf.enc");
+  const plain = Buffer.concat([Buffer.from("%PDF-1.7 board minutes"), crypto.randomBytes(2048)]);
+  const sealed = encryptBuffer(plain);
+  const stored = await writeStored("documents", name, sealed);
+  assert.equal(isKey(stored), true);
+
+  // Truncate ONLY the bucket copy. Dropping the tail leaves the envelope
+  // header intact and long enough to look valid, so it gets as far as the
+  // tag check and fails there — byte for byte the production symptom.
+  await storage.putAt(stored, sealed.subarray(0, sealed.length - 8), "application/pdf");
+  const damaged = await storage.getFileBytes(stored);
+  assert.equal(damaged[0], 0xc1, "the damaged copy still looks like an envelope");
+  assert.throws(() => decryptBuffer(damaged), /unable to authenticate data|Unsupported state/,
+    "and it genuinely does not decrypt — the reproduction is real");
+
+  const back = await readStored("documents", stored);
+  assert.equal(Buffer.compare(back, plain), 0,
+    "a damaged bucket copy falls back to the intact disk copy instead of throwing");
+
+  await deleteStored("documents", stored);
+}
 // ---- signed output round-trips through the same layer ----
 {
   const name = tmpName(".signed.pdf");
@@ -147,7 +176,11 @@ if (confidentialEnabled()) {
     const left = (await fsp.readdir(path.join(UPLOADS, area)).catch(() => []))
       .filter(f => f.startsWith("_fstest_"));
     for (const f of left) await fsp.unlink(path.join(UPLOADS, area, f)).catch(() => {});
-    assert.equal(left.length, 0, `no test files left in ${area}`);
+    // Re-read AFTER deleting. Asserting on the pre-deletion list made a single
+    // leftover from an earlier crashed run fail every subsequent run.
+    const still = (await fsp.readdir(path.join(UPLOADS, area)).catch(() => []))
+      .filter(f => f.startsWith("_fstest_"));
+    assert.equal(still.length, 0, `no test files left in ${area}`);
   }
 }
 
