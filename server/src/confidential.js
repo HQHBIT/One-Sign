@@ -33,6 +33,7 @@ const HEADER_LEN = 3 + IV_LEN;
 const KDF_SALT = Buffer.from("signflow.confidential.v1");
 const MIN_SECRET_CHARS = 24;
 
+let warnedLegacy = false;
 let cachedKey = null;
 let cachedRaw = null;
 
@@ -60,6 +61,28 @@ function key() {
   return cachedKey;
 }
 
+
+// THE KEY THIS FEATURE ORIGINALLY USED.
+//
+// Before the derivation above existed, CONFIDENTIAL_KEY was required to be a
+// 32-byte base64 blob and those bytes WERE the key. Switching to scrypt changed
+// the key without changing the secret, and because both schemes write a byte-
+// identical envelope — same magic, same version, same key id — every document
+// sealed beforehand still looks perfectly valid and fails only at its
+// authentication tag. That is not a corrupt file and not a lost secret: it is
+// the same secret, run through a different function.
+//
+// So the old key is still derivable, and is tried as a fallback. Nothing is
+// weakened by this: a legacy document must still pass its own GCM tag to be
+// accepted, so this authenticates rather than assumes. New documents are always
+// sealed with the current key — encryptBuffer never uses this.
+function legacyKey() {
+  const raw = rawSecret();
+  if (!raw) return null;
+  let buf;
+  try { buf = Buffer.from(raw, "base64"); } catch { return null; }
+  return buf.length === 32 ? buf : null;
+}
 /**
  * Is the feature usable? When false the Confidential toggle is hidden and the
  * API refuses to create confidential requests — it must NEVER silently fall
@@ -115,9 +138,27 @@ export function decryptBuffer(stored) {
   const iv = buf.subarray(3, 3 + IV_LEN);
   const tag = buf.subarray(buf.length - TAG_LEN);
   const body = buf.subarray(HEADER_LEN, buf.length - TAG_LEN);
-  const d = crypto.createDecipheriv("aes-256-gcm", k, iv);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(body), d.final()]);
+  const open = (withKey) => {
+    const d = crypto.createDecipheriv("aes-256-gcm", withKey, iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(body), d.final()]);
+  };
+  try {
+    return open(k);
+  } catch (e) {
+    // Only a tag failure is worth a second attempt, and only when a legacy key
+    // actually exists. Anything else is a real error and is left alone.
+    const legacy = legacyKey();
+    if (!legacy || Buffer.compare(legacy, k) === 0) throw e;
+    try {
+      const out = open(legacy);
+      if (!warnedLegacy) {
+        warnedLegacy = true;
+        console.warn("[confidential] opening documents sealed before the key derivation changed; they are readable but still on the old key");
+      }
+      return out;
+    } catch { throw e; }   // report the CURRENT key's failure, not the fallback's
+  }
 }
 
 /**

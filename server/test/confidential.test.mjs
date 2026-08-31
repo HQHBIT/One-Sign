@@ -107,5 +107,38 @@ ck(C.maskEmail("taha.chunawala@hqhb.in").endsWith("@hqhb.in"), "mask keeps the d
 ck(!C.maskEmail("taha.chunawala@hqhb.in").includes("chunawala"), "mask hides the local part");
 ck(C.maskEmail("") === "your registered address", "mask copes with a missing address");
 
+
+// --- documents sealed before the derivation changed ---
+// The secret used to BE the key (32 bytes of base64); now it is run through
+// scrypt. Both write an identical envelope, so an old document fails only at
+// its authentication tag — indistinguishable from corruption unless the old
+// key is tried. 29 confidential documents on UAT were unopenable for exactly
+// this reason while the secret itself had never changed.
+{
+  const crypto = await import("node:crypto");
+  const seal = (withKey, body) => {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv("aes-256-gcm", withKey, iv);
+    return Buffer.concat([Buffer.from([0xc1, 0x01, 0x01]), iv,
+      c.update(body), c.final(), c.getAuthTag()]);
+  };
+  const body = Buffer.from("%PDF-1.7 sealed under the original scheme");
+
+  const legacy = seal(Buffer.from(KEY, "base64"), body);
+  ck(C.decryptBuffer(legacy).equals(body), "a document sealed under the ORIGINAL scheme still opens");
+
+  // The fallback must not become a way in for anything that merely looks right.
+  const stranger = seal(Buffer.alloc(32, 9), body);
+  ck(threw(() => C.decryptBuffer(stranger)), "a document sealed with an unrelated key is still refused");
+
+  // And new documents keep using the CURRENT key, not the legacy one.
+  const fresh = C.encryptBuffer(body);
+  const iv = fresh.subarray(3, 15), tag = fresh.subarray(fresh.length - 16);
+  ck(threw(() => {
+    const d = crypto.createDecipheriv("aes-256-gcm", Buffer.from(KEY, "base64"), iv);
+    d.setAuthTag(tag);
+    Buffer.concat([d.update(fresh.subarray(15, fresh.length - 16)), d.final()]);
+  }), "newly sealed documents are NOT on the legacy key");
+}
 console.log(failed ? `\n${failed} check(s) failed` : "\nCONFIDENTIAL ENVELOPE TESTS PASSED");
 process.exit(failed ? 1 : 0);
