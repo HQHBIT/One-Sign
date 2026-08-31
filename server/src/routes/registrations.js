@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query, queryOne, execute } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
+import { deploymentOrg } from "../org.js";
 
 const router = Router();
 
@@ -40,8 +41,8 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res,
     // Carry the applicant's chosen password (plaintext) onto the user as last_temp_password
     // so IT Admin can see it in the Users list — same treatment as admin-set passwords.
     await execute(
-      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, reporting_manager, requested_team, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, 'requestor', NULL, ?, ?, ?, ?, ?)",
-      [userId, reg.email, reg.password_hash, reg.name, Date.now(), reg.reporting_manager, reg.team_name, reg.password_plain || null, reg.password_plain ? Date.now() : null]
+      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, reporting_manager, requested_team, last_temp_password, last_temp_password_at, org_id) VALUES (?, ?, ?, ?, 'requestor', NULL, ?, ?, ?, ?, ?, ?)",
+      [userId, reg.email, reg.password_hash, reg.name, Date.now(), reg.reporting_manager, reg.team_name, reg.password_plain || null, reg.password_plain ? Date.now() : null, deploymentOrg()]
     );
     await execute("UPDATE registrations SET status='approved', decided_at=?, decided_by=? WHERE id=?",
       [Date.now(), req.user.id, reg.id]);

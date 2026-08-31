@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query, queryOne, execute } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
+import { deploymentOrg } from "../org.js";
 
 const router = Router();
 const uid = () => `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -62,10 +63,12 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const { name } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: "name required" });
-    const exists = await queryOne("SELECT 1 AS ok FROM teams WHERE name = ?", [name.trim()]);
+    // Scoped to this organisation: the unique key is (org_id, name), so the
+    // same team name may legitimately exist in the other one.
+    const exists = await queryOne("SELECT 1 AS ok FROM teams WHERE name = ? AND org_id = ?", [name.trim(), deploymentOrg()]);
     if (exists) return res.status(409).json({ error: "Team already exists" });
     const id = uid();
-    await execute("INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?)", [id, name.trim(), Date.now()]);
+    await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, ?, ?, ?)", [id, name.trim(), Date.now(), deploymentOrg()]);
     res.json({ team: { id, name: name.trim() } });
   } catch (e) { next(e); }
 });

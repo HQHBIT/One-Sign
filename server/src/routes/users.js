@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
 import { authRequired, requireRole, isSigner } from "../auth.js";
 import { sendEmail } from "../email.js";
+import { deploymentOrg } from "../org.js";
 
 // Roles an admin may assign when creating users.
 const ASSIGNABLE_ROLES = ["admin", "requestor", "approver", "executive", "executive_assistant"];
@@ -110,8 +111,8 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
     // it later from the Users page without doing a reset. Cleared on next
     // reset / invite / forgot-password.
     await execute(
-      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [id, email, hash, name, role, teamId, now, password, now]
+      "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, email, hash, name, role, teamId, now, password, now, deploymentOrg()]
     );
 
     if (isSigner(role) && Array.isArray(signingAuthorityTeams)) {
@@ -144,8 +145,8 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
         const id = uid("u");
         const hash = bcrypt.hashSync(r.password, 10);
         await conn.execute(
-          "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now, r.password, now]
+          "INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, last_temp_password, last_temp_password_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [id, r.email, hash, r.name, r.role, r.role === "requestor" ? (r.team || null) : null, now, r.password, now, deploymentOrg()]
         );
         if (isSigner(r.role) && r.teams) {
           const tids = r.teams.split("|").map(s => s.trim()).filter(Boolean);
