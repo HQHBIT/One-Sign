@@ -39,7 +39,15 @@ router.get("/organisations", async (req, res, next) => {
 // bookmark still reaches a usable login form.
 router.get("/config", async (req, res, next) => {
   try {
-    const org = req.query?.org ? await getOrganisation(String(req.query.org)) : null;
+    // Which organisation's door is this? One box serves one organisation, so the
+    // door is a property of the deployment, not a choice the visitor makes: the
+    // box declares itself through ORG_SLUG, written into .env by its own deploy
+    // workflow. An explicit ?org= still wins, which is what local development
+    // and the integration suites use to exercise both doors on one server.
+    // With neither, `org` comes back null and the client says the site is not
+    // configured rather than guessing an organisation.
+    const slug = req.query?.org ? String(req.query.org) : (process.env.ORG_SLUG || "");
+    const org = slug ? await getOrganisation(slug) : null;
     const orgActive = !!(org && org.active);
     // Per-organisation permission ANDed with server capability: WAQF has
     // allow_oneaccess = 0, so its door never offers SSO even where oneAccess is

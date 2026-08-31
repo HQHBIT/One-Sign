@@ -223,13 +223,19 @@ jobs:
             else
               echo "No HQHB_JWT_SECRET secret set — token key left as the box has it."
             fi
+            # This box serves exactly one organisation, and the client asks the
+            # server which one rather than the visitor choosing from a picker.
+            # Written unconditionally because it is configuration, not a secret —
+            # a box with no ORG_SLUG shows visitors a "not set up" page instead of
+            # guessing, which would put them at another organisation's door.
+            set_env ORG_SLUG "hqhb"
             # Preflight: never start a process that cannot boot. Without these the
             # app falls back to root@localhost with no password and the hardcoded
             # "dev-secret-change-me" token key, so it crash-loops behind a green
             # tick — which is what happened to WAQF on its first deploy.
             # DB_PASSWORD is absent from this list: an empty password is legitimate.
             MISSING=""
-            for k in DB_HOST DB_PORT DB_USER DB_NAME JWT_SECRET; do
+            for k in DB_HOST DB_PORT DB_USER DB_NAME JWT_SECRET ORG_SLUG; do
               grep -qE "^$k=.+" .env || MISSING="$MISSING $k"
             done
             if [ -n "$MISSING" ]; then

@@ -41,10 +41,9 @@ import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
 import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
-import { getChosenOrg, setChosenOrg, clearChosenOrg } from "./lib/org.js";
 import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
-import { OrgPicker } from "./components/OrgPicker.jsx";
+import { OrgUnavailable } from "./components/OrgUnavailable.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -277,12 +276,22 @@ export default function App() {
   }, [user, refresh]);
 
   // ---- which organisation's door are we at? ----
-  // Remembered so a returning user goes straight to their own sign-in. Only a
-  // convenience: the server independently verifies the account belongs to the
-  // organisation, so changing this cannot get anyone into another space.
-  const [orgId, setOrgId] = useState(() => getChosenOrg());
-  const pickOrg = (id) => { setChosenOrg(id); setOrgId(id); };
-  const changeOrg = () => { clearChosenOrg(); setOrgId(null); };
+  // The deployment decides, not the visitor. One box serves one organisation
+  // and declares it through /auth/config, so there is no picker to walk past
+  // and nothing remembered between visits. undefined means the answer has not
+  // arrived yet; null means this address is not pointed at an organisation.
+  //
+  // This is only which door to show. The server independently refuses an
+  // account that belongs to another organisation, so a tampered value cannot
+  // get a WAQF user into HQHB's space.
+  const [orgId, setOrgId] = useState(undefined);
+  useEffect(() => {
+    let alive = true;
+    api.authConfig()
+      .then(cfg => { if (alive) setOrgId(cfg?.org?.id || null); })
+      .catch(() => { if (alive) setOrgId(null); });
+    return () => { alive = false; };
+  }, []);
 
   // ---- auth actions ----
   const login = async (email, password) => {
@@ -447,10 +456,14 @@ export default function App() {
     <div className="min-h-screen" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", backgroundColor: "var(--c-cream)", color: "var(--c-ink)" }}>
       <StyleTag />
       {!user ? (
-        // Landing: choose an organisation, then that organisation's sign-in.
-        orgId
-          ? <LoginScreen login={login} onSession={completeSession} org={orgId} onChangeOrg={changeOrg} />
-          : <OrgPicker onPick={pickOrg} />
+        // Straight to this deployment's sign-in — no organisation picker, because
+        // the address already determines the organisation. Render nothing while
+        // the answer is in flight, so the form does not flash the wrong door.
+        orgId === undefined
+          ? null
+          : orgId
+            ? <LoginScreen login={login} onSession={completeSession} org={orgId} />
+            : <OrgUnavailable />
       ) : user.needsWorkEmail ? (
         <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
