@@ -375,6 +375,19 @@ jobs:
                 console.log("signing authority rows: " + await scalar("SELECT COUNT(*) AS n FROM signing_authority"));
                 console.log("oldest request: " + JSON.stringify(
                   await one("SELECT MIN(created_at) AS oldest, MAX(created_at) AS newest FROM requests")));
+                // Does the work reference people and teams that exist HERE? A
+                // console shows a request only to someone it can connect the
+                // viewer to — requestor, named approver, assigned signer, or
+                // authority over its team. Work copied onto a box without those
+                // rows is present in the table and reachable by nobody.
+                console.log("requests whose requestor is not on this box: " + await scalar(
+                  "SELECT COUNT(*) AS n FROM requests r WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = r.requestor_id)"));
+                console.log("requests whose approver is not on this box: " + await scalar(
+                  "SELECT COUNT(*) AS n FROM requests r WHERE r.approver_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = r.approver_id)"));
+                console.log("requests whose target team is missing: " + await scalar(
+                  "SELECT COUNT(*) AS n FROM requests r WHERE r.target_team_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM teams t WHERE t.id = r.target_team_id)"));
+                console.log("step signers not on this box: " + await scalar(
+                  "SELECT COUNT(*) AS n FROM request_step_signers s WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = s.user_id)"));
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
             ' 2>&1 | tail -12
