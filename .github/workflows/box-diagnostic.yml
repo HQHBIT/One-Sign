@@ -393,15 +393,20 @@ jobs:
                 // So a request raised and signed by the same person is visible
                 // to nobody there, however healthy its data is. That reads as a
                 // broken console and is not one.
-                console.log("approved requests raised and signed by the same person: " + await scalar(
-                  `SELECT COUNT(*) AS n FROM requests r WHERE r.status = 'approved'
-                     AND (r.approver_id IS NULL OR r.approver_id = r.requestor_id)
-                     AND NOT EXISTS (
-                       SELECT 1 FROM request_steps st
-                       JOIN request_step_signers sg ON sg.step_id = st.id
-                       WHERE st.request_id = r.id AND sg.user_id <> r.requestor_id)`));
-                console.log("distinct requestors among approved requests: " + await scalar(
-                  "SELECT COUNT(DISTINCT requestor_id) AS n FROM requests WHERE status = 'approved'"));
+                // NOTE: no single quote may appear anywhere in this script. The
+                // whole program is a single-quoted shell argument, so one quote
+                // ends it and the box then waits on stdin until the run times
+                // out — which is what happened the first time this was written.
+                // Literals are bound, never inlined.
+                const scalarP = async (sql, p) => (await c.execute(sql, p))[0][0].n;
+                console.log("approved requests raised and signed by the same person: " + await scalarP(
+                  "SELECT COUNT(*) AS n FROM requests r WHERE r.status = ?" +
+                  " AND (r.approver_id IS NULL OR r.approver_id = r.requestor_id)" +
+                  " AND NOT EXISTS (SELECT 1 FROM request_steps st" +
+                  " JOIN request_step_signers sg ON sg.step_id = st.id" +
+                  " WHERE st.request_id = r.id AND sg.user_id <> r.requestor_id)", ["approved"]));
+                console.log("distinct requestors among approved requests: " + await scalarP(
+                  "SELECT COUNT(DISTINCT requestor_id) AS n FROM requests WHERE status = ?", ["approved"]));
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
             ' 2>&1 | tail -12
