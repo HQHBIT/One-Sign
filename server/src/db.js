@@ -556,6 +556,22 @@ async function runSchema() {
             ('waqf', 'WAQF Department', '/org/waqf.png', 0, 1, 1, 2, ?)`,
     [Date.now(), Date.now()]);
 
+  // Where this organisation's people actually reach SignFlow. An email links
+  // back to the app, and until now that link came from one process-wide value,
+  // so every WAQF notification pointed at HQHB's address — a door its recipients
+  // cannot open. The organisation is the right owner of this: a box may serve
+  // more than one of them, so it cannot be answered per deployment.
+  await tryExec(`ALTER TABLE organisations ADD COLUMN app_url VARCHAR(255) DEFAULT NULL`);
+  // Backfilled rather than seeded, so boxes that already have these rows get the
+  // value too — INSERT IGNORE above would skip them. Guarded on empty so an
+  // address set by hand is never overwritten on the next boot.
+  await tryExec(
+    `UPDATE organisations SET app_url = 'https://signflow.umooriqtesadiyah.org'
+      WHERE id = 'hqhb' AND (app_url IS NULL OR app_url = '')`);
+  await tryExec(
+    `UPDATE organisations SET app_url = 'https://signflow.waqftrust.com'
+      WHERE id = 'waqf' AND (app_url IS NULL OR app_url = '')`);
+
   // Home organisation. DEFAULT 'hqhb' is a backstop only — every insert path sets
   // it explicitly. Without a default, the many existing INSERTs that predate this
   // column would start failing outright.

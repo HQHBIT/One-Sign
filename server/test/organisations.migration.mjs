@@ -29,6 +29,24 @@ await initDb();
   assert.equal(await getOrganisation(""), null, "empty slug resolves to null");
 }
 
+// ---- each organisation knows the address its own people reach it at ----
+// Backfilled rather than seeded, because the rows already exist on every box
+// that has run before — an INSERT IGNORE would have skipped them and left the
+// column null, which is exactly the state that sent WAQF's mail to HQHB.
+{
+  const urls = Object.fromEntries(
+    (await query("SELECT id, app_url FROM organisations")).map(r => [r.id, r.app_url]));
+  assert.equal(urls.hqhb, "https://signflow.umooriqtesadiyah.org", "HQHB's address is set");
+  assert.equal(urls.waqf, "https://signflow.waqftrust.com", "WAQF's address is set");
+
+  // The backfill is guarded on empty so a hand-set address survives a reboot.
+  await query("UPDATE organisations SET app_url = 'https://example.invalid' WHERE id = 'waqf'");
+  await initDb();
+  const after = await queryOne("SELECT app_url FROM organisations WHERE id = 'waqf'");
+  assert.equal(after.app_url, "https://example.invalid", "a hand-set address is not overwritten on boot");
+  await query("UPDATE organisations SET app_url = 'https://signflow.waqftrust.com' WHERE id = 'waqf'");
+}
+
 // ---- columns were added, and everything pre-existing became HQHB ----
 {
   const cols = async (table) =>

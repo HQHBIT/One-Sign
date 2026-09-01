@@ -20,8 +20,11 @@ if (apiKey) {
 //  band, so we use the CREAM ("light") logo. Override any of these via env.
 // ────────────────────────────────────────────────────────────────────────────
 const BRAND = {
+  // Fallback only. The address an email links to belongs to the RECIPIENT's
+  // organisation and is resolved per send — see baseUrl() below. This value is
+  // what a recipient we cannot place falls back to.
   appUrl: (process.env.APP_PUBLIC_URL || "https://signflow.umooriqtesadiyah.org").replace(/\/+$/, ""),
-  logoUrl: process.env.EMAIL_LOGO_URL || "",   // defaults to <appUrl>/signflow-logo-light.png below
+  logoUrl: process.env.EMAIL_LOGO_URL || "",   // when unset, taken from that organisation's own address
   fromName,
   greeting: "Afzalus Salaam,",   // salutation before the recipient's name — edit to taste
   navy:  "#0F1A2E",
@@ -34,7 +37,8 @@ const BRAND = {
   muted: "#8A8577",   // labels / captions
   line:  "#ECE7DB",   // hairline borders
 };
-BRAND.logoUrl = BRAND.logoUrl || `${BRAND.appUrl}/signflow-logo-light.png`;
+// The logo is NOT resolved here any more: it hangs off whichever address the
+// email is pointing at, so it is derived inside layout() per email.
 
 // HTML-escape every piece of personalization we drop into markup.
 const esc = (s) => String(s == null ? "" : s)
@@ -64,9 +68,14 @@ const caption = (inner) => `<p style="margin:0 0 14px;font-family:Arial,Helvetic
 // punctuation) followed by the recipient's name.
 const greet = (name) => p(`${esc(BRAND.greeting)} ${esc(name)}`);
 
+// Where THIS recipient reaches SignFlow. sendEmail resolves ctx.appUrl from the
+// recipient's organisation before rendering; every link in every template goes
+// through here so none of them can quietly fall back to the wrong tenant.
+const baseUrl = (c) => String((c && c.appUrl) || BRAND.appUrl).replace(/\/+$/, "");
+
 // Deep link to a specific request in the app. Falls back to the app root when no
 // requestId is in the context, so the button is always a valid link.
-const requestUrl = (c) => (c && c.requestId ? `${BRAND.appUrl}/?request=${encodeURIComponent(c.requestId)}` : BRAND.appUrl);
+const requestUrl = (c) => (c && c.requestId ? `${baseUrl(c)}/?request=${encodeURIComponent(c.requestId)}` : baseUrl(c));
 
 // A label/value detail box. Rows with an empty value are dropped.
 function details(rows, { mono = false, accent = false } = {}) {
@@ -101,8 +110,12 @@ function button(label, url, kind = "gold") {
 }
 
 // The shared shell: navy header + cream logo + gold rule, white body, footer.
-function layout({ preheader, pillHtml, heading, contentHtml }) {
-  const host = BRAND.appUrl.replace(/^https?:\/\//, "");
+function layout({ preheader, pillHtml, heading, contentHtml, appUrl }) {
+  const base = baseUrl({ appUrl });
+  const host = base.replace(/^https?:\/\//, "");
+  // Served from the same address the email points at, so a WAQF notification
+  // does not pull its artwork from HQHB's host.
+  const logoUrl = BRAND.logoUrl || `${base}/signflow-logo-light.png`;
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -120,7 +133,7 @@ function layout({ preheader, pillHtml, heading, contentHtml }) {
     <tr><td align="center" style="padding:28px 12px;">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:14px;overflow:hidden;">
         <tr><td align="center" style="background:${BRAND.navy};padding:30px 40px 26px;">
-          <img src="${esc(BRAND.logoUrl)}" alt="${esc(BRAND.fromName)}" width="146" style="display:block;width:146px;max-width:58%;height:auto;border:0;outline:none;text-decoration:none;">
+          <img src="${esc(logoUrl)}" alt="${esc(BRAND.fromName)}" width="146" style="display:block;width:146px;max-width:58%;height:auto;border:0;outline:none;text-decoration:none;">
         </td></tr>
         <tr><td style="height:4px;line-height:4px;font-size:0;background:${BRAND.gold};">&nbsp;</td></tr>
         <tr><td class="sf-pad" style="padding:34px 40px 30px;">
@@ -131,7 +144,7 @@ function layout({ preheader, pillHtml, heading, contentHtml }) {
         <tr><td class="sf-pad" style="background:${BRAND.paper};padding:22px 40px;border-top:1px solid ${BRAND.line};">
           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6;color:#9A9484;">
             Automated message from ${esc(BRAND.fromName)} — please don't reply to this email.<br>
-            <a href="${esc(BRAND.appUrl)}" target="_blank" style="color:${BRAND.gold};text-decoration:none;">${esc(host)}</a>
+            <a href="${esc(base)}" target="_blank" style="color:${BRAND.gold};text-decoration:none;">${esc(host)}</a>
           </p>
         </td></tr>
       </table>
@@ -150,7 +163,7 @@ function layout({ preheader, pillHtml, heading, contentHtml }) {
 const templates = {
   new_request: (c) => ({
     subject: `New signature request: ${c.requestorName}`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.requestorName} sent "${c.fileName}" for your approval`,
       pillHtml: pill("Awaiting your approval", "pending"),
       heading: "New signature request",
@@ -163,7 +176,7 @@ const templates = {
           { label: "Requested by", value: c.requestorName },
         ]) +
         (c.approveToken
-          ? button("Approve", `${BRAND.appUrl}/?approveToken=${encodeURIComponent(c.approveToken)}`, "green")
+          ? button("Approve", `${baseUrl(c)}/?approveToken=${encodeURIComponent(c.approveToken)}`, "green")
           : "") +
         button(c.approveToken ? "View the document" : "Review & sign", requestUrl(c), "gold") +
         caption(c.approveToken
@@ -174,7 +187,7 @@ const templates = {
       `${BRAND.greeting} ${c.approverName}`, ``,
       `${c.requestorName} has submitted "${c.fileName}" for your approval.`,
       c.teamName ? `Team: ${c.teamName}` : null, ``,
-      c.approveToken ? `Approve directly: ${BRAND.appUrl}/?approveToken=${encodeURIComponent(c.approveToken)}` : null,
+      c.approveToken ? `Approve directly: ${baseUrl(c)}/?approveToken=${encodeURIComponent(c.approveToken)}` : null,
       `View the document: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
     ].filter((x) => x !== null).join("\n"),
   }),
@@ -184,7 +197,7 @@ const templates = {
   // document has reached them.
   your_turn: (c) => ({
     subject: `Your signature is next: ${c.fileName}`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.previousSignerName || "The previous signer"} has signed — it's now your turn`,
       pillHtml: pill("Awaiting your signature", "pending"),
       heading: "It's your turn to sign",
@@ -209,7 +222,7 @@ const templates = {
 
   approved: (c) => ({
     subject: `Approved: ${c.fileName}`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.approverName} approved "${c.fileName}"`,
       pillHtml: pill("Approved", "approved"),
       heading: "Your document was approved",
@@ -234,7 +247,7 @@ const templates = {
   // assistant and the action so delegation is never invisible to the owner.
   ea_action: (c) => ({
     subject: `${c.assistantName} ${c.action} "${c.fileName}" on your behalf`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.assistantName} ${c.action} "${c.fileName}" on your behalf`,
       pillHtml: pill("On your behalf", "neutral"),
       heading: "Your assistant acted on your behalf",
@@ -257,7 +270,7 @@ const templates = {
 
   rejected: (c) => ({
     subject: `Rejected: ${c.fileName}`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.approverName} rejected "${c.fileName}"`,
       pillHtml: pill("Rejected", "rejected"),
       heading: "Your document was rejected",
@@ -280,7 +293,7 @@ const templates = {
 
   reminder: (c) => ({
     subject: `Reminder: "${c.fileName}" awaiting approval`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `Reminder: "${c.fileName}" is pending your approval`,
       pillHtml: pill("Awaiting your approval", "pending"),
       heading: "A document is awaiting your approval",
@@ -298,10 +311,10 @@ const templates = {
   }),
 
   welcome: (c) => {
-    const url = c.signInUrl || BRAND.appUrl;
+    const url = c.signInUrl || baseUrl(c);
     return {
       subject: `Welcome to ${BRAND.fromName} — your account is ready`,
-      html: layout({
+      html: layout({ appUrl: c.appUrl,
         preheader: "Your SignFlow account is ready — here are your sign-in details",
         pillHtml: pill("Account ready", "neutral"),
         heading: "Welcome to SignFlow",
@@ -333,10 +346,10 @@ const templates = {
   },
 
   reset_password: (c) => {
-    const url = c.signInUrl || BRAND.appUrl;
+    const url = c.signInUrl || baseUrl(c);
     return {
       subject: `Your ${BRAND.fromName} password has been reset`,
-      html: layout({
+      html: layout({ appUrl: c.appUrl,
         preheader: "Your SignFlow password has been reset",
         pillHtml: pill("Password reset", "neutral"),
         heading: "Your password was reset",
@@ -374,7 +387,7 @@ const templates = {
   // masks it in the Email log — keeping the reset the user's alone.
   password_otp: (c) => ({
     subject: `Your ${BRAND.fromName} password reset code`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "Your one-time password reset code",
       pillHtml: pill("Password reset", "neutral"),
       heading: "Your password reset code",
@@ -401,7 +414,7 @@ const templates = {
   // anyone who sees the inbox, defeating the point of marking it confidential.
   confidential_unlock_code: (c) => ({
     subject: `Your ${BRAND.fromName} document unlock code`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "Your one-time code to open a confidential document",
       pillHtml: pill("Confidential", "neutral"),
       heading: "Your unlock code",
@@ -428,7 +441,7 @@ const templates = {
     subject: c.confidential
       ? `${c.count} confidential documents need your signature`
       : `${c.count} documents need your signature`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: `${c.requestorName || "A colleague"} sent ${c.count} documents for your signature`,
       pillHtml: pill(c.confidential ? "Confidential" : "Signature requested", "pending"),
       heading: `${c.count} documents need your signature`,
@@ -450,7 +463,7 @@ const templates = {
 
   confidential_new_request: (c) => ({
     subject: `A confidential document needs your signature`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "A confidential document is waiting for you",
       pillHtml: pill("Confidential", "neutral"),
       heading: "A confidential document needs your signature",
@@ -472,7 +485,7 @@ const templates = {
 
   confidential_your_turn: (c) => ({
     subject: `Your signature is next on a confidential document`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "A confidential document is waiting for your approval",
       pillHtml: pill("Confidential", "neutral"),
       heading: "Your signature is next",
@@ -493,7 +506,7 @@ const templates = {
 
   confidential_approved: (c) => ({
     subject: `Your confidential document has been signed`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "Your confidential document is signed",
       pillHtml: pill("Confidential", "approved"),
       heading: "Your confidential document has been signed",
@@ -513,7 +526,7 @@ const templates = {
 
   confidential_rejected: (c) => ({
     subject: `Your confidential document was rejected`,
-    html: layout({
+    html: layout({ appUrl: c.appUrl,
       preheader: "Your confidential document was rejected",
       pillHtml: pill("Confidential", "rejected"),
       heading: "Your confidential document was rejected",
@@ -545,11 +558,29 @@ export function confidentialTemplate(template) {
   return map[template] || template;
 }
 
+// Every template name. Exported so a test can assert something about ALL of
+// them at once, and a template added later cannot quietly escape it.
+export const templateNames = Object.keys(templates);
+
 // Render a template without sending — used by the preview generator + tests.
 export function renderTemplate(template, ctx) {
   const t = templates[template];
   if (!t) throw new Error(`Unknown template: ${template}`);
   return t(ctx);
+}
+
+// The address the recipient's own organisation is served at, or null when this
+// address belongs to nobody we know — an external signer, a changed address, a
+// test. Never throws: a link pointing at the fallback is a far smaller failure
+// than an email that does not go out at all.
+async function appUrlFor(email) {
+  try {
+    const rows = await query(
+      `SELECT o.app_url FROM users u
+         JOIN organisations o ON o.id = u.org_id
+        WHERE LOWER(u.email) = LOWER(?) LIMIT 1`, [email]);
+    return rows?.[0]?.app_url || null;
+  } catch { return null; }
 }
 
 export async function sendEmail({ to, template, ctx, _isAssistantCopy }) {
@@ -570,7 +601,12 @@ export async function sendEmail({ to, template, ctx, _isAssistantCopy }) {
       }
     } catch { /* copies must never block the primary email */ }
   }
-  const { subject, html, text } = renderTemplate(template, ctx);
+  // Resolved per recipient rather than per process. An assistant receiving a
+  // copy is dispatched through sendEmail again, so they resolve to their OWN
+  // organisation's address — the one they can actually sign in to. An explicit
+  // ctx.appUrl (the preview generator sets one) always wins.
+  const ctxWithUrl = { ...ctx, appUrl: ctx?.appUrl || (await appUrlFor(to)) || BRAND.appUrl };
+  const { subject, html, text } = renderTemplate(template, ctxWithUrl);
   // We SEND both `html` (branded) and `text` (fallback). We LOG only the
   // plain-text version, redacted — never the HTML, never a plaintext password.
   const logBody = redactEmailBody(text);
