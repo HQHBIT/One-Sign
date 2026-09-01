@@ -1482,8 +1482,17 @@ function ApproverView(props) {
   // On the route, still open, but waiting on somebody else.
   const waitingOnOthers = mine.filter(r => r.status === "pending" && !isMyTurn(r, user.id, user.signingAuthorityTeams));
   const pendingApproved = mine.filter(r => r.status === "approved_pending" && (r.approverId === user.id || iSigned(r)));
-  const approved = mine.filter(r => r.status === "approved" && (r.approverId === user.id || iSigned(r)));
-  const rejected = mine.filter(r => r.status === "rejected" && (r.approverId === user.id || iSigned(r)));
+  // Oversight, not personal history. A console that hides finalised work done by
+  // colleagues looks broken — which is how it was reported on WAQF, where three
+  // approved requests were invisible to an approver who was on none of them. The
+  // server now sends signers the whole board and these lists show it, including
+  // requests I raised myself; excluding those is what made the screen read empty.
+  //
+  // Pending stays personal above: that is a queue of what to sign, not a record.
+  // Confidential requests still arrive redacted for anyone off their route, and
+  // opening any document is still authorised per request by the server.
+  const approved = requests.filter(r => r.status === "approved");
+  const rejected = requests.filter(r => r.status === "rejected");
 
   if (tab === "new") return <NewRequest {...props} defaultType={newType} presetWorkflow={presetTpl}
     onDone={() => { setNewType(null); setPresetTpl(null); setTab("home"); }} />;

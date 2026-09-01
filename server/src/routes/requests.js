@@ -205,11 +205,27 @@ async function stampAndStore({ row, stamps }) {
 // ============================================================
 //   list (role-scoped)
 // ============================================================
+// An approver console limited to the routes you are personally on shows nothing
+// of the work everyone else did, which reads as an empty or broken console —
+// reported on the WAQF box, where three approved requests were invisible to an
+// approver who simply was not on any of them. Signers now see the whole board.
+//
+// This widens what is LISTED and nothing else. Opening a document still goes
+// through authoriseAccess, which re-derives involvement per request, and a
+// confidential document is still reduced to "Confidential document" for anyone
+// off its route by redactConfidential. What an uninvolved approver gains is
+// metadata — the document name of a non-confidential request, who raised it,
+// its status — and no access to a single byte of any file.
+//
+// Set APPROVER_SEES_ALL_REQUESTS=false on a box to put it back to route-scoped.
+const APPROVERS_SEE_ALL =
+  String(process.env.APPROVER_SEES_ALL_REQUESTS ?? "true").trim().toLowerCase() === "true";
+
 router.get("/", authRequired, async (req, res, next) => {
   try {
     const u = req.user;
     let rows;
-    if (u.role === "admin") {
+    if (u.role === "admin" || (isSigner(u.role) && APPROVERS_SEE_ALL)) {
       rows = await query("SELECT * FROM requests ORDER BY created_at DESC");
     } else {
       // Everyone else, regardless of role: requests they RAISED, requests where
