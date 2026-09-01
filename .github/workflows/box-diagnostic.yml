@@ -342,3 +342,39 @@ jobs:
                 echo "not deployed to this box yet (it ships with the confidential fix)"
               fi
             fi
+
+            echo
+            echo "=============== 12. what work exists on this box ==============="
+            # Counts only — no names, no addresses, no document titles. Enough to
+            # tell three different failures apart when a console looks empty:
+            # the box genuinely holds no such work, the work is there but belongs
+            # to nobody the viewer is involved with, or the work never arrived on
+            # this box at all because it still lives on another one.
+            cd /home/ubuntu/OneSign/server || exit 0
+            node -e '
+              const mysql = require("mysql2/promise");
+              require("dotenv").config();
+              (async () => {
+                const cfg = {
+                  host: process.env.DB_HOST || "localhost",
+                  port: parseInt(process.env.DB_PORT || "3306", 10),
+                  user: process.env.DB_USER || "root",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME || "signflow"
+                };
+                if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
+                const c = await mysql.createConnection(cfg);
+                const one = async (sql) => (await c.execute(sql))[0];
+                console.log("requests by org and status: " + JSON.stringify(
+                  await one("SELECT org_id, status, COUNT(*) AS n FROM requests GROUP BY org_id, status ORDER BY org_id, status")));
+                console.log("teams by org: " + JSON.stringify(
+                  await one("SELECT org_id, COUNT(*) AS n FROM teams GROUP BY org_id")));
+                const scalar = async (sql) => (await one(sql))[0].n;
+                console.log("workflow steps: " + await scalar("SELECT COUNT(*) AS n FROM request_steps"));
+                console.log("step signers: " + await scalar("SELECT COUNT(*) AS n FROM request_step_signers"));
+                console.log("signing authority rows: " + await scalar("SELECT COUNT(*) AS n FROM signing_authority"));
+                console.log("oldest request: " + JSON.stringify(
+                  await one("SELECT MIN(created_at) AS oldest, MAX(created_at) AS newest FROM requests")));
+                await c.end();
+              })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
+            ' 2>&1 | tail -12
