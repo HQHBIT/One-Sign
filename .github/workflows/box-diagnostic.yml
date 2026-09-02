@@ -412,6 +412,25 @@ jobs:
             ' 2>&1 | tail -12
 
             echo
+            echo "=============== 14. which organisation does this box think it is? ==============="
+            # ORG_SLUG is configuration, not a secret — the deploy workflow says so
+            # itself and writes it in the clear — so its value is printed here.
+            # What matters is whether the FILE and the RUNNING PROCESS agree: the
+            # app reads .env through dotenv, which does not overwrite a variable
+            # that already exists in the environment, so a value present on disk
+            # can still be missing from the process that serves the page.
+            grep -E '^ORG_SLUG=' /home/ubuntu/OneSign/server/.env || echo "  ORG_SLUG is ABSENT from .env"
+            echo "  --- what the running server answers ---"
+            for p in 5000 5001 3000 3001; do
+              BODY=$(curl -s --max-time 5 "http://127.0.0.1:$p/api/auth/config" 2>/dev/null)
+              if [ -n "$BODY" ]; then
+                echo -n "  :$p org -> "
+                echo "$BODY" | sed -E 's/.*"org":(null|\{"id":"[^"]*").*/\1/' | head -c 60
+                echo
+              fi
+            done
+
+            echo
             echo "=============== 13. does every stored file still exist somewhere? ==============="
             # Carried inline, like the confidential audit, so it can answer this on
             # a box running whatever the last deploy shipped.
