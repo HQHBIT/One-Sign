@@ -538,7 +538,11 @@ jobs:
                 // files. It is counted separately and surfaced.
                 if (e?.name === "NotFound" || e?.name === "NoSuchKey"
                   || e?.$metadata?.httpStatusCode === 404) return false;
-                return { error: e?.name || e?.message || "unknown" };
+                // Name, code and HTTP status only. They say what is wrong — InvalidAccessKeyId,
+                // AccessDenied, ENOTFOUND, ECONNREFUSED — without repeating the endpoint or
+                // bucket back into a log this public repository publishes.
+                const bits = [e?.name, e?.code, e?.$metadata?.httpStatusCode].filter(Boolean);
+                return { error: bits.length ? bits.join("/") : "unknown" };
               }
             };
 
