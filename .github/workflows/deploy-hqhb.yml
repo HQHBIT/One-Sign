@@ -259,25 +259,53 @@ jobs:
                   ONEACCESS_CLIENT_SECRET ONEACCESS_PUBLIC_KEY_PATH \
                   ONEACCESS_ACCESS_TOKEN_TTL AUTH_LOCAL_LOGIN_ENABLED
             npm ci --omit=dev
+            # The port this box is actually configured for, read from .env rather
+            # than pinned here. It was pinned to 5000 while .env said 5001 and
+            # nginx proxied to 5001 — three answers to one question — so every
+            # deploy restarted a process nobody could reach while a stale one from
+            # an earlier install went on serving every visitor, including the
+            # "no organisation" page, because that older process started before
+            # ORG_SLUG existed.
+            APP_PORT=$(grep -E '^PORT=' .env | tail -1 | cut -d= -f2 | tr -d '"'"'"' ')
+            APP_PORT=${APP_PORT:-5000}
+            echo "starting on port $APP_PORT (from .env)"
+            # The name this app ran under before the workflow managed it. Left
+            # alone it holds the port the managed process needs, and pm2 resurrect
+            # brings it back after every reboot.
+            pm2 delete onesign 2>/dev/null || true
             pm2 delete onesign_backend_hqhb 2>/dev/null || true
-            PORT=5000 pm2 start src/index.js --name onesign_backend_hqhb --cwd /home/ubuntu/OneSign/server
+            pm2 start src/index.js --name onesign_backend_hqhb --cwd /home/ubuntu/OneSign/server
             pm2 save
             # A start is not a success. pm2 reports "online" the instant it forks, so
             # a process that dies on its first database call still looks healthy —
             # which is how both UAT and WAQF sat crash-looping behind green runs.
             # Poll the real endpoint and fail the deploy if it never answers.
-            echo "waiting for the app to answer on 127.0.0.1:5000 ..."
+            echo "waiting for the app to answer on 127.0.0.1:$APP_PORT ..."
             HEALTHY=""
             for i in $(seq 1 15); do
               sleep 2
-              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "http://127.0.0.1:5000/api/auth/organisations" 2>/dev/null || true)
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "http://127.0.0.1:$APP_PORT/api/auth/organisations" 2>/dev/null || true)
               if [ "$CODE" = "200" ]; then HEALTHY="yes"; echo "healthy after $((i*2))s (HTTP 200)"; break; fi
             done
             if [ -z "$HEALTHY" ]; then
-              echo "DEPLOY FAILED — onesign_backend_hqhb never answered on 5000. Recent errors:"
+              echo "DEPLOY FAILED — onesign_backend_hqhb never answered on $APP_PORT. Recent errors:"
               pm2 logs onesign_backend_hqhb --nostream --lines 30 --err 2>/dev/null | tail -20
               exit 1
             fi
+            # Answering on localhost is not the same as being reachable. A healthy
+            # process on a port nginx does not proxy to is exactly the failure this
+            # box had, and it passed every check above for days. Ask through nginx,
+            # the way a visitor arrives.
+            VIA_NGINX=$(curl -s -o /dev/null -w "%{http_code}" --max-time 6 \
+              -H "Host: signflow.umooriqtesadiyah.org" \
+              "http://127.0.0.1/api/auth/organisations" 2>/dev/null || true)
+            if [ "$VIA_NGINX" != "200" ]; then
+              echo "DEPLOY FAILED — the app answers on $APP_PORT but nginx returns $VIA_NGINX."
+              echo "nginx is proxying somewhere else. Current upstreams:"
+              sudo nginx -T 2>/dev/null | grep -E '^\s*proxy_pass' | sort -u
+              exit 1
+            fi
+            echo "reachable through nginx (HTTP 200)"
 
       - name: Ensure nginx serves .mjs + .webmanifest with correct MIME type
         uses: appleboy/ssh-action@v1
