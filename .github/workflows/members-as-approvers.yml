@@ -1,0 +1,50 @@
+name: Members as approvers (HQHB)
+
+# Every department member also holds their department's signing authority, so
+# Teams & authority lists them under Approvers. Manual only.
+#
+# The WAQF box is deliberately absent from the box list: this is an HQHB
+# decision, and both organisations deploy from the same branch. The script
+# refuses to run anywhere ORG_SLUG is not hqhb, so the guard holds even if the
+# workflow is dispatched by mistake.
+
+on:
+  workflow_dispatch:
+    inputs:
+      box:
+        description: "Which box"
+        required: true
+        default: uat
+        type: choice
+        options: [uat, hqhb]
+      mode:
+        description: "report = counts only, apply = grant the missing authority"
+        required: true
+        default: report
+        type: choice
+        options: [report, apply]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ${{ inputs.mode }} on the ${{ inputs.box }} box
+        uses: appleboy/ssh-action@v1
+        env:
+          MODE: ${{ inputs.mode }}
+        with:
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || secrets.HQHB_EC2_HOST }}
+          username: ubuntu
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || secrets.HQHB_EC2_SSH_KEY }}
+          envs: MODE
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
+            export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
+            cd /home/ubuntu/OneSign/server || { echo "MISSING server directory"; exit 1; }
+
+            if [ "$MODE" = "apply" ]; then
+              node --env-file=.env scripts/members-as-approvers.mjs --apply
+            else
+              node --env-file=.env scripts/members-as-approvers.mjs
+            fi

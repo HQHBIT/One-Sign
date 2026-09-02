@@ -9,6 +9,24 @@ import { authRequired, requireRole, isSigner } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { deploymentOrg } from "../org.js";
 
+// A department member is also an approver of that department (product
+// direction 2026-09-02): they hold that team's signing authority, so Teams &
+// authority lists them under Approvers and a request routed to the team can
+// reach them. HQHB only — the WAQF box keeps explicit appointment, and both
+// boxes deploy from the same branch, so the organisation decides, not the code
+// version. Adding only: an authority granted by hand is never removed here.
+const membersAreApprovers = () => deploymentOrg() === "hqhb";
+async function grantTeamAuthority(runner, userId, teamId) {
+  if (!teamId || !membersAreApprovers()) return;
+  try {
+    await runner("INSERT IGNORE INTO signing_authority (user_id, team_id) VALUES (?, ?)", [userId, teamId]);
+  } catch (e) {
+    // A member who could not be made an approver must not fail their creation
+    // or their move between departments — the backfill script catches these.
+    console.error("[teams] could not grant member authority:", e.message);
+  }
+}
+
 // Roles an admin may assign when creating users.
 const ASSIGNABLE_ROLES = ["admin", "requestor", "approver", "executive", "executive_assistant"];
 
@@ -120,6 +138,7 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
         try { await execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
       }
     }
+    await grantTeamAuthority(execute, id, teamId);
 
     const row = await queryOne("SELECT * FROM users WHERE id = ?", [id]);
     res.json({ user: await hydrateUser(row) });
@@ -154,6 +173,8 @@ router.post("/bulk", authRequired, requireRole("admin"), async (req, res, next) 
             try { await conn.execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [id, tid]); } catch {}
           }
         }
+        await grantTeamAuthority((sql, args) => conn.execute(sql, args),
+          id, r.role === "requestor" ? (r.team || null) : null);
         imported++;
       }
       await conn.commit();
@@ -311,6 +332,7 @@ router.put("/:id/team", authRequired, requireRole("admin"), async (req, res, nex
       if (!team) return res.status(404).json({ error: "Team not found" });
     }
     await execute("UPDATE users SET team_id = ? WHERE id = ?", [teamId || null, req.params.id]);
+    await grantTeamAuthority(execute, req.params.id, teamId);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
