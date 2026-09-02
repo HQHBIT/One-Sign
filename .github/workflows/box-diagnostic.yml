@@ -522,6 +522,6 @@ jobs:
             }
             console.log("");
             process.exit(0);
-CPS
+            CPS
             node scripts/.copies-tmp.mjs 2>&1 | tail -80 || echo "copy audit could not run on this box"
             rm -f scripts/.copies-tmp.mjs
