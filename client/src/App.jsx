@@ -3624,10 +3624,19 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
                     style={{ backgroundColor: "rgba(15,26,46,.06)" }}>{ROLE_LABELS[a.role] || a.role}</span>
                 )}
                 {!a.hasSignature && <span className="pill pill-rejected text-[10px] shrink-0">no sig</span>}
-                <button onClick={() => revoke(a.id, a.name)} disabled={busy === a.id}
-                  className="opacity-40 hover:opacity-100 text-xs" title="Revoke authority">
-                  {busy === a.id ? "…" : <X size={12} />}
-                </button>
+                {/* Only an appointment can be revoked. A member signs for their
+                    own department by belonging to it, so the way to end that is
+                    to remove them below — offering an X here would look like it
+                    worked and change nothing. */}
+                {(a.appointedTeams || []).includes(team.id) ? (
+                  <button onClick={() => revoke(a.id, a.name)} disabled={busy === a.id}
+                    className="opacity-40 hover:opacity-100 text-xs" title="Revoke authority">
+                    {busy === a.id ? "…" : <X size={12} />}
+                  </button>
+                ) : (
+                  <span className="text-[9px] uppercase tracking-wider opacity-40 shrink-0"
+                    title="Signs for this department by belonging to it. Remove them from Department members to end that.">member</span>
+                )}
               </div>
             ))}
           </div>

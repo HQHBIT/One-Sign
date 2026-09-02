@@ -75,9 +75,12 @@ router.get("/:executiveId/requests", authRequired, requireRole("executive_assist
       WHERE (r.approver_id = ?
          OR sg.user_id = ?
          OR (r.status = 'pending' AND r.target_team_id IS NOT NULL
-             AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)))
+             AND (EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)
+                  -- Membership confers signing rights, so an assistant must see
+                  -- the same board their executive does.
+                  OR EXISTS (SELECT 1 FROM users mu WHERE mu.id = ? AND mu.team_id = r.target_team_id))))
         ${statusFilter}
-      ORDER BY r.created_at DESC`, [eid, eid, eid]);
+      ORDER BY r.created_at DESC`, [eid, eid, eid, eid]);
     const requests = await Promise.all(rows.map(hydrateRequest));
     res.json({ requests, scope: link.can_dashboard ? "all" : "pending" });
   } catch (e) { next(e); }

@@ -205,6 +205,29 @@ async function stampAndStore({ row, stamps }) {
 // ============================================================
 //   list (role-scoped)
 // ============================================================
+// May this user sign for this team?
+//
+// A row in signing_authority used to be the only answer. That made a department
+// with members and no appointed approver a dead end, and — reported on HQHB —
+// left a department of twenty-three members unable to act on their own work
+// because a single person had been appointed. Belonging to a department now
+// confers the same right as being appointed to it.
+//
+// Appointment still means something, and is still the only way to put someone
+// on a team they are not a member of. Revoking it no longer removes a member's
+// right to their OWN department, which is deliberate: that right comes from
+// membership, and the way to end it is to move them out of the department.
+//
+// Inactive users are excluded here, as they are everywhere else that authority
+// is decided — a deactivated account must not sign.
+const maySignForTeam = (userId, teamId) => queryOne(
+  `SELECT 1 AS ok FROM users u
+    WHERE u.id = ? AND u.active = 1
+      AND (u.team_id = ?
+           OR EXISTS (SELECT 1 FROM signing_authority sa
+                       WHERE sa.user_id = u.id AND sa.team_id = ?))`,
+  [userId, teamId, teamId]);
+
 // An approver console limited to the routes you are personally on shows nothing
 // of the work everyone else did, which reads as an empty or broken console —
 // reported on the WAQF box, where three approved requests were invisible to an
@@ -241,9 +264,13 @@ router.get("/", authRequired, async (req, res, next) => {
            OR sg.user_id = ?
            OR (r.status = 'pending'
                AND r.target_team_id IS NOT NULL
-               AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id))
+               AND (EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)
+                    -- Belonging to the department counts, exactly as it does in
+                    -- maySignForTeam. The two must agree, or a member is shown
+                    -- work they cannot act on, or can act on work never shown.
+                    OR EXISTS (SELECT 1 FROM users mu WHERE mu.id = ? AND mu.team_id = r.target_team_id)))
         ORDER BY r.created_at DESC
-      `, [u.id, u.id, u.id, u.id]);
+      `, [u.id, u.id, u.id, u.id, u.id]);
     }
     const requests = await Promise.all(
       rows.map(async r => redactConfidential(await hydrateRequest(r), r, u))
@@ -525,7 +552,7 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
       // being a MEMBER of that team — the fallback that keeps team routing usable
       // when no approver has been designated yet. (Only the named person can
       // actually sign; the approve path checks identity + signature.)
-      const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [s.userId, step.teamId]);
+      const auth = await maySignForTeam(s.userId, step.teamId);
       const isMember = u.team_id === step.teamId;
       if (!auth && !isMember) {
         return res.status(400).json({ error: `${u.name} is neither an approver for nor a member of ${teamById[step.teamId].name}` });
@@ -755,10 +782,7 @@ async function authoriseAccess(user, row) {
   `, [row.id, user.id]);
   if (sg) return true;
   if (row.status === "pending" && row.target_team_id) {
-    const auth = await queryOne(
-      "SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?",
-      [user.id, row.target_team_id]
-    );
+    const auth = await maySignForTeam(user.id, row.target_team_id);
     if (auth) return true;
   }
   return false;
@@ -1017,7 +1041,7 @@ export async function approveRequestHandler(req, res, next) {
     // No role gate: holding the team's signing authority is the authorisation
     // (checked immediately below), so any user an admin appoints can sign.
     if (!row.target_team_id || !row.marker_json) return res.status(400).json({ error: "Request misconfigured" });
-    const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
+    const auth = await maySignForTeam(req.user.id, row.target_team_id);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
 
     const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
@@ -1221,7 +1245,7 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
             results.failed.push({ id, error: "Misconfigured" });
             continue;
           }
-          const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
+          const auth = await maySignForTeam(req.user.id, row.target_team_id);
           if (!auth) { results.failed.push({ id, error: "No authority" }); continue; }
           const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
           // one box (legacy) or an array — stamp every box, same as single approve.
@@ -1358,7 +1382,7 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
     let allowed = false;
     if (next && next.user_id === req.user.id) allowed = true;
     if (!allowed && row.target_team_id) {
-      const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
+      const auth = await maySignForTeam(req.user.id, row.target_team_id);
       if (auth) allowed = true;
     }
     if (!allowed && row.approver_id === req.user.id) allowed = true;
