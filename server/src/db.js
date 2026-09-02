@@ -719,7 +719,19 @@ export async function hydrateUser(row) {
     darkModeVariant: row.dark_mode_variant || "invert",
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
-    signingAuthorityTeams: auth.map(r => r.team_id),
+    // Appointed teams PLUS the user's own department. Belonging to a department
+    // confers the right to sign for it (see maySignForTeam on the server), and
+    // this list is what the client uses to decide whose turn it is — so leaving
+    // the home department out would show a member work the server would then
+    // let them sign, or hide it entirely. The two rules have to agree.
+    signingAuthorityTeams: [...new Set(
+      [...auth.map(r => r.team_id), ...(row.team_id ? [row.team_id] : [])]
+    )],
+    // Appointments alone, without the home department folded in. Only an
+    // appointment can be revoked — membership ends by moving the person out of
+    // the department — so the Teams screen needs to tell the two apart to know
+    // whether to offer a revoke at all.
+    appointedTeams: auth.map(r => r.team_id),
     // Plaintext most-recent temp password — only meaningful right after reset
     // / invite / forgot-password. Falls back to null otherwise.
     lastTempPassword: row.last_temp_password || null,

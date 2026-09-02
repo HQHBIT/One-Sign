@@ -48,11 +48,24 @@ router.get("/", authRequired, async (req, res, next) => {
       const members = membersBy[t.id] || [];
       // `signers` is what a requestor may pick from: the designated approvers,
       // or — when none are set — the team's own members.
-      const usingMembers = approvers.length === 0 && members.length > 0;
+      // Everyone who may sign for this team: those appointed, and everyone who
+      // belongs to it. This used to be one OR the other — members only counted
+      // when nobody had been appointed — which left a department of twenty-three
+      // unable to act because a single approver existed. Membership now stands
+      // on its own, and must match maySignForTeam on the request side exactly.
+      //
+      // `designated` records WHY someone is here, because only an appointment
+      // can be revoked; membership ends by moving the person out of the
+      // department. The screen needs that distinction to know what to offer.
+      const byId = new Map();
+      for (const a of approvers) byId.set(a.id, { ...a, designated: true });
+      for (const m of members) if (!byId.has(m.id)) byId.set(m.id, { ...m, designated: false });
+      const signers = [...byId.values()];
       return {
-        ...t, approvers, members,
-        signers: approvers.length ? approvers : members,
-        signerSource: usingMembers ? "members" : "approvers",
+        ...t, approvers, members, signers,
+        // Kept for anything still reading it; every team with members now has
+        // signers, so "no approver yet" is no longer a dead end.
+        signerSource: approvers.length ? "approvers" : "members",
       };
     });
     res.json({ teams });
