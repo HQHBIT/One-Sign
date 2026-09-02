@@ -1,7 +1,11 @@
 name: Migrate uploads to S3 (manual)
 
 # ============================================================
-# Copies the stored files on the UAT box into the object-storage bucket.
+# Copies the stored files on the chosen box into that box's object-storage
+# bucket. The box is an input rather than a fixed host, because each deployment
+# has its own bucket and its own files — running this against the wrong one
+# migrates the wrong corpus into the wrong bucket, and the credentials are read
+# from the box's .env, so it would appear to work.
 #
 # Manual only, and staged on purpose. The three modes run in order, and each one
 # tells you whether the next is safe:
@@ -23,6 +27,12 @@ name: Migrate uploads to S3 (manual)
 on:
   workflow_dispatch:
     inputs:
+      box:
+        description: "Which box to migrate"
+        required: true
+        default: uat
+        type: choice
+        options: [uat, hqhb, waqf]
       mode:
         description: "What to do"
         required: true
@@ -54,9 +64,9 @@ jobs:
           MODE: ${{ inputs.mode }}
           ONLY_USER: ${{ inputs.only_user }}
         with:
-          host: ${{ secrets.UAT_EC2_HOST }}
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
           envs: MODE,ONLY_USER
           command_timeout: 30m
           script: |
