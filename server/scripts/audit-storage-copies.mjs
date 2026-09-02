@@ -21,8 +21,32 @@
 import "dotenv/config";
 import fs from "node:fs/promises";
 import mysql from "mysql2/promise";
+import { S3Client, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { diskPathFor, keyFor } from "../src/filestore.js";
-import * as storage from "../src/storage.js";
+
+// The bucket is addressed directly rather than through src/storage.js, because
+// this has to run on a box regardless of which version that box has deployed —
+// the same reason the confidential audit is carried inline. It also lets the
+// check be a HEAD: asking whether an object exists must not download it.
+const CFG = {
+  endpoint: (process.env.STORAGE_ENDPOINT || "").trim().replace(/\/+$/, ""),
+  region: (process.env.STORAGE_REGION || "ap-south-1").trim(),
+  bucket: (process.env.STORAGE_BUCKET || "").trim(),
+  accessKey: (process.env.STORAGE_ACCESS_KEY || "").trim(),
+  secretKey: (process.env.STORAGE_SECRET_KEY || "").trim(),
+  forcePathStyle: String(process.env.STORAGE_FORCE_PATH_STYLE || "").trim() === "true",
+};
+const bucketOn = !!(CFG.bucket && CFG.endpoint);
+const s3 = bucketOn
+  ? new S3Client({
+      region: CFG.region,
+      endpoint: CFG.endpoint || undefined,
+      forcePathStyle: CFG.forcePathStyle,
+      credentials: CFG.accessKey
+        ? { accessKeyId: CFG.accessKey, secretAccessKey: CFG.secretKey }
+        : undefined,
+    })
+  : null;
 
 const conn = await mysql.createConnection({
   host: process.env.DB_HOST || "localhost",
@@ -53,24 +77,48 @@ for (const [area, sql] of SOURCES) {
 }
 await conn.end();
 
-console.log(`\n  Object storage: ${storage.isEnabled() ? "enabled" : "DISABLED"}`);
+console.log(`\n  Object storage: ${bucketOn ? "enabled" : "DISABLED"}`);
 console.log(`  ${refs.size} distinct stored file(s) referenced by the database.\n`);
 
 const onDisk = async (area, v) => {
   try { await fs.access(diskPathFor(area, v)); return true; } catch { return false; }
 };
 const inBucket = async (area, v) => {
-  if (!storage.isEnabled()) return false;
-  try { return await storage.exists(keyFor(area, v)); } catch { return false; }
+  if (!s3) return false;
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: CFG.bucket, Key: keyFor(area, v) }));
+    return true;
+  } catch (e) {
+    // A missing object is an answer, not a failure. Anything else — a refused
+    // credential, an unreachable endpoint — must not be silently reported as
+    // "not in the bucket", which would turn an outage into a story about lost
+    // files. It is counted separately and surfaced.
+    if (e?.name === "NotFound" || e?.name === "NoSuchKey"
+      || e?.$metadata?.httpStatusCode === 404) return false;
+    return { error: e?.name || e?.message || "unknown" };
+  }
 };
 
-const tally = { both: 0, diskOnly: 0, bucketOnly: 0, neither: [] };
-for (const { area, v } of refs.values()) {
-  const [d, b] = await Promise.all([onDisk(area, v), inBucket(area, v)]);
-  if (d && b) tally.both++;
-  else if (d) tally.diskOnly++;
-  else if (b) tally.bucketOnly++;
-  else tally.neither.push(`${area}/${v}`);
+const tally = { both: 0, diskOnly: 0, bucketOnly: 0, neither: [], errors: new Map() };
+// Batched: one at a time over a thousand objects is slow, all at once opens a
+// thousand sockets. Twenty keeps it to a few seconds without straining the box.
+const all = [...refs.values()];
+for (let i = 0; i < all.length; i += 20) {
+  const batch = all.slice(i, i + 20);
+  const results = await Promise.all(batch.map(async ({ area, v }) => {
+    const [d, b] = await Promise.all([onDisk(area, v), inBucket(area, v)]);
+    return { area, v, d, b };
+  }));
+  for (const { area, v, d, b } of results) {
+    if (b && b.error) {
+      tally.errors.set(b.error, (tally.errors.get(b.error) || 0) + 1);
+      continue;   // unknown, not lost
+    }
+    if (d && b) tally.both++;
+    else if (d) tally.diskOnly++;
+    else if (b) tally.bucketOnly++;
+    else tally.neither.push(`${area}/${v}`);
+  }
 }
 
 const rule = "  " + "-".repeat(74);
@@ -80,6 +128,12 @@ console.log(`  disk only  — bucket copy never made, or made while the bucket w
 console.log(`  bucket only — reads fine, but the box holds no local copy: ${tally.bucketOnly}`);
 console.log(`  in NEITHER — these are the lost ones: ${tally.neither.length}`);
 console.log(rule);
+
+if (tally.errors.size) {
+  console.log("\n  The bucket could not be asked about some files. These are UNKNOWN, not");
+  console.log("  lost — treat the counts above as a floor until this is resolved:");
+  for (const [name, n] of tally.errors) console.log(`    ${n} × ${name}`);
+}
 
 if (tally.neither.length) {
   console.log("\n  Referenced by a row and present nowhere:");

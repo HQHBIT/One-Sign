@@ -23,7 +23,7 @@
 // ============================================================
 import {
   S3Client, PutObjectCommand, GetObjectCommand,
-  DeleteObjectCommand, HeadBucketCommand,
+  DeleteObjectCommand, HeadBucketCommand, HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -136,13 +136,25 @@ export async function getFileBytes(Key) {
   return Buffer.from(await res.Body.transformToByteArray());
 }
 
-/** True when the object exists, false when it does not. Other errors propagate. */
+/**
+ * True when the object exists, false when it does not. Other errors propagate.
+ *
+ * HEAD, not GET. This used to fetch the object in full merely to learn whether
+ * it was there, and left the response stream unread — which is survivable for
+ * one file and not for a thousand: an audit over the whole bucket stalled with
+ * every body still open. A metadata request answers the same question and
+ * transfers nothing.
+ */
 export async function exists(Key) {
   try {
-    await client().send(new GetObjectCommand({ Bucket: cfg.bucket, Key }));
+    await client().send(new HeadObjectCommand({ Bucket: cfg.bucket, Key }));
     return true;
   } catch (e) {
-    if (e?.name === "NoSuchKey" || e?.$metadata?.httpStatusCode === 404) return false;
+    // HEAD carries no body, so an S3 server cannot send the NoSuchKey code with
+    // it; a missing object arrives as a bare 404 named NotFound. Both are
+    // matched so this keeps working whichever the server chooses to send.
+    if (e?.name === "NoSuchKey" || e?.name === "NotFound"
+      || e?.$metadata?.httpStatusCode === 404) return false;
     throw e;
   }
 }
