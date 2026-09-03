@@ -255,7 +255,9 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
     } else {
       if (!uploaded) return;
       // For uploaded files, trim transparent / near-white edges so the signature
-      // fills the marker box without surrounding whitespace.
+      // fills the marker box without surrounding whitespace. Drawing to a canvas
+      // also normalises the format: whatever the phone produced leaves here as
+      // PNG, which is the only reason a wide `accept` is safe.
       const img = new Image();
       img.onload = () => {
         const c = document.createElement("canvas");
@@ -265,12 +267,27 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
         const trimmed = trimSignatureCanvas(c);
         deliver((trimmed || c).toDataURL("image/png"));
       };
-      img.onerror = () => deliver(uploaded);
+      // A format this browser cannot decode — HEIC from an iPhone opened in
+      // Chrome is the common one. Sending the original bytes anyway guaranteed a
+      // rejection from the server, which accepts only png and jpeg, and the user
+      // saw a save that silently did nothing. Say what happened instead.
+      img.onerror = () => setErr(
+        "This image could not be read on this device. Photos from an iPhone are often HEIC — " +
+        "save or export it as PNG or JPG and try again, or use the Draw tab.");
       img.src = uploaded;
     }
   };
 
-  const save = () => produceDataUrl(onSave);
+  // onSave talks to the server, so it can fail. Unwrapped, a rejection went
+  // nowhere: the modal stayed open, nothing appeared, and the user pressed Save
+  // again. This is the path a brand-new user takes, and it is the one path where
+  // there is no way out of the modal to go and look for the problem.
+  const save = () => produceDataUrl(async (dataUrl) => {
+    setBusy(true); setErr("");
+    try { await onSave(dataUrl); }
+    catch (e) { setErr(e.message || "Could not save the signature"); }
+    finally { setBusy(false); }
+  });
 
   // Manage mode: adding stays in the modal so several can be added in one sitting.
   const addToSet = () => produceDataUrl(async (dataUrl) => {
@@ -327,7 +344,11 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
         )}
 
         {manage && <SignatureList sigs={sigs} thumbs={thumbs} busy={busy} onDefault={makeDefault} onDelete={removeSig} onRestore={restoreOriginal} armedId={armedDelete} />}
-        {manage && err && (
+        {/* Shown in EVERY mode, not only when managing a set. A first-time user
+            cannot dismiss this modal — it is the gate onto the app — so a failure
+            they cannot see leaves them stuck with a Save button that appears to
+            do nothing. That was the state new users were reporting. */}
+        {err && (
           <div className="text-xs mb-3 px-3 py-2 rounded" style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
         )}
 
@@ -354,7 +375,13 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
             <label className="inline-flex items-center gap-1.5 cursor-pointer text-sm font-medium underline underline-offset-2"
               style={{ color: "#8B6914" }}>
               <Upload size={14} /> {uploaded ? "Choose a different image…" : "Choose an image from this device…"}
-              <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="hidden" />
+              {/* Any image the device will offer. Restricting this to png/jpeg
+                  greyed out the photo a new user had just taken of their
+                  signature — an iPhone writes HEIC — so the Upload tab looked
+                  broken rather than picky. The canvas above re-encodes whatever
+                  is chosen to PNG, and a format this browser cannot decode is
+                  reported rather than sent. */}
+              <input type="file" accept="image/*" onChange={handleUpload} className="hidden" />
             </label>
             <div className="text-xs opacity-50 mt-1">PNG or JPEG — it will be auto-cropped to the signature.</div>
 
