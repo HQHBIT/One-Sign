@@ -228,21 +228,21 @@ const maySignForTeam = (userId, teamId) => queryOne(
                        WHERE sa.user_id = u.id AND sa.team_id = ?))`,
   [userId, teamId, teamId]);
 
-// An approver console limited to the routes you are personally on shows nothing
-// of the work everyone else did, which reads as an empty or broken console —
-// reported on the WAQF box, where three approved requests were invisible to an
-// approver who simply was not on any of them. Signers now see the whole board.
+// Whether a signer receives the whole board or only their own routes.
 //
-// This widens what is LISTED and nothing else. Opening a document still goes
-// through authoriseAccess, which re-derives involvement per request, and a
-// confidential document is still reduced to "Confidential document" for anyone
-// off its route by redactConfidential. What an uninvolved approver gains is
-// metadata — the document name of a non-confidential request, who raised it,
-// its status — and no access to a single byte of any file.
+// Briefly defaulted ON, at the owner's request, after an approver on none of a
+// box's three routes saw an empty console. In production the trade did not hold:
+// it let every signer read the name, the requestor and the count of every
+// document in the organisation, which is far more than anyone needs in order to
+// do their own work. Back OFF — a person sees what was sent to them and what
+// they sent.
 //
-// Set APPROVER_SEES_ALL_REQUESTS=false on a box to put it back to route-scoped.
+// The switch stays, because the original complaint was real. A box where an
+// empty console is the bigger problem can set APPROVER_SEES_ALL_REQUESTS=true
+// without a deploy — but note that it applies to EVERY signer on that box, not
+// to a chosen few.
 const APPROVERS_SEE_ALL =
-  String(process.env.APPROVER_SEES_ALL_REQUESTS ?? "true").trim().toLowerCase() === "true";
+  String(process.env.APPROVER_SEES_ALL_REQUESTS ?? "false").trim().toLowerCase() === "true";
 
 router.get("/", authRequired, async (req, res, next) => {
   try {
