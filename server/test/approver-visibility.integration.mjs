@@ -1,20 +1,22 @@
-// An approver sees the whole board — and still cannot open what is not theirs.
+// Does a person see only their own work?
 //
 //   node --env-file=.env test/approver-visibility.integration.mjs
 //
 // Needs the API running on :5001, started from THIS build.
 //
-// Reported on the WAQF box: three approved requests sat in the database, every
-// one of them healthy, and an approver saw an empty console because they were
-// on none of the three routes. Signers now receive every request.
+// This file has been written twice, in opposite directions, and the second one
+// is the rule. Listing was briefly widened so every signer received the whole
+// board, because an approver on none of a box's routes saw an empty console. In
+// production that handed every signer the name, the requestor and the count of
+// every document in the organisation.
 //
-// The point of this file is the SECOND half of that sentence. Widening a list
-// is only safe while it stays a list: the document behind an entry must remain
-// authorised per request, and a confidential document must stay unreadable and
-// unnamed for anyone off its route. A regression here would not look like a bug
-// — the console would simply show more, which is what was asked for — so it is
-// worth asserting explicitly rather than trusting that two code paths stay
-// independent.
+// So it is back to: what was sent to me, and what I sent. What is asserted here
+// is the ABSENCE — that a request reaches nobody it does not concern. That is
+// the half nobody can check by looking at their own screen, and the half that
+// was quietly wrong for two days.
+//
+// Counts are checked as well as names, because a total is a disclosure too: a
+// badge reading 480 says how much work exists even when no row is listed.
 import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
 import { initDb, execute, query } from "../src/db.js";
@@ -27,25 +29,27 @@ const now = Date.now();
 const ids = ["u_vis_r", "u_vis_a", "u_vis_o"];
 const clean = async () => {
   await query("DELETE FROM requests WHERE requestor_id = 'u_vis_r'");
-  await query("DELETE FROM signing_authority WHERE team_id = 't_vis'");
+  await query("DELETE FROM signing_authority WHERE team_id IN ('t_vis','t_vis_other')");
   await query(`DELETE FROM users WHERE id IN (${ids.map(() => "?").join(",")})`, ids);
-  await query("DELETE FROM teams WHERE id = 't_vis'");
+  await query("DELETE FROM teams WHERE id IN ('t_vis','t_vis_other')");
 };
 await clean();
 
 await execute("INSERT INTO teams (id,name,created_at) VALUES ('t_vis','Visibility Team',?)", [now]);
+await execute("INSERT INTO teams (id,name,created_at) VALUES ('t_vis_other','Other Team',?)", [now]);
 const hash = bcrypt.hashSync("x", 4);
-for (const [id, email, name, role] of [
-  ["u_vis_r", "vis.req@demo.local", "Requestor", "requestor"],
-  ["u_vis_a", "vis.app@demo.local", "On-route Approver", "approver"],
-  // The whole point: an approver on NO route at all.
-  ["u_vis_o", "vis.other@demo.local", "Uninvolved Approver", "approver"],
+for (const [id, email, name, role, team] of [
+  ["u_vis_r", "vis.req@demo.local", "Requestor", "requestor", "t_vis"],
+  ["u_vis_a", "vis.app@demo.local", "On-route Approver", "approver", "t_vis"],
+  // Deliberately in a DIFFERENT department: belonging to one now confers signing
+  // rights for it, so an uninvolved person has to belong elsewhere for the
+  // boundary being tested to mean anything.
+  ["u_vis_o", "vis.other@demo.local", "Uninvolved Approver", "approver", "t_vis_other"],
 ]) {
   await execute(
     "INSERT INTO users (id,email,password_hash,name,role,team_id,created_at,active,signature_path,signature_aspect) VALUES (?,?,?,?,?,?,?,1,?,1)",
-    [id, email, hash, name, role, "t_vis", now, "u_vis_a.png"]);
+    [id, email, hash, name, role, team, now, `${id}.png`]);
 }
-// Only the on-route approver holds authority. u_vis_o holds none anywhere.
 await execute("INSERT INTO signing_authority (user_id,team_id) VALUES ('u_vis_a','t_vis')");
 const auth = (id) => ({ Authorization: "Bearer " + signToken(id) });
 
@@ -67,8 +71,8 @@ async function raise({ confidential, fileName }) {
 const openId = await raise({ confidential: false, fileName: "Quarterly Report.pdf" });
 const confId = await raise({ confidential: true, fileName: "Board Minutes.pdf" });
 
-// Finalise both as the on-route approver, without walking the signing UI: what
-// is under test is visibility of a FINISHED request, not how it got finished.
+// Finalise both as the on-route approver. What is under test is who can see a
+// FINISHED request, not how it came to be finished.
 for (const id of [openId, confId]) {
   await execute("UPDATE requests SET status = 'approved', approver_id = 'u_vis_a' WHERE id = ?", [id]);
 }
@@ -79,43 +83,52 @@ const ck = (ok, label) => (ok ? pass : fail).push(label);
 const listFor = async (who) =>
   ((await (await fetch(B + "/api/requests", { headers: auth(who) })).json()).requests || []);
 
-// ---- THE FIX: the uninvolved approver now sees finished work ----
+// ---- THE POINT: work that does not concern you never arrives ----
 {
   const seen = await listFor("u_vis_o");
-  const open = seen.find(r => r.id === openId);
-  const conf = seen.find(r => r.id === confId);
-  ck(!!open, "an approver on no route sees an approved request");
-  ck(open && open.fileName === "Quarterly Report.pdf", "and can read its name");
-  ck(!!conf, "and sees that a confidential request exists");
+  ck(!seen.some(r => r.id === openId), "an approver on no route does not receive an approved request");
+  ck(!seen.some(r => r.id === confId), "nor the confidential one");
 
-  // ---- THE SAFEGUARD: seeing it is not opening it ----
-  ck(conf && conf.fileName === "Confidential document",
-    `a confidential document off-route is still unnamed (${conf ? conf.fileName : "missing"})`);
-  ck(conf && !conf.note && !conf.marker, "and carries no note or marker");
-
-  let r = await fetch(`${B}/api/requests/${openId}/file`, { headers: auth("u_vis_o") });
-  ck(r.status === 403, `and cannot open the ordinary document either (${r.status})`);
-  r = await fetch(`${B}/api/requests/${confId}/file`, { headers: auth("u_vis_o") });
-  ck(r.status === 403, `nor the confidential one (${r.status})`);
-  r = await fetch(`${B}/api/requests/${openId}/file?download=1`, { headers: auth("u_vis_o") });
-  ck(r.status === 403, `nor download it (${r.status})`);
+  // Absent from the PAYLOAD, not merely unrendered. Hiding a row in the client
+  // still ships its name and swells a count for anyone who opens devtools.
+  const involved = (r) =>
+    r.requestorId === "u_vis_o"
+    || r.approverId === "u_vis_o"
+    || (r.workflow || []).some(st => (st.signers || []).some(s => s.userId === "u_vis_o"));
+  const strangers = seen.filter(r => !involved(r) && r.status !== "pending");
+  ck(strangers.length === 0,
+    `no finished work belonging to others is returned at all (${strangers.length} of ${seen.length})`);
 }
 
-// ---- the people who WERE on the route are unaffected ----
+// ---- the people it does concern are unaffected ----
 {
   const seen = await listFor("u_vis_a");
+  const open = seen.find(r => r.id === openId);
   const conf = seen.find(r => r.id === confId);
+  ck(!!open, "the approver who signed it still sees it");
+  ck(open && open.fileName === "Quarterly Report.pdf", "with its real name");
   ck(conf && conf.fileName === "Board Minutes.pdf",
-    "the approver who signed it still sees its real name");
+    "and the confidential one whose route they are on");
 
   const r = await fetch(`${B}/api/requests/${openId}/file`, { headers: auth("u_vis_a") });
-  ck(r.status === 200, `and can still open the ordinary document (${r.status})`);
+  ck(r.status === 200, `and can still open the document (${r.status})`);
 }
 
-// ---- the requestor still sees their own ----
 {
   const seen = await listFor("u_vis_r");
-  ck(seen.some(r => r.id === openId), "the requestor still sees what they raised");
+  ck(seen.some(r => r.id === openId), "the requestor sees what they sent");
+  ck(seen.some(r => r.id === confId), "including the confidential one they raised");
+}
+
+// ---- and the document was never reachable regardless ----
+// Unchanged by any of this, and worth stating: listing and authorisation are
+// separate gates. Narrowing the first must not be mistaken for the second having
+// been absent all along.
+{
+  let r = await fetch(`${B}/api/requests/${openId}/file`, { headers: auth("u_vis_o") });
+  ck(r.status === 403, `an uninvolved approver cannot open the document (${r.status})`);
+  r = await fetch(`${B}/api/requests/${confId}/file`, { headers: auth("u_vis_o") });
+  ck(r.status === 403, `nor the confidential one (${r.status})`);
 }
 
 for (const p of pass) console.log("  PASS  " + p);
