@@ -23,7 +23,7 @@ const STEPS = [
   {
     icon: Upload, n: 4, title: "Upload your document",
     img: "/help/04-upload.png",
-    body: "Click the upload box and choose your file — a PDF or an Excel (.xlsx) file, up to 14 MB. Once it's selected you'll see its name; use “Remove” if you picked the wrong one.",
+    body: "Click the upload box and choose your file — a PDF or an Excel (.xlsx) file, up to 20 MB. Once it's selected you'll see its name; use “Remove” if you picked the wrong one.",
   },
   {
     icon: GitBranch, n: 5, title: "Choose how it should be approved",
