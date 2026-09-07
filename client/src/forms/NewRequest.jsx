@@ -6,7 +6,7 @@ import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
   Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock
 } from "lucide-react";
-import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
+import { STEP_COLORS, REQUEST_TYPES, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES } from "../lib/constants.js";
 import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset, setPreset } from "../lib/boxSize.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
@@ -112,7 +112,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const validFile = (f, errs) => {
     const ext = f.name.split(".").pop().toLowerCase();
     if (!["pdf", "xlsx", "xls"].includes(ext)) { errs.push(`${f.name}: only PDF or Excel`); return null; }
-    if (f.size > 14 * 1024 * 1024) { errs.push(`${f.name}: over 14 MB`); return null; }
+    if (f.size > MAX_UPLOAD_BYTES) { errs.push(`${f.name}: over ${MAX_UPLOAD_MB} MB`); return null; }
     return ext;
   };
   const readDoc = (f) => new Promise(resolve => {
@@ -644,7 +644,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {typeSection}
 
           {/* 1. upload (every request type, including leave, uploads its own document) */}
-          <Section n="01" title="Upload documents" desc="PDF or Excel (.xlsx) up to 14 MB each. Pick several files to send a batch.">
+          <Section n="01" title="Upload documents" desc={`PDF or Excel (.xlsx) up to ${MAX_UPLOAD_MB} MB each. Pick several files to send a batch.`}>
             {!file ? (
               <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
                 <Upload size={24} className="opacity-50 mb-3" />

@@ -30,9 +30,18 @@ const uid = (p = "req") => `${p}_${Date.now().toString(36)}_${Math.random().toSt
 const APPROVAL_WINDOW_MS = parseInt(process.env.APPROVAL_WINDOW_MS || "3600000", 10);
 const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+// Deliberately ABOVE the 20 MB the client enforces. The user-facing limit should
+// be the one the browser checks, before anything is sent — a server ceiling set
+// to the same number turns a borderline file into a rejection that arrives only
+// after the whole upload has been waited for, and multipart framing means "20 MB
+// file" is not exactly 20 MB on the wire. The headroom keeps this a backstop
+// against a caller that ignores the UI, rather than a second limit users meet.
+//
+// nginx client_max_body_size on each box must exceed this again, or nginx
+// refuses the body before any of it reaches here.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }
+  limits: { fileSize: 22 * 1024 * 1024 }
 });
 
 function parseOrientation(raw) {

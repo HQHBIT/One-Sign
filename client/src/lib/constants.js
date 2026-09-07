@@ -69,3 +69,20 @@ export const REQUEST_TYPES = [
 ];
 export const requestTypeLabel = (key) => REQUEST_TYPES.find(t => t.key === key)?.label || "Other";
 export const requestTypeColor = (key) => REQUEST_TYPES.find(t => t.key === key)?.color || "#0F1A2E";
+
+// ---------- Upload size ----------
+// One number, because it was previously written out in six places — a validator
+// and a caption in each of three files — and they are only ever correct together.
+//
+// This is the limit a person meets, but it is NOT the only ceiling. Two others
+// sit in front of it and the SMALLEST always wins:
+//
+//   nginx client_max_body_size   on each box, and its default is 1 MB
+//   multer fileSize              in server/src/routes/requests.js
+//
+// nginx rejects an oversized body before the application is ever reached, so a
+// box without that directive caps uploads at 1 MB no matter what this says. If
+// you raise this, raise those too, or the UI will promise something the server
+// refuses after the user has waited for the whole upload.
+export const MAX_UPLOAD_MB = 20;
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
