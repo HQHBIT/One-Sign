@@ -73,6 +73,13 @@ jobs:
             echo
             echo "=============== 4. nginx: which domain, which upstream ==============="
             sudo nginx -T 2>/dev/null | grep -E '^\s*(server_name|proxy_pass|listen|root)' | sed 's/^[[:space:]]*//' | sort -u | head -30 || echo "cannot dump nginx config"
+            # The upload ceiling a browser actually meets. nginx rejects an
+            # oversized body itself, before the app's own limit is ever consulted,
+            # and its default when the directive is absent is 1 MB — smaller than
+            # anything the application allows.
+            echo "--- client_max_body_size (absent means nginx's 1 MB default) ---"
+            sudo nginx -T 2>/dev/null | grep -E '^\s*client_max_body_size' | sed 's/^[[:space:]]*//' | sort | uniq -c \
+              || echo "  not set anywhere — the effective limit is nginx's 1 MB default"
 
             echo
             echo "=============== 5. .env keys present (values redacted) ==============="
