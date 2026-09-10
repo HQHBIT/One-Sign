@@ -19,9 +19,11 @@
 //   approver's marker at the one Finance drew.
 // ============================================================
 import { useState, useMemo } from "react";
-import { Send, ArrowLeft } from "lucide-react";
+import { Send, ArrowLeft, Paperclip, X } from "lucide-react";
 import { api } from "../api.js";
 import EXPENSE_HEADS from "../lib/expense-heads.js";
+import { ExpensePdfBoxes } from "./ExpensePdfBoxes.jsx";
+import { MAX_UPLOAD_MB, MAX_UPLOAD_BYTES } from "../lib/constants.js";
 
 // The form's own page-1 capacity. Anything beyond these continues on page 2 of
 // the printed sheet, which is what its instruction line refers to.
@@ -78,6 +80,21 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // An already-printed form can be attached instead of filling this one. When
+  // there is a PDF it becomes the document, and the fields above are not sent —
+  // submitting both would put two versions of the same expense into one request.
+  const [pdf, setPdf] = useState(null);
+  const [pdfMarkers, setPdfMarkers] = useState([]);
+
+  const attach = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name)) return setErr("Attach a PDF.");
+    if (file.size > MAX_UPLOAD_BYTES) return setErr(`That file is over ${MAX_UPLOAD_MB} MB.`);
+    setErr("");
+    setPdf(file);
+  };
 
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
   const setItem = (i, k) => (e) =>
@@ -89,6 +106,27 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
   const submit = async () => {
     setErr("");
     if (!targetTeam) return setErr("Choose who should approve this.");
+
+    // The attached PDF wins: it is a form somebody already filled and printed,
+    // and the boxes read off it are where its own signature cells are.
+    if (pdf) {
+      setBusy(true);
+      try {
+        await api.createRequest({
+          file: pdf,
+          targetTeamId: targetTeam,
+          requestType: "expense",
+          marker: pdfMarkers.length ? pdfMarkers : undefined,
+          note,
+        });
+        notify("Expense submitted", "success");
+        onDone?.();
+      } catch (e) {
+        setErr(e.message || "Could not submit the expense");
+      } finally { setBusy(false); }
+      return;
+    }
+
     if (!filled.length) return setErr("Add at least one line item.");
     if (!f.vendor.trim()) return setErr("Vendor name is required.");
     if (!f.natureOfExpense) return setErr("Choose the nature of the expense.");
@@ -141,11 +179,36 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
       <div className="max-w-4xl mx-auto mb-4 flex items-center justify-between">
         <button className="btn-ghost text-xs" onClick={onBack}><ArrowLeft size={12} /> Back</button>
         <div className="text-xs opacity-55">
-          This is the form Finance prints. Fill it here and it prints exactly like this.
+          {pdf ? "Using the attached form." : "This is the form Finance prints. Fill it here and it prints exactly like this."}
         </div>
       </div>
 
-      <div className="xl">
+      {/* Attaching an already-printed form is the alternative to filling this
+          one, not an addition to it — so when a PDF is present the sheet below
+          is hidden rather than sent alongside it. */}
+      <div className="max-w-4xl mx-auto mb-4">
+        {!pdf ? (
+          <label className="btn-ghost text-xs" style={{ cursor: "pointer", display: "inline-flex" }}>
+            <Paperclip size={12} /> Attach a printed form (PDF) instead
+            <input type="file" accept="application/pdf,.pdf" onChange={attach} className="hidden" />
+          </label>
+        ) : (
+          <div className="card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm truncate" title={pdf.name}>
+                <Paperclip size={12} /> {pdf.name}
+              </div>
+              <button className="btn-ghost text-xs"
+                onClick={() => { setPdf(null); setPdfMarkers([]); }}>
+                <X size={12} /> Remove and fill the form instead
+              </button>
+            </div>
+            <ExpensePdfBoxes file={pdf} onChange={setPdfMarkers} />
+          </div>
+        )}
+      </div>
+
+      <div className="xl" style={pdf ? { display: "none" } : undefined}>
         <div className="logos">
           <img src="/expense/logo-left.png" alt="" />
           <img src="/expense/logo-right.png" alt="" />
