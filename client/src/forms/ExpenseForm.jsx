@@ -3,42 +3,60 @@
 //   ------------------------------------------------------------
 //   The one request type that is not an upload. There is no document to attach
 //   because the document is this form: the server fills Finance's own workbook,
-//   so what prints is their sheet — merges, logos, page setup and all — rather
-//   than a rendering of ours that drifts the first time they revise it.
+//   so what prints is their sheet rather than a rendering of ours.
 //
-//   Two consequences shape this screen. There is no file picker, and there is no
-//   "place the signature box" step: the boxes already exist in the template,
-//   merged across two rows each, and the server points the approver's marker at
-//   the one Finance drew for them.
+//   The screen therefore looks like the sheet. Filling a form that resembles the
+//   app and then printing something that resembles a spreadsheet makes people
+//   check the output every time; when the two match, what you typed is visibly
+//   what you will sign. The palette here is the WORKBOOK's, not the app's —
+//   white cells, an E7E6E6 band, hairline black rules, and F8CBAD (Orange
+//   Accent 2, Lighter 60%) exactly where Finance marks a cell auto-populated.
+//   The app's own colours are deliberately kept off it.
+//
+//   Two things are missing from this screen by design. There is no file picker,
+//   and there is no "place the signature box" step: the boxes already exist in
+//   the template, merged across two rows each, and the server points the
+//   approver's marker at the one Finance drew.
 // ============================================================
 import { useState, useMemo } from "react";
-import { Plus, X, Send, ArrowLeft } from "lucide-react";
+import { Send, ArrowLeft } from "lucide-react";
 import { api } from "../api.js";
 import EXPENSE_HEADS from "../lib/expense-heads.js";
 
+// The form's own page-1 capacity. Anything beyond these continues on page 2 of
+// the printed sheet, which is what its instruction line refers to.
+const PAGE1_ROWS = 8;
+
 const blankItem = () => ({ description: "", quantity: "", rate: "" });
 
-// Kept in step with the server's own arithmetic (expense-template.js), so the
-// figure on screen is the figure that prints. Rounded per line, not at the end:
-// summing unrounded products and rounding once produces a total a person adding
-// up the printed column cannot reproduce.
+// Kept in step with the server's arithmetic (expense-template.js): rounded per
+// line, not once at the end, so the figure on screen is the figure that prints
+// and someone adding up the printed column reaches the same number.
 const money = (n) => {
   const v = Number(n);
   return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
 };
 const lineTotal = (it) => money((Number(it.quantity) || 0) * (Number(it.rate) || 0));
-
 const fmt = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function Field({ label, children, hint }) {
-  return (
-    <label className="block">
-      <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">{label}</div>
-      {children}
-      {hint && <div className="text-[10px] opacity-45 mt-1">{hint}</div>}
-    </label>
-  );
-}
+const SHEET_CSS = `
+.xl { width:100%; max-width:820px; margin:0 auto; background:#fff; color:#000;
+      border:1px solid #000; font-family:Calibri,Carlito,"Segoe UI",sans-serif; font-size:11pt; }
+.xl table { border-collapse:collapse; width:100%; table-layout:fixed; }
+.xl td { border:1px solid #000; padding:3px 6px; vertical-align:middle; height:26px; }
+.xl .band { background:#E7E6E6; font-weight:bold; text-align:center;
+            border-top:2px solid #000; border-bottom:2px solid #000; height:30px; }
+.xl .auto { background:#F8CBAD; font-weight:bold; font-size:9pt; text-align:center; }
+.xl .hdr { font-weight:bold; text-align:center; }
+.xl .num { text-align:right; }
+.xl .note { font-size:8pt; }
+.xl .sign { height:46px; }
+.xl .instr { font-size:9pt; line-height:1.45; padding:8px; }
+.xl input, .xl select { width:100%; border:0; background:transparent; font:inherit;
+                        color:inherit; outline:none; padding:0; }
+.xl input:focus, .xl select:focus { background:#FFF8E1; }
+.xl .p2 td { background:#FFFDF5; }
+`;
 
 export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
   const [f, setF] = useState({
@@ -46,7 +64,7 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
     prNo: "", prDate: "", requestorIts: "", subDepartment: "",
     inBudget: "No", projectId: "", natureOfExpense: "", vendor: "",
   });
-  const [items, setItems] = useState([blankItem()]);
+  const [items, setItems] = useState(() => Array.from({ length: PAGE1_ROWS }, blankItem));
   const [targetTeam, setTargetTeam] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,7 +74,7 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
   const setItem = (i, k) => (e) =>
     setItems((p) => p.map((it, n) => (n === i ? { ...it, [k]: e.target.value } : it)));
 
-  const filled = useMemo(() => items.filter(it => it.description.trim()), [items]);
+  const filled = useMemo(() => items.filter((it) => it.description.trim()), [items]);
   const grand = useMemo(() => money(filled.reduce((a, it) => a + lineTotal(it), 0)), [filled]);
 
   const submit = async () => {
@@ -71,7 +89,7 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
       await api.createRequest({
         expense: {
           ...f,
-          items: filled.map(it => ({
+          items: filled.map((it) => ({
             description: it.description.trim(),
             quantity: Number(it.quantity) || 0,
             rate: Number(it.rate) || 0,
@@ -93,103 +111,162 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
     }
   };
 
+  // Each signatory occupies two rows on the sheet, with Sign and Date merged
+  // across both. Left empty here because they are filled by signing, not typing.
+  const SignatoryRows = ({ particular, name, designation }) => (
+    <>
+      <tr>
+        <td className="hdr" rowSpan={2}>{particular}</td>
+        <td className="hdr">{name}</td>
+        <td className="sign" rowSpan={2} />
+        <td rowSpan={2} />
+      </tr>
+      <tr><td className="note">{designation}</td></tr>
+    </>
+  );
+
   return (
-    <div className="max-w-4xl mx-auto pb-16">
-      <button className="btn-ghost text-xs mb-4" onClick={onBack}><ArrowLeft size={12} /> Back</button>
-      <h1 className="font-display text-2xl mb-1">Expense submission</h1>
-      <p className="text-sm opacity-60 mb-6">
-        This prints on Finance's own form. There is nothing to upload, and the approver's
-        signature box is already set aside on it.
-      </p>
+    <div className="pb-16">
+      <style>{SHEET_CSS}</style>
 
-      <div className="card p-5 mb-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Submission date">
-            <input type="date" className="w-full" value={f.submissionDate} onChange={set("submissionDate")} />
-          </Field>
-          <Field label="Purchase requisition no.">
-            <input className="w-full" value={f.prNo} onChange={set("prNo")} placeholder="PR-2026-0000" />
-          </Field>
-          <Field label="PR date">
-            <input type="date" className="w-full" value={f.prDate} onChange={set("prDate")} />
-          </Field>
-          <Field label="Requestor ID (ITS)">
-            <input className="w-full" value={f.requestorIts} onChange={set("requestorIts")} inputMode="numeric" />
-          </Field>
-          <Field label="Sub-department">
-            <input className="w-full" value={f.subDepartment} onChange={set("subDepartment")} />
-          </Field>
-          <Field label="Covered in annual budget?">
-            <select className="w-full" value={f.inBudget} onChange={set("inBudget")}>
-              <option>No</option><option>Yes</option>
-            </select>
-          </Field>
-          <Field label="Project ID" hint="If applicable.">
-            <input className="w-full" value={f.projectId} onChange={set("projectId")} />
-          </Field>
-          <Field label="Nature of expenses">
-            <select className="w-full" value={f.natureOfExpense} onChange={set("natureOfExpense")}>
-              <option value="">Choose…</option>
-              {EXPENSE_HEADS.map(h => <option key={h} value={h}>{h}</option>)}
-            </select>
-          </Field>
-          <div className="sm:col-span-2">
-            <Field label="Vendor name">
-              <input className="w-full" value={f.vendor} onChange={set("vendor")} />
-            </Field>
-          </div>
+      <div className="max-w-4xl mx-auto mb-4 flex items-center justify-between">
+        <button className="btn-ghost text-xs" onClick={onBack}><ArrowLeft size={12} /> Back</button>
+        <div className="text-xs opacity-55">
+          This is the form Finance prints. Fill it here and it prints exactly like this.
         </div>
       </div>
 
-      <div className="card p-5 mb-4">
-        <div className="text-[10px] tracking-widest uppercase opacity-50 mb-3">Goods / services received</div>
-        <div className="space-y-2">
-          {items.map((it, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <input className="flex-1" placeholder="Description" value={it.description} onChange={setItem(i, "description")} />
-              <input className="w-20" placeholder="Qty" inputMode="decimal" value={it.quantity} onChange={setItem(i, "quantity")} />
-              <input className="w-28" placeholder="Rate" inputMode="decimal" value={it.rate} onChange={setItem(i, "rate")} />
-              <div className="w-28 text-right text-sm tabular-nums pt-2 opacity-70">{fmt(lineTotal(it))}</div>
-              <button className="opacity-40 hover:opacity-100 pt-2" title="Remove line"
-                onClick={() => setItems(p => p.length === 1 ? [blankItem()] : p.filter((_, n) => n !== i))}>
-                <X size={13} />
-              </button>
-            </div>
-          ))}
+      <div className="xl">
+        <table>
+          <colgroup>
+            <col style={{ width: "33.6%" }} /><col style={{ width: "27.5%" }} />
+            <col style={{ width: "16.8%" }} /><col style={{ width: "22.1%" }} />
+          </colgroup>
+          <tbody>
+            <tr><td className="band" colSpan={4}>EXPENSE SUBMISSION</td></tr>
+
+            <tr><td>Department (accounts team to select)</td>
+                <td className="hdr" colSpan={3}>DAWAT E HADIYAH</td></tr>
+
+            <tr><td>Submission Date</td>
+                <td colSpan={3}><input type="date" value={f.submissionDate} onChange={set("submissionDate")} /></td></tr>
+
+            <tr><td>Purchase Requisition No.</td>
+                <td><input value={f.prNo} onChange={set("prNo")} /></td>
+                <td className="note">PR Date</td>
+                <td><input type="date" value={f.prDate} onChange={set("prDate")} /></td></tr>
+
+            <tr><td>Requestors ID (ITS)</td>
+                <td colSpan={3}><input inputMode="numeric" value={f.requestorIts} onChange={set("requestorIts")} /></td></tr>
+
+            {/* Auto-populated on Finance's sheet, and auto-populated here too —
+                taken from the session rather than typed, which is also what the
+                server writes onto the form. */}
+            <tr><td>Requestors Name</td>
+                <td className="auto" colSpan={3}>{user.name}</td></tr>
+
+            <tr><td>Sub-Department</td>
+                <td colSpan={3}><input value={f.subDepartment} onChange={set("subDepartment")} /></td></tr>
+
+            <tr><td>Is covered in annual Budget?</td>
+                <td className="hdr">
+                  <select value={f.inBudget} onChange={set("inBudget")}>
+                    <option>No</option><option>Yes</option>
+                  </select>
+                </td>
+                <td className="auto" colSpan={2}>{f.inBudget === "Yes" ? "Budget ID" : ""}</td></tr>
+
+            <tr><td>Project Id (If applicable)</td>
+                <td colSpan={3}><input value={f.projectId} onChange={set("projectId")} /></td></tr>
+
+            <tr><td>Nature of Expenses</td>
+                <td colSpan={3}>
+                  <select value={f.natureOfExpense} onChange={set("natureOfExpense")}>
+                    <option value="">Choose…</option>
+                    {EXPENSE_HEADS.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </td></tr>
+
+            <tr><td>Vendor Name</td>
+                <td colSpan={3}><input value={f.vendor} onChange={set("vendor")} /></td></tr>
+
+            <tr><td className="band" colSpan={4} style={{ borderTop: "1px solid #000" }}>Goods/Services Received</td></tr>
+
+            <tr><td className="hdr">DESCRIPTION</td><td className="hdr">QUANTITY</td>
+                <td className="hdr">RATE</td><td className="hdr">TOTAL VALUE</td></tr>
+
+            {items.map((it, i) => (
+              <tr key={i} className={i >= PAGE1_ROWS ? "p2" : undefined}>
+                <td><input value={it.description} onChange={setItem(i, "description")} /></td>
+                <td><input className="num" inputMode="decimal" value={it.quantity} onChange={setItem(i, "quantity")} /></td>
+                <td><input className="num" inputMode="decimal" value={it.rate} onChange={setItem(i, "rate")} /></td>
+                <td className="num">{fmt(lineTotal(it))}</td>
+              </tr>
+            ))}
+
+            <tr><td className="note">Mention total bill amount, inclusive of GST</td>
+                <td />
+                <td className="hdr">Total</td>
+                <td className="num" style={{ fontWeight: "bold" }}>{fmt(grand)}</td></tr>
+
+            <tr><td className="hdr">Particular</td><td className="hdr">Name &amp; Designation</td>
+                <td className="hdr">Sign</td><td className="hdr">Date</td></tr>
+
+            <SignatoryRows particular="Requestor" name={user.name} designation={user.department || ""} />
+            <SignatoryRows particular="Reviewer" name="" designation="" />
+            <SignatoryRows particular="Approver 1" name="Huzaifa Bsb" designation="Finance HOD" />
+            <SignatoryRows particular="Approver 2" name="Idris bsb" designation="Executive Management" />
+
+            <tr><td className="instr" colSpan={4}>
+              - Attach all required documents: invoice, GR/work completion certificate, and PO/work order.
+              - Missing documents will result in delays in processing.
+              - Ensure invoice matches the PO/work order terms, including price, quantity, and payment terms, before submission.
+              - categorize the expense as per the predefined budget heads and provide the necessary details for proper accounting.
+              - Ensure submitted documents align with the DOA guidelines and include any prior approvals required for the expense.
+              - Submit the expense form and supporting documents within the stipulated time frame to avoid payment delays.
+            </td></tr>
+
+            <tr><td className="band" colSpan={4} style={{ borderTop: "1px solid #000" }}>For Finance team only</td></tr>
+            <tr><td className="hdr">Budgeted to</td><td colSpan={3} /></tr>
+            <tr><td className="hdr">Budgeted amount</td><td colSpan={3} /></tr>
+            <tr><td className="hdr">Budgeted Balance</td><td colSpan={3} /></tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Below the sheet, and deliberately in the app's own styling: routing and
+          the note are how SignFlow moves the document, not part of the form
+          Finance prints. */}
+      <div className="max-w-4xl mx-auto mt-6">
+        <div className="card p-5">
+          <label className="block mb-4">
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Route to signing authority</div>
+            <select className="w-full" value={targetTeam} onChange={(e) => setTargetTeam(e.target.value)}>
+              <option value="">Choose a department…</option>
+              {(teams || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Note (optional)</div>
+            <textarea className="w-full" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
         </div>
-        <div className="flex items-center justify-between mt-3">
-          <button className="btn-ghost text-xs" onClick={() => setItems(p => [...p, blankItem()])}>
-            <Plus size={11} /> Add line
+
+        {err && (
+          <div className="text-xs mt-3 px-3 py-2 rounded"
+            style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
+        )}
+
+        <div className="flex items-center gap-3 mt-4">
+          <button className="btn-primary" onClick={submit} disabled={busy}>
+            <Send size={13} /> {busy ? "Submitting…" : "Submit expense"}
           </button>
-          <div className="text-sm">
-            <span className="opacity-50 mr-3">Total, inclusive of GST</span>
-            <span className="font-medium tabular-nums">{fmt(grand)}</span>
-          </div>
+          <button className="btn-ghost text-xs"
+            onClick={() => setItems((p) => [...p, blankItem()])}>
+            Add a line beyond the {PAGE1_ROWS} above (prints on page 2)
+          </button>
         </div>
       </div>
-
-      <div className="card p-5 mb-4">
-        <Field label="Route to signing authority">
-          <select className="w-full" value={targetTeam} onChange={e => setTargetTeam(e.target.value)}>
-            <option value="">Choose a department…</option>
-            {(teams || []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </Field>
-        <div className="mt-4">
-          <Field label="Note (optional)">
-            <textarea className="w-full" rows={2} value={note} onChange={e => setNote(e.target.value)} />
-          </Field>
-        </div>
-      </div>
-
-      {err && (
-        <div className="text-xs mb-3 px-3 py-2 rounded"
-          style={{ backgroundColor: "rgba(155,44,44,.08)", color: "var(--c-rust-deep)" }}>{err}</div>
-      )}
-
-      <button className="btn-primary" onClick={submit} disabled={busy}>
-        <Send size={13} /> {busy ? "Submitting…" : "Submit expense"}
-      </button>
     </div>
   );
 }
