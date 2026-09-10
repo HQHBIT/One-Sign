@@ -6,7 +6,7 @@
 // wrong approver sends the document to someone who should not see it and leaves
 // the person who should waiting for something they never learn about, so an
 // ambiguous name has to come back as a question rather than a guess.
-import { matchName, score } from "./matchSignatory.js";
+import { matchName, score, looksLikeName, searchTermFor } from "./matchSignatory.js";
 
 const pass = [], fail = [];
 const ck = (ok, label) => (ok ? pass : fail).push(label);
@@ -57,6 +57,26 @@ const users = [
 {
   const m = matchName("Fatema Kotwala", users);
   ck(!m || !m.user || m.score < 1, `a half-match does not become a confident one (${m ? m.score.toFixed(2) : "null"})`);
+}
+
+// ---- the form's own placeholder text is not a name ----
+// An unfilled row prints "Please mention employee ID in B11". Searching the
+// directory for that returns nothing and tells the requestor nothing, so the row
+// has to be recognised as blank rather than as a person nobody can find.
+{
+  ck(looksLikeName("Huzaifa Bsb"), "a printed name is a name");
+  ck(!looksLikeName("Please mention employee ID in B11"), "the fill-me-in placeholder is not");
+  ck(!looksLikeName("-"), "a dash is not");
+  ck(!looksLikeName(""), "nothing is not");
+}
+
+// ---- the directory is searched by first name ----
+// The form abbreviates what the directory spells out, so the whole string finds
+// nobody; the first name is the part both spellings agree on.
+{
+  ck(searchTermFor("Huzaifa Bsb") === "huzaifa", "\"Huzaifa Bsb\" searches for huzaifa");
+  ck(searchTermFor("M. Murtaza Kotwala") === "murtaza", "a lone initial is skipped over");
+  ck(searchTermFor("Please mention employee ID in B11") === "", "a placeholder searches for nothing");
 }
 
 for (const p of pass) console.log("  PASS  " + p);

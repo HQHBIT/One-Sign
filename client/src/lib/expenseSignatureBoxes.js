@@ -33,6 +33,18 @@ const HEAD_NAME = /^name\s*&?\s*designation$/i;
 const HEAD_SIGN = /^sign$/i;
 const HEAD_DATE = /^date$/i;
 
+// The signature block's rows, in the template's own points, measured down from
+// the top of the header row: header 19pt, then each signatory two rows of 14pt
+// (the last is half a point taller). Proportions only, so any scale works.
+const ROW_BLOCKS = {
+  requestor: { top: 19, h: 28 },
+  reviewer:  { top: 47, h: 28 },
+  approver1: { top: 75, h: 28 },
+  approver2: { top: 103, h: 28.5 },
+};
+const HEAD_CENTRE = 9.5;                     // centre of the 19pt header row
+const blockCentre = (role) => ROW_BLOCKS[role].top + ROW_BLOCKS[role].h / 2;
+
 const centreX = (it) => it.x + it.w / 2;
 const centreY = (it) => it.y + it.h / 2;
 
@@ -123,6 +135,43 @@ export function boxesFromTextItems(items = [], page = 1) {
 
   anchors.sort((a, b) => a.item.y - b.item.y);
 
+  // Try to solve the rows the same way the columns were solved. The block
+  // offsets below are the template's own row heights in points, measured down
+  // from the top of the header row: the header is 19pt, then each signatory is
+  // two rows of 14pt. Only the PROPORTIONS matter, so this holds at any scale.
+  //
+  // Deriving the block from the gap between labels — the obvious approach — is
+  // what put the boxes a row out. A label is centred in its merged cell, so the
+  // gap between two labels is the block height only if every block is identical
+  // AND nothing else sits between them; here the last block is half a point
+  // taller, and any stray text in the column shifts the estimate. Fitting
+  // against known geometry has no such dependency.
+  const fitRows = () => {
+    const head = centreY(heads.sign);
+    const known = anchors.filter((a) => ROW_BLOCKS[a.role]);
+    if (known.length < 1) return null;
+    // The furthest anchor gives the longest lever arm and so the least error.
+    const far = known.reduce((m, a) =>
+      Math.abs(blockCentre(a.role) - HEAD_CENTRE) > Math.abs(blockCentre(m.role) - HEAD_CENTRE) ? a : m);
+    const span = blockCentre(far.role) - HEAD_CENTRE;
+    if (!span) return null;
+    const scale = (centreY(far.item) - head) / span;
+    if (!(scale > 0)) return null;
+    const top0 = head - scale * HEAD_CENTRE;
+
+    // Check against an anchor the fit did not use, exactly as the columns do.
+    const other = known.find((a) => a !== far);
+    if (other) {
+      const predicted = top0 + scale * blockCentre(other.role);
+      if (Math.abs(predicted - centreY(other.item)) > 1.2) return null;
+    }
+    return (role) => {
+      const b = ROW_BLOCKS[role];
+      return { top: top0 + scale * b.top, height: scale * b.h };
+    };
+  };
+  const rowAt = fitRows();
+
   // A row's height is the distance to the next signatory. The last row has no
   // next, so it reuses the previous gap — on this form every signatory block is
   // the same two rows tall, so that is exact rather than a guess.
@@ -140,15 +189,15 @@ export function boxesFromTextItems(items = [], page = 1) {
   const nameCol = col.edgeAt ? { left: col.edgeAt(1), right: col.edgeAt(2) } : null;
 
   return anchors.map((a, i) => {
-    const height = i < anchors.length - 1 ? anchors[i + 1].item.y - a.item.y : typical;
-
-    // CENTRED ON THE LABEL, not started at it. Each signatory occupies a cell
-    // merged across two rows and its label is centred in that merge, so the
-    // label's position marks the MIDDLE of the block. Treating it as the top put
-    // every box half a block low and made it one row tall instead of two — which
-    // is what "everything is misaligned" looked like on the page.
-    const mid = centreY(a.item);
-    const top = mid - height / 2;
+    // Fitted rows when the geometry solved, which is the accurate answer.
+    // Otherwise fall back to the label pitch: a label is centred in its merged
+    // cell, so the block is centred on the label rather than starting at it —
+    // treating the label as the top is what put every box half a block out.
+    const fitted = rowAt?.(a.role);
+    const height = fitted
+      ? fitted.height
+      : (i < anchors.length - 1 ? anchors[i + 1].item.y - a.item.y : typical);
+    const top = fitted ? fitted.top : centreY(a.item) - height / 2;
 
     // Inset so the stamp sits inside the printed rule rather than on it.
     const padY = Math.min(height * 0.1, 0.8);

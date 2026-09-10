@@ -15,7 +15,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { detectExpenseSignatureBoxes } from "../lib/expenseSignatureBoxes.js";
-import { matchName } from "../lib/matchSignatory.js";
+import { matchName, searchTermFor, looksLikeName } from "../lib/matchSignatory.js";
+import { api } from "../api.js";
 
 const ViewerModule = () => import("../viewer.jsx");   // shares the pdfjs chunk
 
@@ -27,13 +28,54 @@ export function ExpensePdfBoxes({ file, users = [], onChange }) {
   const [state, setState] = useState("reading");   // reading | ready | none | error
   const [err, setErr] = useState("");
 
-  // Who the form names, resolved against the directory. Recomputed rather than
-  // stored, so correcting one row never disturbs another.
+  // Candidates per row, fetched from the directory rather than from the `users`
+  // prop: that list is only sent to administrators, so for everyone else it is
+  // empty — which is why every row read "no one here matches that name" no
+  // matter who the form named. /api/users/search is open to any signed-in user.
+  const [cands, setCands] = useState({});
+  const [looking, setLooking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const named = boxes.filter((b) => looksLikeName(b.name));
+    if (!named.length) { setCands({}); return; }
+    (async () => {
+      setLooking(true);
+      const out = {};
+      for (const b of named) {
+        // Searched by FIRST NAME, so everyone who shares it comes back and the
+        // requestor picks. Searching the printed string whole finds nobody,
+        // because the form abbreviates what the directory spells out.
+        const term = searchTermFor(b.name);
+        if (!term) continue;
+        try { out[b.role] = await api.searchUsers(term); } catch { out[b.role] = []; }
+      }
+      if (cancelled) return;
+      setCands(out);
+      setLooking(false);
+      // Pre-select only where one candidate is clearly ahead of the rest.
+      setWho((prev) => {
+        const next = { ...prev };
+        for (const b of named) {
+          if (next[b.role]) continue;
+          const m = matchName(b.name, out[b.role] || []);
+          if (m?.user) next[b.role] = m.user.id;
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [boxes]);
+
+  // Who the form names, resolved against whatever the directory returned.
   const suggestions = useMemo(() => {
     const out = {};
-    for (const b of boxes) out[b.role] = b.name ? matchName(b.name, users) : null;
+    for (const b of boxes) {
+      const pool = cands[b.role] || users;
+      out[b.role] = looksLikeName(b.name) ? matchName(b.name, pool) : null;
+    }
     return out;
-  }, [boxes, users]);
+  }, [boxes, cands, users]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,9 +113,7 @@ export function ExpensePdfBoxes({ file, users = [], onChange }) {
         // Pre-fill only where the directory gives one clear answer. An ambiguous
         // name is left blank on purpose, so confirming is a decision rather than
         // an acceptance of whatever came first.
-        setWho(Object.fromEntries(
-          found.map((b) => [b.role, (b.name ? matchName(b.name, users) : null)?.user?.id || ""])
-        ));
+        setWho(Object.fromEntries(found.map((b) => [b.role, ""])));
         setState(found.length ? "ready" : "none");
       } catch (e) {
         if (!cancelled) { setErr(e?.message || "Could not read that PDF"); setState("error"); }
@@ -132,31 +172,33 @@ export function ExpensePdfBoxes({ file, users = [], onChange }) {
                 </button>
 
                 <span className="opacity-70" style={{ minWidth: 190 }}>
-                  {b.name
+                  {looksLikeName(b.name)
                     ? <>on the form: <strong>{b.name}</strong>{b.designation ? <span className="opacity-60"> · {b.designation}</span> : null}</>
-                    : <span className="opacity-50">no name printed on this row</span>}
+                    : <span className="opacity-50">
+                        {b.name ? "the form leaves this row blank" : "no name printed on this row"}
+                      </span>}
                 </span>
 
                 <select
                   value={who[b.role] || ""}
                   disabled={!on[b.role]}
                   onChange={(e) => setWho((p) => ({ ...p, [b.role]: e.target.value }))}
-                  style={{ minWidth: 220 }}>
+                  style={{ minWidth: 240 }}>
                   <option value="">
-                    {b.name ? "Choose who signs here…" : "Not routed to anyone"}
+                    {looksLikeName(b.name) ? "Choose who signs here…" : "Not routed to anyone"}
                   </option>
-                  {users.map((u) => (
+                  {(cands[b.role] || users).map((u) => (
                     <option key={u.id} value={u.id}>{u.name}</option>
                   ))}
                 </select>
 
                 {s?.ambiguous && (
                   <span className="opacity-60" title="More than one person fits this name">
-                    several people match — pick one
+                    several match — pick one
                   </span>
                 )}
-                {b.name && !s && (
-                  <span className="opacity-60">no one here matches that name</span>
+                {looksLikeName(b.name) && !looking && (cands[b.role]?.length === 0) && (
+                  <span className="opacity-60">nobody in the directory by that name</span>
                 )}
               </div>
             );

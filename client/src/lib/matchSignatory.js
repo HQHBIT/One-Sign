@@ -47,6 +47,29 @@ export function score(printed, candidate) {
   return Math.min(1, s);
 }
 
+// Text the template prints where a name has not been filled in. Searching the
+// directory for it returns nothing and tells the requestor nothing, so rows
+// carrying it are treated as having no name at all.
+const PLACEHOLDER = /please mention|employee id|^n\/?a$|^-+$/i;
+
+/** Is this a real name, or the form's own "fill this in" text? */
+export function looksLikeName(printed) {
+  const s = String(printed || "").trim();
+  return !!s && !PLACEHOLDER.test(s) && tokens(s).length > 0;
+}
+
+/**
+ * What to search the directory for: the first real word of the printed name.
+ *
+ * The form abbreviates — "Huzaifa Bsb" for a person the directory calls Huzaifa
+ * bhai Hakimuddin bhai Shakir — so searching the whole string finds nobody.
+ * The first name is the part both spellings agree on, and it returns everyone
+ * who shares it, which is exactly the list a person needs to choose from.
+ */
+export function searchTermFor(printed) {
+  return looksLikeName(printed) ? tokens(printed)[0] : "";
+}
+
 /**
  * Best match for a printed name, or null when it is not clear enough to offer.
  *
