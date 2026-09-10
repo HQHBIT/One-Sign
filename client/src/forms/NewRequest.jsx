@@ -7,6 +7,7 @@ import {
   Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES } from "../lib/constants.js";
+import { ExpenseForm } from "./ExpenseForm.jsx";
 import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset, setPreset } from "../lib/boxSize.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
@@ -572,6 +573,19 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
       notify(e.message || "Submit failed", "error");
     } finally { setBusy(false); }
   };
+
+  // Expense is the one type with no document to upload — the form IS the
+  // document, filled server-side from Finance's workbook. It therefore skips the
+  // file picker and the marker-placing step entirely, so it gets its own screen
+  // rather than a set of conditionals threaded through this one.
+  if (requestType === "expense" && !file) {
+    return (
+      <ExpenseForm
+        user={user} teams={teams} notify={notify} onDone={onDone}
+        onBack={() => setRequestType(defaultType && defaultType !== "expense" ? defaultType : "general")}
+      />
+    );
+  }
 
   // Shared by the single-document form and the batch flow.
   const typeSection = (

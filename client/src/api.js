@@ -245,9 +245,13 @@ export const api = {
 
   // -------- requests --------
   listRequests() { return this.fetch("/api/requests").then(r => r.requests); },
-  createRequest({ file, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation, confidential, deferNotify }) {
+  createRequest({ file, expense, targetTeamId, marker, workflow, direct, signers, selfMarks, signerDateFields, instantApproval, note, requestType, rotation, confidential, deferNotify }) {
     const fd = new FormData();
-    fd.append("file", file, file.name);
+    // An expense request has no file to attach: the server builds the document
+    // from Finance's own template, so the printout is theirs rather than a
+    // rendering of ours. Everything else about the request is identical.
+    if (file) fd.append("file", file, file.name);
+    if (expense) fd.append("expense", JSON.stringify(expense));
     if (rotation) fd.append("rotation", String(rotation));
     if (workflow) fd.append("workflow", JSON.stringify(workflow));
     if (direct) fd.append("direct", "true");

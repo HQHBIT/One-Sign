@@ -15,6 +15,7 @@ import {
   newUnlockCode, maskEmail
 } from "../confidential.js";
 import { readStored, writeStored } from "../filestore.js";
+import { fillExpenseForm, markerForSignBox } from "../expense-template.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
 
@@ -356,6 +357,43 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     // A direct request only routes a document to someone else to sign — the
     // sender isn't signing, so they don't need a signature of their own.
     if (!isDirect && !req.user.hasSignature) return res.status(400).json({ error: "Add your signature first" });
+
+    // An expense request carries no upload: the document IS Finance's form,
+    // filled from their template so the printout matches theirs exactly.
+    //
+    // Built here rather than behind a route of its own so that everything after
+    // this line is unchanged — storage, encryption, workflow steps, reminders,
+    // notifications and signing all treat it as the .xlsx it is. A parallel
+    // creation path would have to reimplement every one of those and would drift
+    // from this one the first time either changed.
+    if (!req.file && req.body?.expense) {
+      let data;
+      try { data = JSON.parse(req.body.expense); }
+      catch { return res.status(400).json({ error: "Expense details are not valid JSON" }); }
+      try {
+        const buffer = await fillExpenseForm({
+          ...data,
+          // The signed-in user is the requestor; taking their name from the
+          // session rather than the payload keeps the form honest.
+          requestorName: req.user.name,
+        });
+        req.file = {
+          buffer,
+          originalname: `Expense Submission${data.prNo ? ` — ${data.prNo}` : ""}.xlsx`,
+          mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          size: buffer.length,
+        };
+        req.body.requestType = "expense";
+        // The approver signs in the box Finance drew for them, rather than
+        // wherever a marker happened to be dragged over a rendered sheet.
+        if (!req.body.marker) {
+          req.body.marker = JSON.stringify([await markerForSignBox("approver1")]);
+        }
+      } catch (e) {
+        console.error("[create] expense form", e);
+        return res.status(400).json({ error: e.message || "Could not build the expense form" });
+      }
+    }
 
     const file = req.file;
     if (!file) return res.status(400).json({ error: "file is required" });
