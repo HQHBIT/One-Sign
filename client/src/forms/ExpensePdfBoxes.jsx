@@ -12,18 +12,28 @@
 //   that quietly decides where a signature goes is worse than one that shows its
 //   work: this shows the boxes on the page before anything is submitted.
 // ============================================================
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { detectExpenseSignatureBoxes } from "../lib/expenseSignatureBoxes.js";
+import { matchName } from "../lib/matchSignatory.js";
 
 const ViewerModule = () => import("../viewer.jsx");   // shares the pdfjs chunk
 
-export function ExpensePdfBoxes({ file, onChange }) {
+export function ExpensePdfBoxes({ file, users = [], onChange }) {
   const canvasRef = useRef(null);
   const [boxes, setBoxes] = useState([]);
   const [on, setOn] = useState({});
+  const [who, setWho] = useState({});               // role -> userId chosen
   const [state, setState] = useState("reading");   // reading | ready | none | error
   const [err, setErr] = useState("");
+
+  // Who the form names, resolved against the directory. Recomputed rather than
+  // stored, so correcting one row never disturbs another.
+  const suggestions = useMemo(() => {
+    const out = {};
+    for (const b of boxes) out[b.role] = b.name ? matchName(b.name, users) : null;
+    return out;
+  }, [boxes, users]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +68,12 @@ export function ExpensePdfBoxes({ file, onChange }) {
 
         setBoxes(found);
         setOn(Object.fromEntries(found.map((b) => [b.role, true])));
+        // Pre-fill only where the directory gives one clear answer. An ambiguous
+        // name is left blank on purpose, so confirming is a decision rather than
+        // an acceptance of whatever came first.
+        setWho(Object.fromEntries(
+          found.map((b) => [b.role, (b.name ? matchName(b.name, users) : null)?.user?.id || ""])
+        ));
         setState(found.length ? "ready" : "none");
       } catch (e) {
         if (!cancelled) { setErr(e?.message || "Could not read that PDF"); setState("error"); }
@@ -66,33 +82,87 @@ export function ExpensePdfBoxes({ file, onChange }) {
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
   }, [file]);
 
-  // Report the accepted boxes upward in the marker shape the rest of the app
-  // uses — page and percentages, nothing about this screen.
+  // Report upward in the shapes the rest of the app already uses: markers for a
+  // team-routed request, and signers — a person plus the box they sign in — for
+  // one routed straight to the people the form names.
   useEffect(() => {
-    onChange?.(boxes.filter((b) => on[b.role]).map(({ page, x, y, w, h }) => ({ page, x, y, w, h })));
-  }, [boxes, on]);
+    const live = boxes.filter((b) => on[b.role]);
+    onChange?.({
+      markers: live.map(({ page, x, y, w, h }) => ({ page, x, y, w, h })),
+      signers: live
+        .filter((b) => who[b.role])
+        .map((b) => ({
+          userId: who[b.role],
+          boxes: [{ page: b.page, x: b.x, y: b.y, w: b.w, h: b.h }],
+          dateFields: [],
+        })),
+    });
+  }, [boxes, on, who]);
 
   const accepted = boxes.filter((b) => on[b.role]).length;
+  const named = boxes.filter((b) => on[b.role] && who[b.role]).length;
 
   return (
     <div>
       <div className="text-xs mb-2 opacity-70">
         {state === "reading" && "Reading the form…"}
-        {state === "ready" && `Found ${boxes.length} signature ${boxes.length === 1 ? "box" : "boxes"} on this form — ${accepted} selected.`}
+        {state === "ready" && (
+          <>Found {boxes.length} signature {boxes.length === 1 ? "box" : "boxes"} on this form — {accepted} selected
+            {named > 0 && <>, {named} routed to the {named === 1 ? "person" : "people"} it names</>}.
+          </>
+        )}
         {state === "none" && "No signature block recognised on this PDF. You can still place boxes by hand after submitting."}
         {state === "error" && `Could not read that PDF: ${err}`}
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3">
-        {boxes.map((b) => (
-          <button key={b.role}
-            onClick={() => setOn((p) => ({ ...p, [b.role]: !p[b.role] }))}
-            className={on[b.role] ? "btn-primary text-xs" : "btn-ghost text-xs"}
-            title={on[b.role] ? "Signature box included" : "Not included"}>
-            {on[b.role] && <Check size={11} />} {b.label}
-          </button>
-        ))}
-      </div>
+      {/* One row per signatory the form names: the box, who it says signs, and
+          who that is here. Confirming is a click; correcting is a dropdown. */}
+      {boxes.length > 0 && (
+        <div className="mb-3" style={{ display: "grid", gap: 6 }}>
+          {boxes.map((b) => {
+            const s = suggestions[b.role];
+            return (
+              <div key={b.role} className="flex items-center gap-2 flex-wrap text-xs">
+                <button
+                  onClick={() => setOn((p) => ({ ...p, [b.role]: !p[b.role] }))}
+                  className={on[b.role] ? "btn-primary text-xs" : "btn-ghost text-xs"}
+                  title={on[b.role] ? "Included" : "Not included"}
+                  style={{ minWidth: 108, justifyContent: "flex-start" }}>
+                  {on[b.role] && <Check size={11} />} {b.label}
+                </button>
+
+                <span className="opacity-70" style={{ minWidth: 190 }}>
+                  {b.name
+                    ? <>on the form: <strong>{b.name}</strong>{b.designation ? <span className="opacity-60"> · {b.designation}</span> : null}</>
+                    : <span className="opacity-50">no name printed on this row</span>}
+                </span>
+
+                <select
+                  value={who[b.role] || ""}
+                  disabled={!on[b.role]}
+                  onChange={(e) => setWho((p) => ({ ...p, [b.role]: e.target.value }))}
+                  style={{ minWidth: 220 }}>
+                  <option value="">
+                    {b.name ? "Choose who signs here…" : "Not routed to anyone"}
+                  </option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+
+                {s?.ambiguous && (
+                  <span className="opacity-60" title="More than one person fits this name">
+                    several people match — pick one
+                  </span>
+                )}
+                {b.name && !s && (
+                  <span className="opacity-60">no one here matches that name</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* The page, with the boxes drawn over it at the size the form drew them. */}
       <div style={{ position: "relative", display: "inline-block", lineHeight: 0,

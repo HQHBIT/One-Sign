@@ -69,7 +69,7 @@ const SHEET_CSS = `
 .xl .logos img { max-height:80px; width:auto; display:block; }
 `;
 
-export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
+export function ExpenseForm({ user, teams, users = [], notify, onDone, onBack }) {
   const [f, setF] = useState({
     submissionDate: new Date().toISOString().slice(0, 10),
     prNo: "", prDate: "", requestorIts: "", subDepartment: "",
@@ -85,6 +85,7 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
   // submitting both would put two versions of the same expense into one request.
   const [pdf, setPdf] = useState(null);
   const [pdfMarkers, setPdfMarkers] = useState([]);
+  const [pdfSigners, setPdfSigners] = useState([]);
 
   const attach = (e) => {
     const file = e.target.files?.[0];
@@ -105,18 +106,28 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
 
   const submit = async () => {
     setErr("");
-    if (!targetTeam) return setErr("Choose who should approve this.");
+    // A department is only needed when nobody has been named. Demanding one for
+    // a form that already says who signs would make the requestor answer a
+    // question the document has answered.
+    const goingDirect = !!pdf && pdfSigners.length > 0;
+    if (!goingDirect && !targetTeam) return setErr("Choose who should approve this.");
 
     // The attached PDF wins: it is a form somebody already filled and printed,
     // and the boxes read off it are where its own signature cells are.
     if (pdf) {
       setBusy(true);
       try {
+        // When the form names its signatories and they have been confirmed, the
+        // request goes straight to those people, each into the box beside their
+        // own name. Otherwise it falls back to the department, which is what a
+        // form with no names printed on it can support.
+        const direct = pdfSigners.length > 0;
         await api.createRequest({
           file: pdf,
-          targetTeamId: targetTeam,
           requestType: "expense",
-          marker: pdfMarkers.length ? pdfMarkers : undefined,
+          ...(direct
+            ? { direct: true, signers: pdfSigners }
+            : { targetTeamId: targetTeam, marker: pdfMarkers.length ? pdfMarkers : undefined }),
           note,
         });
         notify("Expense submitted", "success");
@@ -203,7 +214,7 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
                 <X size={12} /> Remove and fill the form instead
               </button>
             </div>
-            <ExpensePdfBoxes file={pdf} onChange={setPdfMarkers} />
+            <ExpensePdfBoxes file={pdf} users={users} onChange={({ markers, signers }) => { setPdfMarkers(markers); setPdfSigners(signers); }} />
           </div>
         )}
       </div>

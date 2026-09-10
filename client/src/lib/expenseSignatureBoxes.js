@@ -74,7 +74,11 @@ function signColumn(heads) {
     // Within about a millimetre and a half of A4. Wider than any rounding in the
     // text layer, tighter than the difference between this form and another.
     if (scale > 0 && Math.abs(predictedDate - centreX(date)) < 1.5) {
-      return { left: left0 + scale * edgeRatio(2), right: left0 + scale * edgeRatio(3), fitted: true };
+      // The whole table is now solved, not just this column: edgeAt gives any
+      // boundary, which is what lets the Name column be read exactly rather
+      // than approximated from where a header happened to start.
+      const edgeAt = (i) => left0 + scale * edgeRatio(i);
+      return { left: edgeAt(2), right: edgeAt(3), fitted: true, edgeAt };
     }
   }
 
@@ -130,14 +134,27 @@ export function boxesFromTextItems(items = [], page = 1) {
     ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
     : anchors[0].item.h * 2;
 
+  // The Name & Designation column, for reading who each row is addressed to.
+  // Only when the table was fitted: without it the column's left edge is a
+  // guess, and a guess here silently attributes a row to the wrong person.
+  const nameCol = col.edgeAt ? { left: col.edgeAt(1), right: col.edgeAt(2) } : null;
+
   return anchors.map((a, i) => {
-    const top = a.item.y;
-    const height = i < anchors.length - 1 ? anchors[i + 1].item.y - top : typical;
-    // Inset slightly so the stamp sits inside the printed rule rather than on
-    // top of it. Proportional, so it survives a scaled page.
-    const padY = Math.min(height * 0.12, 1);
+    const height = i < anchors.length - 1 ? anchors[i + 1].item.y - a.item.y : typical;
+
+    // CENTRED ON THE LABEL, not started at it. Each signatory occupies a cell
+    // merged across two rows and its label is centred in that merge, so the
+    // label's position marks the MIDDLE of the block. Treating it as the top put
+    // every box half a block low and made it one row tall instead of two — which
+    // is what "everything is misaligned" looked like on the page.
+    const mid = centreY(a.item);
+    const top = mid - height / 2;
+
+    // Inset so the stamp sits inside the printed rule rather than on it.
+    const padY = Math.min(height * 0.1, 0.8);
     const padX = Math.min((col.right - col.left) * 0.06, 1);
-    return {
+
+    const box = {
       role: a.role,
       label: a.label,
       page,
@@ -146,6 +163,26 @@ export function boxesFromTextItems(items = [], page = 1) {
       w: +((col.right - col.left) - padX * 2).toFixed(3),
       h: +(height - padY * 2).toFixed(3),
     };
+
+    // Who the form says signs here. The name sits in the column to the left of
+    // Sign, on the same two rows; the designation is the line under it.
+    if (nameCol) {
+      const inRow = clean
+        .filter((it) => {
+          const cy = centreY(it);
+          const cx = centreX(it);
+          return cy > top && cy < top + height && cx >= nameCol.left && cx <= nameCol.right;
+        })
+        .sort((p, q) => p.y - q.y);
+      if (inRow.length) {
+        box.name = inRow[0].text;
+        // The line beneath the name is the designation — "Finance HOD" under
+        // "Huzaifa Bsb". Kept because it is how a person confirms the match is
+        // the right one when two people share a first name.
+        if (inRow.length > 1) box.designation = inRow[1].text;
+      }
+    }
+    return box;
   });
 }
 

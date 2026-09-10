@@ -581,7 +581,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   if (requestType === "expense" && !file) {
     return (
       <ExpenseForm
-        user={user} teams={teams} notify={notify} onDone={onDone}
+        user={user} teams={teams} users={users} notify={notify} onDone={onDone}
         onBack={() => setRequestType(defaultType && defaultType !== "expense" ? defaultType : "general")}
       />
     );
