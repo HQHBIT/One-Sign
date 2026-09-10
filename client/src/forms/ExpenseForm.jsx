@@ -56,6 +56,15 @@ const SHEET_CSS = `
                         color:inherit; outline:none; padding:0; }
 .xl input:focus, .xl select:focus { background:#FFF8E1; }
 .xl .p2 td { background:#FFFDF5; }
+/* The logo band. Finance's print area starts at row 4, which is this band, and
+   ends at row 49 — so this is genuinely the top of the printed page, not
+   decoration added around it. The two images are the workbook's own, served as
+   files rather than bundled: the left one is a 1.2 MB PNG and has no business
+   inside the JavaScript. */
+.xl .logos { display:flex; align-items:center; justify-content:space-between;
+             padding:6px 14px; height:92px; box-sizing:border-box;
+             border-bottom:1px solid #000; background:#fff; }
+.xl .logos img { max-height:80px; width:auto; display:block; }
 `;
 
 export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
@@ -137,6 +146,10 @@ export function ExpenseForm({ user, teams, notify, onDone, onBack }) {
       </div>
 
       <div className="xl">
+        <div className="logos">
+          <img src="/expense/logo-left.png" alt="" />
+          <img src="/expense/logo-right.png" alt="" />
+        </div>
         <table>
           <colgroup>
             <col style={{ width: "33.6%" }} /><col style={{ width: "27.5%" }} />
