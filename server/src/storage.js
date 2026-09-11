@@ -43,9 +43,15 @@ const cfg = {
  * Whether object storage is configured. Fail-closed: with no bucket the callers
  * keep using the filesystem rather than erroring, so a half-configured server
  * degrades to the old behaviour instead of losing uploads.
+ *
+ * The BUCKET alone decides it. An endpoint is how you reach a self-hosted server
+ * and is deliberately absent for Amazon S3 — leaving it unset is what tells the
+ * SDK to talk to AWS. Requiring it here, as this once did, meant that pointing a
+ * box at real S3 turned storage silently OFF: every upload went quietly to disk
+ * while the configuration looked complete.
  */
 export function isEnabled() {
-  return !!(cfg.bucket && cfg.endpoint);
+  return !!cfg.bucket;
 }
 
 /** Diagnostic for the health endpoint — never includes the secret. */
