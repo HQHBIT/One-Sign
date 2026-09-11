@@ -167,3 +167,51 @@ export function signBoxFor(role) {
   const [tl, br] = s.sign.split(":");
   return { sheet: SHEET, topLeft: tl, bottomRight: br };
 }
+
+// "C36" -> { col: 2, row: 35 }, both zero-based.
+function cellIndex(addr) {
+  const m = /^([A-Z]+)(\d+)$/.exec(addr);
+  if (!m) throw new Error(`Not a cell address: ${addr}`);
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return { col: col - 1, row: Number(m[2]) - 1 };
+}
+
+// The template's extent, read once. Markers are relative to it, so it has to be
+// measured rather than assumed — if Finance adds a row, every marker shifts.
+let extent = null;
+async function sheetExtent() {
+  if (extent) return extent;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(TEMPLATE_PATH);
+  const ws = wb.getWorksheet(SHEET);
+  extent = {
+    cols: Math.max(ws.columnCount || 0, ws.actualColumnCount || 0, 1),
+    rows: Math.max(ws.rowCount || 0, ws.actualRowCount || 0, 1),
+  };
+  return extent;
+}
+
+/**
+ * The signature marker for a signatory, in the percentage form the rest of the
+ * app uses.
+ *
+ * Worth being precise about what these percentages mean, because it is not what
+ * the name suggests: xlsx-sign maps them onto CELL INDICES, not pixels
+ * (`left = x/100 * columnCount`). So a box one column wide and two rows tall is
+ * 1/cols and 2/rows of the sheet — which is how a marker can name Finance's box
+ * exactly instead of approximating a position over the rendered image.
+ */
+export async function markerForSignBox(role) {
+  const box = signBoxFor(role);
+  const { cols, rows } = await sheetExtent();
+  const tl = cellIndex(box.topLeft);
+  const br = cellIndex(box.bottomRight);
+  return {
+    page: 1,
+    x: (tl.col / cols) * 100,
+    y: (tl.row / rows) * 100,
+    w: ((br.col + 1 - tl.col) / cols) * 100,
+    h: ((br.row + 1 - tl.row) / rows) * 100,
+  };
+}
