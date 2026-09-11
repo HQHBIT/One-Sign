@@ -40,6 +40,16 @@ jobs:
           envs: AUDIT_CONFIDENTIAL
           command_timeout: 4m
           script: |
+            # TRIAGE MODE on this branch: the sections below hang on a box out of disk or
+            # memory, which is exactly when they are needed. Four cheap questions, then stop.
+            echo "=== disk ==="; df -h 2>&1 | head -15
+            echo; echo "=== memory ==="; free -m 2>&1 | head -5
+            echo; echo "=== load ==="; uptime 2>&1
+            echo; echo "=== biggest under /home/ubuntu ==="
+            timeout 60 du -xh -d 2 /home/ubuntu 2>/dev/null | sort -rh | head -12 || echo "du timed out"
+            echo; echo "=== listening ports ==="
+            (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -E ":(80|443|5001|5101|9000) " | head -8 || echo "none listening"
+            exit 0
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
