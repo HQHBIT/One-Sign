@@ -19,3 +19,22 @@
 export function deploymentOrg() {
   return process.env.ORG_SLUG || "hqhb";
 }
+
+/**
+ * Whether this deployment records documents being sent on for Manzoori.
+ *
+ * A WAQF practice, so it is off elsewhere rather than sitting unused in every
+ * other deployment's interface. MANZOORI_ENABLED overrides it per box.
+ *
+ * Keyed on ORG_SLUG, which the box's own deploy writes, and deliberately NOT on
+ * the org_id stored against a request: requests raised on the WAQF box are still
+ * written with org_id 'hqhb', so gating on that column would gate on a value
+ * already known to be wrong.
+ */
+export function manzooriEnabled() {
+  const set = process.env.MANZOORI_ENABLED;
+  if (set != null && String(set).trim() !== "") {
+    return String(set).trim().toLowerCase() === "true";
+  }
+  return deploymentOrg() === "waqf";
+}

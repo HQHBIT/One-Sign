@@ -584,6 +584,25 @@ async function runSchema() {
   // filters on it and the join is not worth paying each time.
   await tryExec(`ALTER TABLE requests ADD COLUMN org_id VARCHAR(32) NOT NULL DEFAULT 'hqhb'`);
 
+  // ---------- sent for Manzoori ----------
+  // A document signed by its HOD often goes on for sanction, and that sanction
+  // happens outside SignFlow. Recording the sending is what closes the loop for
+  // the person who signed it: without it, an approver signs a document and never
+  // learns whether it went anywhere.
+  //
+  // Three columns and no new table, because there is nothing to model beyond the
+  // event itself — no recipient is tracked, by decision, since the authority is
+  // reached by other means. A table would suggest a workflow that does not exist.
+  await tryExec(`ALTER TABLE requests ADD COLUMN manzoori_sent_at BIGINT DEFAULT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN manzoori_sent_by VARCHAR(64) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN manzoori_note VARCHAR(500) DEFAULT NULL`);
+  await tryExec(`ALTER TABLE requests ADD INDEX idx_requests_manzoori (manzoori_sent_at)`);
+  // Deliberately not a foreign key with ON DELETE CASCADE: losing the person
+  // should not erase the record that the document was sent.
+  await tryExec(
+    `ALTER TABLE requests ADD CONSTRAINT fk_req_manzoori_by
+       FOREIGN KEY (manzoori_sent_by) REFERENCES users(id) ON DELETE SET NULL`);
+
   // Everything that existed before this feature belongs to HQHB.
   await tryExec(`UPDATE users    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
   await tryExec(`UPDATE teams    SET org_id = 'hqhb' WHERE org_id IS NULL OR org_id = ''`);
@@ -769,9 +788,9 @@ export async function hydrateRequest(row) {
     [row.id]
   );
   const [names] = await pool.execute(
-    "SELECT u1.name AS requestor_name, u2.name AS approver_name FROM (SELECT 1) x " +
-    "LEFT JOIN users u1 ON u1.id = ? LEFT JOIN users u2 ON u2.id = ?",
-    [row.requestor_id, row.approver_id || null]
+    "SELECT u1.name AS requestor_name, u2.name AS approver_name, u3.name AS manzoori_name FROM (SELECT 1) x " +
+    "LEFT JOIN users u1 ON u1.id = ? LEFT JOIN users u2 ON u2.id = ? LEFT JOIN users u3 ON u3.id = ?",
+    [row.requestor_id, row.approver_id || null, row.manzoori_sent_by || null]
   );
 
   // Workflow steps + signers (with user names)
@@ -839,6 +858,14 @@ export async function hydrateRequest(row) {
     finalizedAt: row.finalized_at ? Number(row.finalized_at) : null,
     rejectedAt: row.rejected_at ? Number(row.rejected_at) : null,
     rejectReason: row.reject_reason,
+    // Sent onward for Manzoori. The sanction itself happens outside SignFlow, so
+    // what is kept is the fact of sending — who, when, and anything they wanted
+    // recorded alongside it. That is what lets the approver see which of the
+    // documents they signed have moved on.
+    manzooriSentAt: row.manzoori_sent_at ? Number(row.manzoori_sent_at) : null,
+    manzooriSentBy: row.manzoori_sent_by || null,
+    manzooriSentByName: names[0]?.manzoori_name || null,
+    manzooriNote: row.manzoori_note || null,
     hasRejectVoice: !!row.reject_voice_path,
     // Excel requests signed before real .xlsx stamping existed point at a
     // ".signed.json" manifest, not a document — those still serve the original.

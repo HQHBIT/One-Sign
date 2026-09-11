@@ -15,6 +15,7 @@ import {
   MAX_UPLOAD_MB, MAX_UPLOAD_BYTES
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
+import { useServerConfig } from "./lib/serverConfig.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
 import { UnlockModal, ConfidentialBadge } from "./components/UnlockGate.jsx";
 import { useBackHandler, useEscapeKey, useScrollLock } from "./lib/useBackHandler.js";
@@ -1252,7 +1253,125 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
   );
 }
 
-function ApprovedList({ items, teams, users, user, back, title = "Approved requests" }) {
+// What happened to the documents you signed.
+//
+//   Approved by you          everything this person put their signature to
+//   Sent for further Manzoori the subset that has since gone on for sanction
+//
+// The second is a SUBSET of the first, so a document that has gone onward
+// appears on both sides. Splitting them into "still here" and "gone" would read
+// more tidily, but it would answer a different question: the left column is the
+// full record of what this person signed, and the counts above each side are
+// what makes the proportion legible at a glance.
+//
+// An approver otherwise signs a document and never hears of it again; that is
+// the whole reason the sending is recorded at all.
+function ManzooriReport({ items, teams, users, user, back }) {
+  const [open, setOpen] = useState(null);
+  const sent = items.filter((r) => r.manzooriSentAt);
+
+  const Column = ({ title, rows, empty, tint }) => (
+    <div>
+      <div className="flex items-baseline justify-between mb-3">
+        <div className="text-[10px] tracking-widest uppercase opacity-50">{title}</div>
+        <div className="text-sm tabular-nums" style={tint ? { color: tint } : undefined}>{rows.length}</div>
+      </div>
+      {rows.length === 0
+        ? <div className="card p-5 text-sm opacity-50">{empty}</div>
+        : (
+          <div className="card overflow-hidden">
+            {rows.map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
+                subtitle={r.manzooriSentAt
+                  ? `Sent ${fmtShort(r.manzooriSentAt)}${r.manzooriSentByName ? ` by ${r.manzooriSentByName}` : ""}${r.manzooriNote ? ` · ${r.manzooriNote}` : ""}`
+                  : undefined}
+                actions={<button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>} />
+            ))}
+          </div>
+        )}
+    </div>
+  );
+
+  return (
+    <div>
+      <BackHeader back={back} title="Reports" step={`${sent.length} of ${items.length} sent onward`} />
+      <div className="grid lg:grid-cols-2 gap-6 mt-8">
+        <Column title="Approved by you" rows={items}
+          empty="You have not signed anything yet." />
+        <Column title="Sent for further Manzoori" rows={sent} tint="var(--c-forest)"
+          empty="None of the documents you signed have been sent on yet." />
+      </div>
+      {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+    </div>
+  );
+}
+
+// Sending a signed document on for Manzoori.
+//
+// The sanction happens outside SignFlow, so this button claims nothing about an
+// outcome — it records that the document went, which is the thing the approver
+// who signed it otherwise never learns. Hidden entirely where the deployment
+// does not do Manzoori, rather than shown and refused.
+function ManzooriButton({ req, notify, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
+  const cfg = useServerConfig();
+  if (!cfg.manzooriEnabled) return null;
+
+  const send = async () => {
+    setBusy(true);
+    try {
+      await api.sendForManzoori(req.id, note);
+      notify?.("Recorded as sent for Manzoori", "success");
+      setAsking(false); setNote("");
+      await onChanged?.();
+    } catch (e) { notify?.(e.message || "Could not record it", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const undo = async () => {
+    setBusy(true);
+    try {
+      await api.undoManzoori(req.id);
+      notify?.("Undone", "info");
+      await onChanged?.();
+    } catch (e) { notify?.(e.message || "Could not undo it", "error"); }
+    finally { setBusy(false); }
+  };
+
+  if (req.manzooriSentAt) {
+    return (
+      <button className="btn-ghost text-xs" disabled={busy} onClick={undo}
+        title="Recorded in error? This removes the record.">
+        <Undo2 size={12} /> {busy ? "…" : "Undo Manzoori"}
+      </button>
+    );
+  }
+
+  if (!asking) {
+    return (
+      <button className="btn-ghost text-xs" onClick={() => setAsking(true)}>
+        <Send size={12} /> Send for Manzoori
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1">
+      <input autoFocus value={note} onChange={(e) => setNote(e.target.value)}
+        placeholder="Note (optional)" className="text-xs" style={{ width: 170 }} />
+      <button className="btn-primary text-xs" disabled={busy} onClick={send}>
+        {busy ? "…" : "Confirm"}
+      </button>
+      <button className="btn-ghost text-xs" onClick={() => { setAsking(false); setNote(""); }}>
+        <X size={11} />
+      </button>
+    </span>
+  );
+}
+
+function ApprovedList({ items, teams, users, user, back, title = "Approved requests", notify, refresh }) {
   const [open, setOpen] = useState(null);
   return (
     <div>
@@ -1261,11 +1380,19 @@ function ApprovedList({ items, teams, users, user, back, title = "Approved reque
         <div className="card mt-8 overflow-hidden">
           {items.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
+              subtitle={r.manzooriSentAt
+                ? `Sent for Manzoori ${fmtShort(r.manzooriSentAt)}${r.manzooriNote ? ` · ${r.manzooriNote}` : ""}`
+                : undefined}
               actions={(
                 <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   <DownloadBtn req={r} user={user} />
                   <PrintBtn req={r} />
+                  {/* Only the person who raised it, and only once. The sanction
+                      happens elsewhere; this records that it went. */}
+                  {r.requestorId === user.id && (
+                    <ManzooriButton req={r} notify={notify} onChanged={refresh} />
+                  )}
                 </div>
               )} />
           ))}
@@ -1454,6 +1581,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
 // ============================================================
 function ApproverView(props) {
   const { user, requests, teams, users, notify, approveRequest, rejectRequest, undoApproval } = props;
+  const cfg = useServerConfig();
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null);
   const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
@@ -1505,6 +1633,8 @@ function ApproverView(props) {
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
+  // Everything this person signed, and which of it has gone on for Manzoori.
+  if (tab === "manzoori") return <ManzooriReport {...props} items={approved} back={() => setTab("home")} />;
 
   const tiles = [
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
@@ -1514,7 +1644,14 @@ function ApproverView(props) {
     { key: "approved", icon: CheckCircle, title: "Approved requests", desc: "Documents you have signed and finalised.", badge: approved.length + pendingApproved.length },
     { key: "rejected", icon: XCircle, title: "Rejected requests", desc: "Documents you have rejected.", badge: rejected.length },
     { key: "my-requests", icon: FileText, title: "My requests", desc: "Documents you've raised for signature — track their progress.", badge: myOpen },
-    { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length }
+    { key: "authority", icon: Shield, title: "Signing authority", desc: "Teams that have granted you authority to approve.", badge: (user.signingAuthorityTeams || []).length },
+    // Only where the deployment records Manzoori; elsewhere it would be a report
+    // of an event that never happens.
+    ...(cfg.manzooriEnabled ? [{
+      key: "manzoori", icon: BarChart3, title: "Reports",
+      desc: "What you approved, and which of it has gone for Manzoori.",
+      badge: approved.filter(r => r.manzooriSentAt).length,
+    }] : []),
   ];
   const quickOpen = pending.concat(pendingApproved).find(r => r.id === quickOpenId);
   return (

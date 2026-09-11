@@ -18,6 +18,7 @@ import { readStored, writeStored } from "../filestore.js";
 import { fillExpenseForm, markerForSignBox } from "../expense-template.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
+import { manzooriEnabled } from "../org.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
@@ -1484,6 +1485,74 @@ router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
 // ============================================================
 //   withdraw (within window — only when not instant)
 // ============================================================
+// ============================================================
+//   SENT FOR MANZOORI
+//   ------------------------------------------------------------
+//   A document signed by its HOD often goes on for sanction, and that sanction
+//   happens outside SignFlow. What is recorded here is the SENDING — nothing
+//   more is claimed, because nothing more is known: no recipient is tracked and
+//   no approval is implied.
+//
+//   It exists for the person who signed it. An approver signs a document and
+//   then hears nothing; this is what tells them it moved on, and it is what the
+//   approver's report is built from.
+//
+//   Only after approval. Sending an unsigned document for sanction would be
+//   recording something that has not happened, and the report would then show
+//   documents as progressing when they are still waiting on the HOD.
+// ============================================================
+router.post("/:id/manzoori", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Not found" });
+    if (!manzooriEnabled()) return res.status(404).json({ error: "Not available on this deployment" });
+
+    // The person who raised it sends it on, since it is their document and their
+    // errand. An admin may too, for the times someone asks the office to do it.
+    const mine = row.requestor_id === req.user.id;
+    if (!mine && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Only the requestor can send this for Manzoori" });
+    }
+    if (row.status !== "approved") {
+      return res.status(400).json({ error: "Send it for Manzoori once it has been signed" });
+    }
+    if (row.manzoori_sent_at) {
+      return res.status(400).json({ error: "Already sent for Manzoori" });
+    }
+
+    const note = String(req.body?.note || "").trim().slice(0, 500);
+    await execute(
+      "UPDATE requests SET manzoori_sent_at = ?, manzoori_sent_by = ?, manzoori_note = ? WHERE id = ?",
+      [Date.now(), req.user.id, note || null, row.id]
+    );
+    // The approver is the audience for this, so nudge their dashboard.
+    if (row.approver_id) pingUser(row.approver_id);
+    res.json({ ok: true, manzooriSentAt: Date.now() });
+  } catch (e) { next(e); }
+});
+
+// Undo, for the ordinary mistake of marking the wrong document. Restricted to
+// whoever recorded it, within the same day — after that the report has been read
+// and quietly rewriting it would be worse than leaving it wrong.
+router.delete("/:id/manzoori", authRequired, async (req, res, next) => {
+  try {
+    const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Not found" });
+    if (!row.manzoori_sent_at) return res.status(400).json({ error: "It was not sent for Manzoori" });
+    const mine = row.manzoori_sent_by === req.user.id;
+    if (!mine && req.user.role !== "admin") return res.status(403).json({ error: "Not yours to undo" });
+    if (Date.now() - Number(row.manzoori_sent_at) > 24 * 60 * 60 * 1000 && req.user.role !== "admin") {
+      return res.status(400).json({ error: "Too long ago to undo — ask IT" });
+    }
+    await execute(
+      "UPDATE requests SET manzoori_sent_at = NULL, manzoori_sent_by = NULL, manzoori_note = NULL WHERE id = ?",
+      [row.id]
+    );
+    if (row.approver_id) pingUser(row.approver_id);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 router.post("/:id/withdraw", authRequired, requireRole(...SIGNER_ROLES), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);

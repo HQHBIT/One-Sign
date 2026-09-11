@@ -267,6 +267,19 @@ export const api = {
     if (deferNotify) fd.append("deferNotify", "true");
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
+  // -------- sent for Manzoori --------
+  // Records that a signed document has gone on for sanction. The sanction itself
+  // happens outside SignFlow, so this claims nothing about the outcome — only
+  // that it was sent, which is what the approver who signed it needs to know.
+  sendForManzoori(id, note) {
+    return this.fetch(`/api/requests/${id}/manzoori`, {
+      method: "POST", body: JSON.stringify({ note: note || "" }),
+    });
+  },
+  undoManzoori(id) {
+    return this.fetch(`/api/requests/${id}/manzoori`, { method: "DELETE" });
+  },
+
   // After a deferred batch: one summary email per signer, every document named.
   notifyBatch(ids) {
     return this.fetch("/api/requests/notify-batch", { method: "POST", body: JSON.stringify({ ids }) });

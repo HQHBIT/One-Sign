@@ -8,6 +8,7 @@ import { sendEmail } from "../email.js";
 import { genTempPassword } from "./users.js";
 import { validateRegistration } from "../registrationValidation.js";
 import { rateLimit, byEmail } from "../ratelimit.js";
+import { manzooriEnabled } from "../org.js";
 
 // Abuse controls. Login/OTP are keyed by IP+email so one attacker can't lock
 // out an unrelated user, and are generous enough not to trip real users.
@@ -65,6 +66,9 @@ router.get("/config", async (req, res, next) => {
       // Diagnostic only — decoded byte length, never the key itself. A
       // fail-closed feature is silent when misconfigured; this says why.
       confidentialKey: confidentialKeyStatus(),
+      // Whether this deployment records documents being sent on for Manzoori.
+      // A WAQF practice, so the control stays off every other interface.
+      manzooriEnabled: manzooriEnabled(),
     });
   } catch (e) { next(e); }
 });
