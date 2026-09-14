@@ -127,7 +127,9 @@ jobs:
             const referenced = Object.fromEntries(AREAS.map((a) => [a, new Set()]));
             console.log("\n  DATABASE REFERENCES vs FILES ON THIS DISK");
             console.log("  " + "-".repeat(78));
-            console.log("  " + "table.column".padEnd(38) + "org".padEnd(8) + "rows".padStart(6) + "on disk".padStart(9) + "MISSING".padStart(9) + "key/json".padStart(9));
+            console.log("  " + "".padEnd(50) + "  bare filename".padEnd(19) + "  already a key".padEnd(18));
+            console.log("  " + "table.column".padEnd(38) + "org".padEnd(6) + "rows".padStart(6) + "on disk".padStart(11) + "MISSING".padStart(8) +
+              "on disk".padStart(10) + "MISSING".padStart(8) + "json".padStart(6) + "other".padStart(6));
             let totalMissing = 0;
             for (const set of SETS) {
               const orgCol = (await has(set.table, "org_id")) ? "org_id" : null;
@@ -138,16 +140,25 @@ jobs:
                   orgCol ? [orgCol, col, set.table, col, col] : [col, set.table, col, col]);
                 const byOrg = {};
                 for (const r of rows) {
-                  const o = (byOrg[r.org] ||= { rows: 0, disk: 0, missing: 0, other: 0 });
+                  const o = (byOrg[r.org] ||= { rows: 0, disk: 0, missing: 0, kdisk: 0, kmissing: 0, json: 0, odd: 0 });
                   o.rows++;
                   const v = String(r.v);
-                  if (v.startsWith(area + "/") || /\.json$/i.test(v)) { o.other++; continue; }
-                  referenced[area].add(v);
-                  if (await exists(path.join(UPLOADS, area, v))) o.disk++; else { o.missing++; totalMissing++; }
+                  if (/\.json$/i.test(v)) { o.json++; continue; }
+                  // A value already written as a bucket key ("documents/abc.pdf") keeps its
+                  // disk copy at the same name, and that disk copy is what gets moved.
+                  const isKey = v.startsWith(area + "/");
+                  if (!isKey && v.includes("/")) { o.odd++; continue; }
+                  const name = isKey ? v.slice(area.length + 1) : v;
+                  referenced[area].add(name);
+                  const ok = await exists(path.join(UPLOADS, area, name));
+                  if (isKey) { if (ok) o.kdisk++; else { o.kmissing++; totalMissing++; } }
+                  else if (ok) o.disk++; else { o.missing++; totalMissing++; }
                 }
-                if (!rows.length) console.log(`  ${(set.table + "." + col).padEnd(38)}${"-".padEnd(8)}${"0".padStart(6)}`);
+                if (!rows.length) console.log(`  ${(set.table + "." + col).padEnd(38)}${"-".padEnd(6)}${"0".padStart(6)}`);
                 for (const [org, o] of Object.entries(byOrg)) {
-                  console.log(`  ${(set.table + "." + col).padEnd(38)}${String(org).padEnd(8)}${String(o.rows).padStart(6)}${String(o.disk).padStart(9)}${String(o.missing).padStart(9)}${String(o.other).padStart(9)}`);
+                  console.log(`  ${(set.table + "." + col).padEnd(38)}${String(org).padEnd(6)}${String(o.rows).padStart(6)}` +
+                    `${String(o.disk).padStart(11)}${String(o.missing).padStart(8)}${String(o.kdisk).padStart(10)}${String(o.kmissing).padStart(8)}` +
+                    `${String(o.json).padStart(6)}${String(o.odd).padStart(6)}`);
                 }
               }
             }
