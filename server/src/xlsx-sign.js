@@ -66,7 +66,7 @@ function offsetBy(start, wantPx, sizeOf, count) {
 }
 
 // Embed every stamp into the workbook's visible sheet, in place.
-//   stamps: [{ signaturePath, x, y, w, h }]  — x/y/w/h are percentages 0-100
+//   stamps: [{ signaturePath, signatureBytes?, x, y, w, h }]  — x/y/w/h are percentages 0-100
 async function applyStamps(wb, stamps) {
   const ws = targetSheet(wb);
   if (!ws) throw new Error("The workbook has no readable sheet");
@@ -78,7 +78,8 @@ async function applyStamps(wb, stamps) {
   for (const s of stamps) {
     if (!s?.signaturePath) continue;
     const ext = path.extname(s.signaturePath).toLowerCase() === ".jpg" ? "jpeg" : "png";
-    const imageId = wb.addImage({ buffer: await fs.readFile(s.signaturePath), extension: ext });
+    // Bytes when the signature was read from storage, else the path on disk.
+    const imageId = wb.addImage({ buffer: s.signatureBytes || await fs.readFile(s.signaturePath), extension: ext });
 
     const left = pct(s.x) * cols;
     const top = pct(s.y) * rows;

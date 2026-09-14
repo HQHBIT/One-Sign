@@ -91,9 +91,12 @@ export async function stampPdfMultiBytes({ srcBytes, stamps }) {
   const font = await pdf.embedFont(StandardFonts.Helvetica);
 
   const cache = new Map();
-  async function embed(p) {
+  // A stamp carries the signature's bytes when they were read from storage — a
+  // signature kept only in the bucket has no path on disk. A bare path is read
+  // from disk as before.
+  async function embed(p, given) {
     if (cache.has(p)) return cache.get(p);
-    const bytes = await fs.readFile(p);
+    const bytes = given || await fs.readFile(p);
     let img;
     try { img = await pdf.embedPng(bytes); }
     catch { img = await pdf.embedJpg(bytes); }
@@ -116,7 +119,7 @@ export async function stampPdfMultiBytes({ srcBytes, stamps }) {
     // The signature is fitted INSIDE the rectangle the requestor placed, keeping its
     // own aspect — no caption line. The signing date, when wanted, is stamped
     // separately in its own date box.
-    const sigImg = await embed(s.signaturePath);
+    const sigImg = await embed(s.signaturePath, s.signatureBytes);
     page.drawImage(sigImg, fitContain(place, sigImg.width, sigImg.height));
   }
 
@@ -239,14 +242,14 @@ function drawEmbeddedRotated(page, embedded, rotation, visW, visH) {
 // creation time, so the document goes out already self-signed / dated before it is
 // routed for approval. Works on raw bytes and returns new bytes (no disk write).
 // Coordinates are percentages of the page (same convention as stampPdfMulti).
-//   marks: [{ type: 'signature'|'date', signaturePath?, text?, page, x, y, w, h }]
+//   marks: [{ type: 'signature'|'date', signaturePath?, signatureBytes?, text?, page, x, y, w, h }]
 export async function applySelfMarks(pdfBytes, marks) {
   const pdf = await PDFDocument.load(pdfBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const cache = new Map();
-  async function embed(p) {
+  async function embed(p, given) {
     if (cache.has(p)) return cache.get(p);
-    const bytes = await fs.readFile(p);
+    const bytes = given || await fs.readFile(p);
     let img;
     try { img = await pdf.embedPng(bytes); } catch { img = await pdf.embedJpg(bytes); }
     cache.set(p, img);
@@ -262,7 +265,7 @@ export async function applySelfMarks(pdfBytes, marks) {
     if (m.type === "date") {
       drawDateInBox(page, font, String(m.text || ""), place);
     } else if (m.signaturePath) {
-      const img = await embed(m.signaturePath);
+      const img = await embed(m.signaturePath, m.signatureBytes);
       page.drawImage(img, fitContain(place, img.width, img.height));
     }
   }

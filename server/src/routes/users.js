@@ -1,13 +1,12 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import multer from "multer";
-import fs from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
 import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
 import { authRequired, requireRole, isSigner } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { deploymentOrg } from "../org.js";
+import { readStored, writeStored, deleteStored } from "../filestore.js";
 
 // Roles an admin may assign when creating users.
 const ASSIGNABLE_ROLES = ["admin", "requestor", "approver", "executive", "executive_assistant"];
@@ -26,8 +25,21 @@ export function genTempPassword() {
   return pwd;
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
+// Signature images go through the filestore, like documents: written to disk and
+// to the bucket, recorded as the key once the bucket copy is verified, and read
+// from wherever the recorded value says. Paths built by hand under uploads/
+// could neither read a signature kept only in the bucket nor resolve a key.
+const imageTypeFor = (value) => (/\.jpe?g$/i.test(String(value)) ? "image/jpeg" : "image/png");
+const saveSignature = (fileName, bytes) =>
+  writeStored("signatures", fileName, bytes, { contentType: imageTypeFor(fileName) });
+
+async function sendSignature(res, value) {
+  let bytes;
+  try { bytes = await readStored("signatures", value); }
+  catch { return res.status(404).end(); }
+  res.setHeader("Content-Type", imageTypeFor(value));
+  res.send(bytes);
+}
 
 const router = Router();
 const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -363,9 +375,7 @@ router.put("/me/signature", authRequired, upload.single("signature"), async (req
     const parsed = parseSignatureUpload(req);
     if (!parsed) return res.status(400).json({ error: "signature file or dataUrl required" });
 
-    await fs.mkdir(SIG_DIR, { recursive: true });
-    const fileName = `${userId}.${parsed.ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const fileName = await saveSignature(`${userId}.${parsed.ext}`, parsed.buffer);
     const dims = readImageSize(parsed.buffer);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
     await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, userId]);
@@ -443,9 +453,7 @@ router.post("/me/signatures/:sid/background", authRequired, async (req, res, nex
     const parsed = parseSignatureUpload(req);
     if (!parsed) return res.status(400).json({ error: "dataUrl required" });
 
-    await fs.mkdir(SIG_DIR, { recursive: true });
-    const fileName = `${userId}.${row.id}.clean.${parsed.ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const fileName = await saveSignature(`${userId}.${row.id}.clean.${parsed.ext}`, parsed.buffer);
     const dims = readImageSize(parsed.buffer);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : row.aspect;
 
@@ -478,7 +486,7 @@ router.post("/me/signatures/:sid/background/revert", authRequired, async (req, r
 
     let aspect = row.aspect;
     try {
-      const dims = readImageSize(await fs.readFile(path.join(SIG_DIR, row.original_path)));
+      const dims = readImageSize(await readStored("signatures", row.original_path));
       if (dims && dims.height > 0) aspect = dims.width / dims.height;
     } catch { /* unreadable original — keep the recorded aspect */ }
 
@@ -512,9 +520,7 @@ router.post("/me/signatures", authRequired, upload.single("signature"), async (r
     }
 
     const sigId = uid("sig");
-    await fs.mkdir(SIG_DIR, { recursive: true });
-    const fileName = `${userId}.${sigId}.${parsed.ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), parsed.buffer);
+    const fileName = await saveSignature(`${userId}.${sigId}.${parsed.ext}`, parsed.buffer);
     const dims = readImageSize(parsed.buffer);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
 
@@ -586,7 +592,7 @@ router.delete("/me/signatures/:sid", authRequired, async (req, res, next) => {
     const stillUsed = await queryOne("SELECT 1 AS ok FROM user_signatures WHERE user_id = ? AND file_path = ?", [req.user.id, row.file_path]);
     const u = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.user.id]);
     if (!stillUsed && u?.signature_path !== row.file_path) {
-      await fs.unlink(path.join(SIG_DIR, row.file_path)).catch(() => {});
+      await deleteStored("signatures", row.file_path).catch(() => {});
     }
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -596,7 +602,7 @@ router.get("/me/signatures/:sid/image", authRequired, async (req, res, next) => 
   try {
     const row = await queryOne("SELECT file_path FROM user_signatures WHERE id = ? AND user_id = ?", [req.params.sid, req.user.id]);
     if (!row) return res.status(404).end();
-    res.sendFile(path.join(SIG_DIR, row.file_path));
+    await sendSignature(res, row.file_path);
   } catch (e) { next(e); }
 });
 
@@ -649,11 +655,9 @@ router.put("/:id/signature", authRequired, requireRole("admin"), upload.single("
     const buf = req.file?.buffer;
     if (!buf) return res.status(400).json({ error: "Signature file required" });
 
-    await fs.mkdir(SIG_DIR, { recursive: true });
     const mt = (req.file.mimetype || "").toLowerCase();
     const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
-    const fileName = `${targetId}.${ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), buf);
+    const fileName = await saveSignature(`${targetId}.${ext}`, buf);
     const dims = readImageSize(buf);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
     await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, targetId]);
@@ -676,14 +680,13 @@ router.get("/:id/signature", authRequired, async (req, res, next) => {
     if (req.params.id !== req.user.id && req.user.role !== "admin") return res.status(404).end();
     const row = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.params.id]);
     if (!row?.signature_path) return res.status(404).end();
-    res.sendFile(path.join(SIG_DIR, row.signature_path));
+    await sendSignature(res, row.signature_path);
   } catch (e) { next(e); }
 });
 
 // ---------- bulk signatures ----------
 router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array("signatures", 200), async (req, res, next) => {
   try {
-    await fs.mkdir(SIG_DIR, { recursive: true });
     const matched = [];
     for (const f of (req.files || [])) {
       const email = f.originalname.replace(/\.(png|jpg|jpeg)$/i, "").toLowerCase();
@@ -691,8 +694,7 @@ router.post("/signatures/bulk", authRequired, requireRole("admin"), upload.array
       if (!user) continue;
       const mt = (f.mimetype || "").toLowerCase();
       const ext = mt.includes("jpeg") || mt.includes("jpg") ? "jpg" : "png";
-      const fileName = `${user.id}.${ext}`;
-      await fs.writeFile(path.join(SIG_DIR, fileName), f.buffer);
+      const fileName = await saveSignature(`${user.id}.${ext}`, f.buffer);
       const dims = readImageSize(f.buffer);
       const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
       await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, user.id]);
@@ -842,8 +844,8 @@ export async function mergeUsers(survivorId, loserId, performedBy = null) {
     if (!survivor.signature_path && loser.signature_path) {
       try {
         const ext = path.extname(loser.signature_path) || ".png";
-        const destName = `${survivorId}${ext}`;
-        await fs.copyFile(path.join(SIG_DIR, loser.signature_path), path.join(SIG_DIR, destName));
+        const destName = await saveSignature(`${survivorId}${ext}`,
+          await readStored("signatures", loser.signature_path));
         await conn.execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?",
           [destName, loser.signature_aspect ?? null, survivorId]);
         moved.signatureCopied = true;
