@@ -10,17 +10,12 @@
 // image follows the link's signature_source. The executive is always emailed
 // when their assistant acts, naming the assistant and the action.
 import { Router } from "express";
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
 import { query, queryOne, execute, hydrateUser, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { approveRequestHandler } from "./requests.js";
 import { readImageSize } from "./users.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
+import { writeStored } from "../filestore.js";
 
 const router = Router();
 
@@ -158,9 +153,10 @@ router.put("/:executiveId/signature", authRequired, requireRole("executive_assis
     const execRow = await queryOne("SELECT * FROM users WHERE id = ? AND role = 'executive'", [req.params.executiveId]);
     if (!execRow) return res.status(400).json({ error: "Executive not found" });
 
-    await fs.mkdir(SIG_DIR, { recursive: true });
-    const fileName = `${execRow.id}.${ext}`;
-    await fs.writeFile(path.join(SIG_DIR, fileName), buffer);
+    // Through the filestore, like every other signature write: the bucket key
+    // once its copy is verified, else the bare filename on disk.
+    const fileName = await writeStored("signatures", `${execRow.id}.${ext}`, buffer,
+      { contentType: ext === "jpg" ? "image/jpeg" : "image/png" });
     const dims = readImageSize(buffer);
     const aspect = dims && dims.height > 0 ? dims.width / dims.height : null;
     await execute("UPDATE users SET signature_path = ?, signature_aspect = ? WHERE id = ?", [fileName, aspect, execRow.id]);
