@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -77,6 +77,26 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
+
+            # box-cause: what took the box down before its last boot? Read-only.
+            if [ "$MODE" = "box-cause" ]; then
+              echo "=== boots";  (sudo -n journalctl --list-boots 2>/dev/null || journalctl --list-boots 2>/dev/null) | tail -4
+              echo "=== previous boot: OOM / killed / hung (kernel)"
+              (sudo -n journalctl -k -b -1 --no-pager 2>/dev/null || journalctl -k -b -1 --no-pager 2>/dev/null) | grep -iE 'out of memory|oom-kill|killed process|hung_task|blocked for more than' | tail -15
+              echo "=== previous boot: last 15 kernel lines"
+              (sudo -n journalctl -k -b -1 --no-pager 2>/dev/null || journalctl -k -b -1 --no-pager 2>/dev/null) | tail -15
+              echo "=== previous boot: shutdown/reboot request"
+              (sudo -n journalctl -b -1 --no-pager 2>/dev/null || journalctl -b -1 --no-pager 2>/dev/null) | grep -iE 'reboot|shutdown|power|systemd-logind|Stopping|Reached target' | tail -8
+              echo "=== the 1 GB node process (largest by RSS)"
+              P=$(ps -eo pid,rss,comm --sort=-rss | awk '$3=="node"{print $1; exit}')
+              [ -n "$P" ] && { echo "  pid $P rss $(ps -o rss= -p $P) KB"; echo "  cwd: $(sudo -n readlink /proc/$P/cwd 2>/dev/null || readlink /proc/$P/cwd)"; echo "  cmd: $(tr "\0" " " < /proc/$P/cmdline | cut -c1-160)"; }
+              echo "=== crash-looping apps: last error lines"
+              for n in tsf-backend operation_backend_uat; do
+                echo "  --- $n"; pm2 logs "$n" --err --nostream --lines 8 2>/dev/null | tail -8 | cut -c1-220
+              done
+              echo "=== memory now"; free -m | head -2; uptime
+              exit 0
+            fi
 
             # box-health: why is the site slow or down? Read-only, quick, and runs before
             # anything else so it works even when storage settings are irrelevant.
