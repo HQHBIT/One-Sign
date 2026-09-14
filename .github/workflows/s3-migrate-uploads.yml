@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [baseline, probe, dry-run, apply]
+        options: [baseline, probe, app-check, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -84,6 +84,40 @@ jobs:
             fi
 
             cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+
+            # app-check: the deployed app's own storage code, with the box's own .env.
+            # Then the app's recent log lines about storage. Changes nothing.
+            if [ "$MODE" = "app-check" ]; then
+              cat > scripts/.appcheck-tmp.mjs <<'APPCHECK_EOF'
+            // Does the DEPLOYED application's own storage code reach its bucket, using the
+            // box's own .env? Runs storage.healthCheck() — the same write / read-back /
+            // delete the admin storage-health page does — and prints status() (which never
+            // includes the secret).
+            const storage = await import("../src/storage.js");
+            const st = storage.status();
+            console.log("\n  APP STORAGE CHECK");
+            console.log(`  enabled: ${st.enabled} | endpoint: ${st.endpoint === null ? "none (Amazon S3)" : "SET (self-hosted)"} | region: ${st.region} | path-style: ${st.forcePathStyle} | credentials: ${st.credentials}`);
+            try {
+              const h = await storage.healthCheck();
+              const { ok, reason, message, roundTripMs } = h;
+              console.log(`  healthCheck: ${ok ? "OK — wrote, read back and deleted a probe object" : "FAILED"}${reason ? " — " + reason : ""}${message ? " — " + message : ""}${roundTripMs ? ` (${roundTripMs} ms)` : ""}`);
+              process.exit(ok ? 0 : 1);
+            } catch (e) {
+              console.log(`  healthCheck threw: ${e?.name || ""} ${e?.message || e}`);
+              process.exit(1);
+            }
+            APPCHECK_EOF
+              STATUS=0
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.appcheck-tmp.mjs || STATUS=$?
+              rm -f scripts/.appcheck-tmp.mjs
+              echo; echo "  app log lines mentioning storage (last 200 lines of each stream):"
+              for n in onesign_backend_uat onesign_backend_waqf onesign_backend_hqhb onesign; do
+                pm2 describe "$n" >/dev/null 2>&1 || continue
+                echo "  --- $n (pm2 status: $(pm2 jlist 2>/dev/null | grep -o "\"name\":\"$n\"[^}]*\"status\":\"[a-z]*\"" | grep -o "status\":\"[a-z]*" | head -1))"
+                pm2 logs "$n" --nostream --lines 200 2>/dev/null | grep -iE "filestore|storage|bucket|s3|NoSuchBucket|AccessDenied" | tail -15 || true
+              done
+              exit $STATUS
+            fi
 
             # probe: can the shared key put, read, delete in this bucket? One object
             # under _probe/, removed again. Nothing else is touched.
