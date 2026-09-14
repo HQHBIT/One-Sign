@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -77,6 +77,27 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
+
+            # box-health: why is the site slow or down? Read-only, quick, and runs before
+            # anything else so it works even when storage settings are irrelevant.
+            if [ "$MODE" = "box-health" ]; then
+              echo "=== uptime / load";  uptime
+              echo "=== memory";         free -m
+              echo "=== disk";           df -h / | tail -1
+              echo "=== top CPU";        ps -eo pid,pcpu,pmem,etime,comm --sort=-pcpu | head -12
+              echo "=== top memory";     ps -eo pid,pcpu,pmem,rss,comm --sort=-rss | head -8
+              echo "=== pm2 (name, status, restarts, uptime, mem)"
+              pm2 jlist 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const p of JSON.parse(s.slice(s.indexOf("[")))){const e=p.pm2_env||{};console.log(`  ${p.name.padEnd(34)} ${String(e.status).padEnd(9)} restarts=${e.restart_time} up=${Math.round((Date.now()-e.pm_uptime)/60000)}m mem=${Math.round((p.monit||{}).memory/1048576)}MB cpu=${(p.monit||{}).cpu}%`)}}catch(x){console.log("  pm2 jlist unreadable")}})'
+              echo "=== onesign app: last 40 error lines"
+              tail -n 40 /home/ubuntu/.pm2/logs/onesign-backend-uat-error.log 2>/dev/null | grep -vE 'quota exceeded|XML parse error|Deserialization error' | tail -25
+              echo "=== onesign app: last 15 output lines"
+              tail -n 15 /home/ubuntu/.pm2/logs/onesign-backend-uat-out.log 2>/dev/null
+              echo "=== kernel OOM kills (recent)"
+              (sudo -n dmesg -T 2>/dev/null || dmesg -T 2>/dev/null) | grep -iE 'out of memory|killed process' | tail -5
+              echo "=== nginx upstream errors (last 10)"
+              (sudo -n tail -n 200 /var/log/nginx/error.log 2>/dev/null || tail -n 200 /var/log/nginx/error.log 2>/dev/null) | grep -iE 'upstream|timed out|refused' | tail -10 | sed -E 's/client: [0-9.]+/client: -/'
+              exit 0
+            fi
 
             if [ -z "$TARGET_BUCKET" ]; then
               echo "No bucket secret is set for that choice. Set AWS_S3_BUCKET_* first."
