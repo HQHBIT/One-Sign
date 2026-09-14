@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [baseline, dry-run, apply]
+        options: [baseline, probe, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -84,6 +84,76 @@ jobs:
             fi
 
             cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+
+            # probe: can the shared key put, read, delete in this bucket? One object
+            # under _probe/, removed again. Nothing else is touched.
+            if [ "$MODE" = "probe" ]; then
+              cat > scripts/.probe-tmp.mjs <<'PROBE_EOF'
+            // Can the shared key do everything the application needs in this bucket?
+            // Writes ONE small object under _probe/, reads it back, deletes it, and
+            // confirms it is gone. Touches nothing else.
+            import crypto from "node:crypto";
+            import {
+              S3Client, HeadBucketCommand, PutObjectCommand, HeadObjectCommand,
+              GetObjectCommand, DeleteObjectCommand, GetBucketVersioningCommand,
+            } from "@aws-sdk/client-s3";
+
+            const bucket = (process.env.TARGET_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.TARGET_REGION || "").trim() || undefined,
+              credentials: { accessKeyId: process.env.TARGET_ACCESS_KEY, secretAccessKey: process.env.TARGET_SECRET_KEY },
+            });
+            const results = [];
+            const step = async (name, needed, fn) => {
+              try { const note = await fn(); results.push({ name, ok: true, note: note || "" }); return true; }
+              catch (e) {
+                results.push({ name, ok: false, needed, note: `${e?.name || "error"}${e?.$metadata?.httpStatusCode ? ` (${e.$metadata.httpStatusCode})` : ""}` });
+                return false;
+              }
+            };
+
+            const key = `_probe/${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}.txt`;
+            const body = Buffer.from(`signflow permission probe ${new Date().toISOString()}`);
+
+            await step("HeadBucket (s3:ListBucket)", true, () => s3.send(new HeadBucketCommand({ Bucket: bucket })));
+            const put = await step("PutObject (s3:PutObject)", true, () =>
+              s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: "text/plain" })));
+            if (put) {
+              await step("HeadObject (s3:GetObject)", true, () => s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })));
+              await step("GetObject and compare (s3:GetObject)", true, async () => {
+                const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+                const back = Buffer.from(await got.Body.transformToByteArray());
+                if (!back.equals(body)) throw Object.assign(new Error("mismatch"), { name: "ContentMismatch" });
+              });
+              const del = await step("DeleteObject (s3:DeleteObject)", true, () => s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })));
+              if (del) {
+                await step("Object gone after delete", true, async () => {
+                  try { await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })); }
+                  catch (e) { if (e?.$metadata?.httpStatusCode === 404) return "404 as expected"; throw e; }
+                  throw Object.assign(new Error("still there"), { name: "StillPresent" });
+                });
+              }
+            }
+            // Versioning status needs s3:GetBucketVersioning, which the app does not need
+            // and the policy does not grant, so a refusal here is informational only.
+            await step("Versioning status (informational)", false, async () => {
+              const v = await s3.send(new GetBucketVersioningCommand({ Bucket: bucket }));
+              return `Status: ${v.Status || "never enabled"}`;
+            });
+
+            console.log(`\n  PERMISSION PROBE — bucket ${bucket ? "set" : "MISSING"}`);
+            for (const r of results) {
+              console.log(`  ${r.ok ? "OK  " : r.needed ? "FAIL" : "info"}  ${r.name}${r.note ? " — " + r.note : ""}`);
+            }
+            const failed = results.filter((r) => !r.ok && r.needed);
+            console.log(failed.length ? `\n  ${failed.length} required permission(s) missing.\n` : "\n  The key can do everything the application needs.\n");
+            process.exit(failed.length ? 1 : 0);
+            PROBE_EOF
+              STATUS=0
+              node scripts/.probe-tmp.mjs || STATUS=$?
+              rm -f scripts/.probe-tmp.mjs
+              exit $STATUS
+            fi
 
             # baseline: read-only record of database references against files on disk,
             # taken before anything moves so later counts can be compared with it.
