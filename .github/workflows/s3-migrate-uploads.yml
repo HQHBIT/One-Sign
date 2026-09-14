@@ -170,6 +170,27 @@ jobs:
               const orphans = names.filter((n) => !referenced[area].has(n)).length;
               console.log(`  ${area.padEnd(12)} ${String(names.length).padStart(5)} on disk, ${String(orphans).padStart(5)} unreferenced`);
             }
+            // Signature and voice-note columns are read by building a disk path by hand
+            // (path.join(SIG_DIR, value)), not through the filestore, so a value already
+            // written as "signatures/x.png" resolves to signatures/signatures/x.png and is
+            // not found. Who is affected, and is anything still waiting on a signature?
+            console.log("\n  SIGNATURE / VOICE ROWS ALREADY WRITTEN AS KEYS (unreadable by the running code)");
+            const [keyedSigners] = await conn.query(`
+              SELECT r.status AS request_status, COUNT(*) AS n, COUNT(DISTINCT r.id) AS requests,
+                     COUNT(DISTINCT sg.user_id) AS signers
+                FROM request_step_signers sg
+                JOIN request_steps st ON st.id = sg.step_id
+                JOIN requests r ON r.id = st.request_id
+               WHERE sg.signature_path LIKE 'signatures/%'
+               GROUP BY r.status`);
+            for (const k of keyedSigners) console.log(`  step signers: request ${String(k.request_status).padEnd(10)} ${k.n} row(s), ${k.requests} request(s), ${k.signers} signer(s)`);
+            const [keyedApplied] = await conn.query(`
+              SELECT status, COUNT(*) AS n, COUNT(DISTINCT requestor_id) AS requestors
+                FROM requests WHERE applied_signature_path LIKE 'signatures/%' GROUP BY status`);
+            for (const k of keyedApplied) console.log(`  applied signature: request ${String(k.status).padEnd(10)} ${k.n} row(s), ${k.requestors} requestor(s)`);
+            const [[voice]] = await conn.query("SELECT COUNT(*) AS n FROM requests WHERE reject_voice_path LIKE 'voicenotes/%'");
+            console.log(`  voice notes: ${voice.n} row(s)`);
+
             const [[conf]] = await conn.query("SELECT COUNT(*) AS n FROM requests WHERE confidential = 1");
             console.log(`\n  confidential requests: ${conf.n}`);
             console.log(`  referenced but MISSING from disk, all columns: ${totalMissing}`);
