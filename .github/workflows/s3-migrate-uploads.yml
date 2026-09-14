@@ -43,9 +43,9 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, db-check, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
-        description: 'For "apply" only: type APPLY to proceed'
+        description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
         default: ""
 
@@ -67,11 +67,12 @@ jobs:
           TARGET_SECRET_KEY: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
           TARGET_BUCKET: ${{ inputs.bucket == 'hqhb' && secrets.AWS_S3_BUCKET_HQHB || inputs.bucket == 'waqf' && secrets.AWS_S3_BUCKET_WAQF || secrets.AWS_S3_BUCKET_UAT }}
           MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
         with:
           host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
           key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
-          envs: TARGET_REGION,TARGET_ACCESS_KEY,TARGET_SECRET_KEY,TARGET_BUCKET,MODE
+          envs: TARGET_REGION,TARGET_ACCESS_KEY,TARGET_SECRET_KEY,TARGET_BUCKET,MODE,CONFIRM
           command_timeout: 60m
           script: |
             export NVM_DIR="$HOME/.nvm"
@@ -144,6 +145,205 @@ jobs:
               grep -rlE 'signflow\.umooriqtesadiyah\.org' /etc/nginx/sites-enabled/ 2>/dev/null | while read c; do echo "  config $c:"; grep -E 'server_name|proxy_pass|listen' "$c" | sed 's/^/    /'; done
               exit 0
             fi
+
+            # repoint-*: step 4. Dry run is read-only. Apply needs confirm=REPOINT and
+            # writes a mysqldump and a rollback file first. Revert takes the rollback path.
+            case "$MODE" in repoint-dry-run|repoint-apply|repoint-revert)
+              cat > scripts/.repoint-tmp.mjs <<'REPOINT_EOF'
+            // Step 4: point every stored-file column at its bucket key, for ONE box.
+            //
+            //   node --env-file=.env scripts/.repoint-tmp.mjs                  dry run (default)
+            //   node --env-file=.env scripts/.repoint-tmp.mjs --apply          backup, rollback file, repoint
+            //   node --env-file=.env scripts/.repoint-tmp.mjs --revert <file>  put values back from a rollback file
+            //
+            // A row is repointed only when ALL of these hold for its file:
+            //   - it is on this box's disk, and
+            //   - the bucket has the object at the same key, the same size, and — for a
+            //     single-part upload, which is what the copy wrote — an ETag equal to the
+            //     MD5 of the disk file.
+            // Rows already stored as keys, legacy .json manifests, and files missing
+            // everywhere are left exactly as they are.
+            //
+            // --apply writes a mysqldump of the four tables and a rollback file BEFORE any
+            // change, then updates every row in ONE transaction. Each UPDATE carries the old
+            // value in its WHERE, so a row changed meanwhile is left alone, not overwritten.
+            // The disk copies are not touched: reads still fall back to disk.
+            import fs from "node:fs/promises";
+            import { createReadStream } from "node:fs";
+            import path from "node:path";
+            import crypto from "node:crypto";
+            import { execFileSync } from "node:child_process";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+            import { S3Client, HeadObjectCommand } from "@aws-sdk/client-s3";
+
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            const UPLOADS = path.join(__dirname, "..", "uploads");
+            const OUT_DIR = process.env.REPOINT_OUT_DIR || "/home/ubuntu/s3-migration";
+            const args = process.argv.slice(2);
+            const APPLY = args.includes("--apply");
+            const revertAt = args.indexOf("--revert");
+            const REVERT = revertAt >= 0 ? args[revertAt + 1] : null;
+
+            const db = {
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            };
+            const conn = await mysql.createConnection(db);
+
+            // ---------- revert ----------
+            if (REVERT) {
+              const plan = JSON.parse(await fs.readFile(REVERT, "utf8"));
+              await conn.beginTransaction();
+              let n = 0;
+              try {
+                for (const c of plan.changes) {
+                  const [r] = await conn.query("UPDATE ?? SET ?? = ? WHERE id = ? AND ?? = ?", [c.table, c.column, c.oldValue, c.id, c.column, c.newValue]);
+                  n += r.affectedRows;
+                }
+                await conn.commit();
+              } catch (e) { await conn.rollback(); throw e; }
+              console.log(`\n  REVERTED ${n} of ${plan.changes.length} value(s) to their filenames.\n`);
+              await conn.end();
+              process.exit(0);
+            }
+
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            if (!bucket) { console.log("  STORAGE_BUCKET is not set in .env — refusing."); process.exit(1); }
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              forcePathStyle: String(process.env.STORAGE_FORCE_PATH_STYLE || "").trim() === "true",
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+
+            const SETS = [
+              { table: "requests", cols: { file_path: "documents", signed_file_path: "signed", applied_signature_path: "signatures", reject_voice_path: "voicenotes" } },
+              { table: "users", cols: { signature_path: "signatures" } },
+              { table: "user_signatures", cols: { file_path: "signatures", original_path: "signatures" } },
+              { table: "request_step_signers", cols: { signature_path: "signatures" } },
+            ];
+
+            // One verification per distinct file, however many rows reference it.
+            const verdicts = new Map();
+            async function md5(file) {
+              return new Promise((resolve, reject) => {
+                const h = crypto.createHash("md5");
+                createReadStream(file).on("data", (d) => h.update(d)).on("end", () => resolve(h.digest("hex"))).on("error", reject);
+              });
+            }
+            async function verify(area, name) {
+              const key = `${area}/${name}`;
+              if (verdicts.has(key)) return verdicts.get(key);
+              const p = (async () => {
+                let size;
+                try { size = (await fs.stat(path.join(UPLOADS, area, name))).size; } catch { size = null; }
+                let head;
+                try { head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })); }
+                catch (e) {
+                  if (e?.$metadata?.httpStatusCode === 404) return size === null ? { ok: false, why: "lost" } : { ok: false, why: "not in bucket" };
+                  return { ok: false, why: `bucket error ${e?.name}` };
+                }
+                if (size === null) return { ok: false, why: "in bucket but not on disk (unverifiable)" };
+                if (head.ContentLength !== size) return { ok: false, why: "size differs" };
+                const etag = String(head.ETag || "").replace(/"/g, "");
+                if (etag && !etag.includes("-") && etag !== (await md5(path.join(UPLOADS, area, name)))) return { ok: false, why: "content differs" };
+                return { ok: true };
+              })();
+              verdicts.set(key, p);
+              return p;
+            }
+
+            const changes = [];
+            const problems = [];
+            console.log(`\n  STEP 4 REPOINT — ${APPLY ? "APPLY" : "DRY RUN (nothing is written)"}`);
+            console.log("  " + "table.column".padEnd(38) + "rows".padStart(6) + "key".padStart(6) + "json".padStart(6) + "lost".padStart(6) + "REPOINT".padStart(9) + "blocked".padStart(9));
+            for (const set of SETS) {
+              for (const [col, area] of Object.entries(set.cols)) {
+                const [[has]] = await conn.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", [set.table, col]);
+                if (!has.n) continue;
+                const [rows] = await conn.query("SELECT id, ?? AS v FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''", [col, set.table, col, col]);
+                const c = { rows: rows.length, key: 0, json: 0, lost: 0, repoint: 0, blocked: 0 };
+                const queue = rows.slice();
+                const worker = async () => {
+                  while (queue.length) {
+                    const r = queue.pop();
+                    const v = String(r.v);
+                    if (v.startsWith(area + "/")) { c.key++; continue; }
+                    if (/\.json$/i.test(v)) { c.json++; continue; }
+                    if (v.includes("/")) { c.blocked++; problems.push(`${set.table}.${col} ${r.id}: unexpected value shape`); continue; }
+                    const verdict = await verify(area, v);
+                    if (verdict.ok) { c.repoint++; changes.push({ table: set.table, column: col, id: r.id, oldValue: v, newValue: `${area}/${v}` }); }
+                    else if (verdict.why === "lost") c.lost++;
+                    else { c.blocked++; problems.push(`${set.table}.${col} ${r.id} (${area}/${v}): ${verdict.why}`); }
+                  }
+                };
+                await Promise.all([worker(), worker()]);
+                console.log("  " + `${set.table}.${col}`.padEnd(38) + String(c.rows).padStart(6) + String(c.key).padStart(6) + String(c.json).padStart(6) +
+                  String(c.lost).padStart(6) + String(c.repoint).padStart(9) + String(c.blocked).padStart(9));
+              }
+            }
+            console.log(`\n  ${changes.length} value(s) verified and ${APPLY ? "to be repointed" : "would be repointed"}; ${problems.length} blocked.`);
+            for (const p of problems.slice(0, 25)) console.log("    BLOCKED " + p);
+            if (problems.length > 25) console.log(`    ... and ${problems.length - 25} more`);
+            for (const ch of changes.slice(0, 4)) console.log(`    e.g. ${ch.table}.${ch.column} ${ch.id}: ${ch.oldValue} -> ${ch.newValue}`);
+
+            if (!APPLY) {
+              console.log("\n  DRY RUN — nothing was written.\n");
+              await conn.end();
+              process.exit(0);
+            }
+            if (problems.length) {
+              console.log("\n  Refusing to apply while any row is blocked. Nothing was written.\n");
+              await conn.end();
+              process.exit(1);
+            }
+
+            // ---------- backup and rollback, BEFORE any change ----------
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+            await fs.mkdir(OUT_DIR, { recursive: true });
+            const dump = `${OUT_DIR}/backup-before-repoint-${db.database}-${stamp}.sql`;
+            execFileSync("mysqldump", ["-h", db.host, "-P", String(db.port), "-u", db.user, "--single-transaction", "--no-tablespaces",
+              `--result-file=${dump}`, db.database, "requests", "users", "user_signatures", "request_step_signers"],
+              { env: { ...process.env, MYSQL_PWD: db.password }, stdio: ["ignore", "ignore", "inherit"] });
+            await fs.chmod(dump, 0o600);
+            const dumpSize = (await fs.stat(dump)).size;
+            if (dumpSize < 1000) { console.log(`  Backup looks empty (${dumpSize} bytes) — refusing.`); process.exit(1); }
+            console.log(`  Backup written: ${dump} (${dumpSize} bytes)`);
+            const rollback = `${OUT_DIR}/repoint-rollback-${db.database}-${stamp}.json`;
+            await fs.writeFile(rollback, JSON.stringify({ at: new Date().toISOString(), bucket, changes }, null, 1), { mode: 0o600 });
+            console.log(`  Rollback written: ${rollback}`);
+
+            await conn.beginTransaction();
+            let done = 0;
+            try {
+              for (const ch of changes) {
+                const [r] = await conn.query("UPDATE ?? SET ?? = ? WHERE id = ? AND ?? = ?", [ch.table, ch.column, ch.newValue, ch.id, ch.column, ch.oldValue]);
+                done += r.affectedRows;
+              }
+              await conn.commit();
+            } catch (e) {
+              await conn.rollback();
+              console.log(`  FAILED and rolled back: ${e.message}`);
+              process.exit(1);
+            }
+            console.log(`\n  REPOINTED ${done} of ${changes.length} value(s). Disk copies untouched.`);
+            console.log(`  To undo: mode repoint-revert with this rollback file.\n`);
+            await conn.end();
+            REPOINT_EOF
+              STATUS=0
+              RUN='env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION nice -n 10 node --env-file=.env scripts/.repoint-tmp.mjs'
+              if [ "$MODE" = "repoint-dry-run" ]; then $RUN || STATUS=$?
+              elif [ "$MODE" = "repoint-apply" ]; then
+                if [ "$CONFIRM" != "REPOINT" ]; then echo "repoint-apply needs confirm=REPOINT. Nothing done."; STATUS=1; else $RUN --apply || STATUS=$?; fi
+              else
+                case "$CONFIRM" in /home/ubuntu/s3-migration/repoint-rollback-*.json) $RUN --revert "$CONFIRM" || STATUS=$? ;; *) echo "repoint-revert needs confirm=<rollback file path>. Nothing done."; STATUS=1 ;; esac
+              fi
+              rm -f scripts/.repoint-tmp.mjs
+              exit $STATUS ;;
+            esac
 
             # db-check: is every file the database references in the bucket? Read-only.
             if [ "$MODE" = "db-check" ]; then
