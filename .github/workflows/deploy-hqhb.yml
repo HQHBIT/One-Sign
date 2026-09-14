@@ -98,12 +98,14 @@ jobs:
           ONEACCESS_ACCESS_TOKEN_TTL: ${{ secrets.ONEACCESS_ACCESS_TOKEN_TTL }}
           AUTH_LOCAL_LOGIN_ENABLED: ${{ secrets.AUTH_LOCAL_LOGIN_ENABLED }}
           CONFIDENTIAL_KEY: ${{ secrets.CONFIDENTIAL_KEY }}
-          STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
-          STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
-          STORAGE_BUCKET: ${{ secrets.HQHB_STORAGE_BUCKET }}
-          STORAGE_FORCE_PATH_STYLE: ${{ secrets.STORAGE_FORCE_PATH_STYLE }}
-          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
-          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+          # Amazon S3, with the one IAM key every box and the copy workflow share.
+          # No endpoint and no path-style: an empty endpoint is what selects AWS.
+          STORAGE_ENDPOINT: ""
+          STORAGE_REGION: ${{ secrets.AWS_REGION }}
+          STORAGE_BUCKET: ${{ secrets.AWS_S3_BUCKET_HQHB }}
+          STORAGE_FORCE_PATH_STYLE: "false"
+          STORAGE_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          STORAGE_SECRET_KEY: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           DB_USER: ${{ secrets.HQHB_DB_USER }}
