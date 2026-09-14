@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [baseline, probe, app-check, dry-run, apply]
+        options: [baseline, probe, app-check, recent, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -84,6 +84,101 @@ jobs:
             fi
 
             cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+
+            # recent: where did files written since the switch go? DB rows, disk, bucket.
+            # Read-only; uses the box's own .env so it sees what the app sees.
+            if [ "$MODE" = "recent" ]; then
+              cat > scripts/.recent-tmp.mjs <<'RECENT_EOF'
+            // Where did files written since the switch actually go? Read-only.
+            // Uses the box's own .env — exactly the settings the running app uses.
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+            import { S3Client, HeadObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            const UPLOADS = path.join(__dirname, "..", "uploads");
+            const SINCE = Date.parse(process.env.SINCE || "2026-09-14T06:30:00Z");
+
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const endpoint = (process.env.STORAGE_ENDPOINT || "").trim();
+            console.log("\n  WHERE DID RECENT FILES GO - since " + new Date(SINCE).toISOString());
+            console.log(`  app bucket equals signflow-hqhb: ${bucket === "signflow-hqhb"} | equals signflow-waqf: ${bucket === "signflow-waqf"} | length ${bucket.length} | starts signflow-: ${bucket.startsWith("signflow-")}`);
+            console.log(`  app endpoint set: ${!!endpoint}`);
+
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: endpoint || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+            const inBucket = async (key) => {
+              try { await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })); return "yes"; }
+              catch (e) { return e?.$metadata?.httpStatusCode === 404 ? "NO" : `? ${e?.name}`; }
+            };
+            const onDisk = async (area, v) => {
+              const name = String(v).startsWith(area + "/") ? String(v).slice(area.length + 1) : String(v);
+              try { await fs.access(path.join(UPLOADS, area, name)); return "yes"; } catch { return "NO"; }
+            };
+
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            });
+
+            const rows = [];
+            const [reqs] = await conn.query(
+              `SELECT id, file_path, signed_file_path, applied_signature_path, reject_voice_path
+                 FROM requests WHERE created_at >= ? OR approved_at >= ? OR rejected_at >= ? OR finalized_at >= ?
+                 ORDER BY GREATEST(created_at, COALESCE(approved_at, 0), COALESCE(rejected_at, 0)) DESC LIMIT 40`,
+              [SINCE, SINCE, SINCE, SINCE]);
+            for (const r of reqs) {
+              for (const [col, area] of [["file_path", "documents"], ["signed_file_path", "signed"], ["applied_signature_path", "signatures"], ["reject_voice_path", "voicenotes"]]) {
+                if (r[col]) rows.push({ what: `request ${r.id}.${col}`, area, v: r[col] });
+              }
+            }
+            const [sgs] = await conn.query(
+              "SELECT id, signature_path FROM request_step_signers WHERE signed_at >= ? AND signature_path IS NOT NULL LIMIT 40", [SINCE]);
+            for (const s of sgs) rows.push({ what: `step signer ${s.id}`, area: "signatures", v: s.signature_path });
+            const [us] = await conn.query(
+              "SELECT id, file_path FROM user_signatures WHERE created_at >= ? OR bg_cleaned_at >= ? LIMIT 40", [SINCE, SINCE]);
+            for (const s of us) rows.push({ what: `user signature ${s.id}`, area: "signatures", v: s.file_path });
+
+            console.log(`\n  DATABASE: ${rows.length} file reference(s) written or touched since then`);
+            console.log("  " + "row".padEnd(58) + "stored as".padEnd(10) + "disk".padEnd(6) + "bucket");
+            for (const r of rows) {
+              const isKey = String(r.v).startsWith(r.area + "/");
+              const key = isKey ? String(r.v) : `${r.area}/${r.v}`;
+              console.log("  " + r.what.slice(0, 57).padEnd(58) + (isKey ? "KEY" : "filename").padEnd(10) +
+                (await onDisk(r.area, r.v)).padEnd(6) + (await inBucket(key)));
+            }
+
+            console.log("\n  BUCKET: objects last modified since then");
+            let token;
+            let total = 0;
+            const recent = [];
+            do {
+              const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token }));
+              for (const o of page.Contents || []) {
+                total++;
+                if (o.LastModified && o.LastModified.getTime() >= SINCE) recent.push(o);
+              }
+              token = page.IsTruncated ? page.NextContinuationToken : undefined;
+            } while (token);
+            recent.sort((a, b) => b.LastModified - a.LastModified);
+            console.log(`  ${total} object(s) in the bucket; ${recent.length} modified since then`);
+            for (const o of recent.slice(0, 40)) console.log(`    ${o.LastModified.toISOString()}  ${String(o.Size).padStart(9)}  ${o.Key}`);
+            await conn.end();
+            RECENT_EOF
+              STATUS=0
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.recent-tmp.mjs || STATUS=$?
+              rm -f scripts/.recent-tmp.mjs
+              echo; echo "  app log: storage lines"
+              pm2 logs onesign_backend_uat --nostream --lines 400 2>/dev/null | grep -iE "filestore|bucket|NoSuchBucket|AccessDenied|quota" | tail -12 || true
+              exit $STATUS
+            fi
 
             # app-check: the deployed app's own storage code, with the box's own .env.
             # Then the app's recent log lines about storage. Changes nothing.
