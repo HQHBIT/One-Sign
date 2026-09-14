@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, db-check, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -143,6 +143,108 @@ jobs:
               grep -rhoE 'proxy_pass[^;]+' /etc/nginx/sites-enabled/ 2>/dev/null | sort | uniq -c | head -20
               grep -rlE 'signflow\.umooriqtesadiyah\.org' /etc/nginx/sites-enabled/ 2>/dev/null | while read c; do echo "  config $c:"; grep -E 'server_name|proxy_pass|listen' "$c" | sed 's/^/    /'; done
               exit 0
+            fi
+
+            # db-check: is every file the database references in the bucket? Read-only.
+            if [ "$MODE" = "db-check" ]; then
+              cat > scripts/.dbcheck-tmp.mjs <<'DBCHECK_EOF'
+            // Is every file the DATABASE references present in the bucket? Read-only.
+            // Uses the box's own .env (the running app's database and bucket).
+            // Existence and size per object; content was checksum-verified by the copy's
+            // dry run, and re-reading every file here would load an already fragile box.
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+            import { S3Client, HeadObjectCommand } from "@aws-sdk/client-s3";
+
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            const UPLOADS = path.join(__dirname, "..", "uploads");
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+
+            const SETS = [
+              { table: "requests", cols: { file_path: "documents", signed_file_path: "signed", applied_signature_path: "signatures", reject_voice_path: "voicenotes" } },
+              { table: "users", cols: { signature_path: "signatures" } },
+              { table: "user_signatures", cols: { file_path: "signatures", original_path: "signatures" } },
+              { table: "request_step_signers", cols: { signature_path: "signatures" } },
+            ];
+
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            });
+
+            const headCache = new Map();
+            async function head(key) {
+              if (headCache.has(key)) return headCache.get(key);
+              let r;
+              try { const h = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key })); r = { ok: true, size: h.ContentLength }; }
+              catch (e) { r = e?.$metadata?.httpStatusCode === 404 ? { ok: false } : { ok: false, err: e?.name || "error" }; }
+              headCache.set(key, r);
+              return r;
+            }
+            const diskSize = async (area, name) => { try { return (await fs.stat(path.join(UPLOADS, area, name))).size; } catch { return null; } };
+
+            console.log("\n  EVERY DATABASE FILE REFERENCE vs THE BUCKET (read-only)");
+            console.log("  " + "table.column".padEnd(38) + "refs".padStart(6) + "in S3".padStart(7) + "size≠".padStart(7) + "NOT S3".padStart(8) + "  (on disk)".padEnd(12) + "lost".padStart(6) + "json".padStart(6));
+            const problems = [];
+            const totals = { refs: 0, s3: 0, differs: 0, notS3: 0, notS3OnDisk: 0, lost: 0, json: 0 };
+            for (const set of SETS) {
+              for (const [col, area] of Object.entries(set.cols)) {
+                const [[exists]] = await conn.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", [set.table, col]);
+                if (!exists.n) continue;
+                const [rows] = await conn.query(`SELECT ?? AS v FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''`, [col, set.table, col, col]);
+                const c = { refs: 0, s3: 0, differs: 0, notS3: 0, notS3OnDisk: 0, lost: 0, json: 0 };
+                const queue = rows.map((r) => String(r.v));
+                const work = async () => {
+                  while (queue.length) {
+                    const v = queue.pop();
+                    c.refs++;
+                    if (/\.json$/i.test(v)) { c.json++; continue; }
+                    const name = v.startsWith(area + "/") ? v.slice(area.length + 1) : v;
+                    const key = `${area}/${name}`;
+                    const [h, ds] = await Promise.all([head(key), diskSize(area, name)]);
+                    if (h.ok) {
+                      c.s3++;
+                      if (ds !== null && h.size !== ds) { c.differs++; problems.push(`size differs  ${key} (disk ${ds}, S3 ${h.size})`); }
+                    } else if (ds !== null) {
+                      c.notS3++; c.notS3OnDisk++; problems.push(`NOT IN S3, on disk  ${key}${h.err ? " [" + h.err + "]" : ""}`);
+                    } else {
+                      c.lost++;
+                    }
+                  }
+                };
+                await Promise.all([work(), work(), work(), work()]);
+                for (const k of Object.keys(totals)) totals[k] += c[k];
+                console.log("  " + `${set.table}.${col}`.padEnd(38) + String(c.refs).padStart(6) + String(c.s3).padStart(7) + String(c.differs).padStart(7) +
+                  String(c.notS3).padStart(8) + `  (${c.notS3OnDisk})`.padEnd(12) + String(c.lost).padStart(6) + String(c.json).padStart(6));
+              }
+            }
+            console.log("  " + "TOTAL".padEnd(38) + String(totals.refs).padStart(6) + String(totals.s3).padStart(7) + String(totals.differs).padStart(7) +
+              String(totals.notS3).padStart(8) + `  (${totals.notS3OnDisk})`.padEnd(12) + String(totals.lost).padStart(6) + String(totals.json).padStart(6));
+            console.log(`\n  distinct objects checked in the bucket: ${headCache.size}`);
+            console.log("  lost = referenced, but neither on disk nor in S3 (missing before the migration)");
+            console.log("  json = legacy Excel approval manifests, not files");
+            if (problems.length) {
+              console.log(`\n  NEEDS ATTENTION (${problems.length}):`);
+              for (const p of problems.slice(0, 30)) console.log("    " + p);
+              if (problems.length > 30) console.log(`    ... and ${problems.length - 30} more`);
+            } else {
+              console.log("\n  Every referenced file that exists is in the bucket at the same size.");
+            }
+            await conn.end();
+            DBCHECK_EOF
+              STATUS=0
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION nice -n 10 node --env-file=.env scripts/.dbcheck-tmp.mjs || STATUS=$?
+              rm -f scripts/.dbcheck-tmp.mjs
+              exit $STATUS
             fi
 
             # recent: where did files written since the switch go? DB rows, disk, bucket.
