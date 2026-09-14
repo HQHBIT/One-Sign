@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [baseline, probe, app-check, recent, dry-run, apply]
+        options: [baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'For "apply" only: type APPLY to proceed'
         required: false
@@ -84,6 +84,25 @@ jobs:
             fi
 
             cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+
+            # api-trace: did signature saves and rejections reach the app, and what did
+            # it answer? Web-server log lines for those routes (client IPs stripped) and
+            # the app's recent error output. Read-only.
+            if [ "$MODE" = "api-trace" ]; then
+              echo; echo "  NGINX: signature / reject / voice requests today (time, request, status, bytes)"
+              for f in /var/log/nginx/access.log /var/log/nginx/*access*.log; do
+                [ -f "$f" ] || continue
+                sudo -n cat "$f" 2>/dev/null || cat "$f" 2>/dev/null
+              done | grep -E "$(date -u +%d/%b/%Y)" | grep -E '/api/users/(me/)?signature|/api/users/me/signatures|/api/users/[^/ ]+/signature|/reject|/reject-voice|/api/assist/.*/signature' \
+                | sed -E 's/^[^ ]+ [^ ]+ [^ ]+ //' | awk '{ print $1, $2, $3, $4, $5, $6, $7 }' | sort -u | tail -40
+              echo; echo "  APP: last 60 lines of error output"
+              pm2 logs onesign_backend_uat --err --nostream --lines 60 2>/dev/null | grep -vE 'quota exceeded|XML parse error' | tail -40 || true
+              echo; echo "  APP: which process answers the site"
+              pm2 jlist 2>/dev/null | grep -o '"name":"[^"]*onesign[^"]*"' | sort -u
+              grep -rhoE 'proxy_pass[^;]+' /etc/nginx/sites-enabled/ 2>/dev/null | sort | uniq -c | head -20
+              grep -rlE 'signflow\.umooriqtesadiyah\.org' /etc/nginx/sites-enabled/ 2>/dev/null | while read c; do echo "  config $c:"; grep -E 'server_name|proxy_pass|listen' "$c" | sed 's/^/    /'; done
+              exit 0
+            fi
 
             # recent: where did files written since the switch go? DB rows, disk, bucket.
             # Read-only; uses the box's own .env so it sees what the app sees.
