@@ -1,7 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import multer from "multer";
-import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
@@ -20,9 +19,25 @@ import { pingUser, pingAdmins } from "../events.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
-const SIG_DIR = path.join(__dirname, "..", "..", "uploads", "signatures");
 const SIGNED_DIR = path.join(__dirname, "..", "..", "uploads", "signed");
-const VOICE_DIR = path.join(__dirname, "..", "..", "uploads", "voicenotes");
+
+// A signature image for stamping, read from wherever its stored value says it
+// lives: the bucket for a key ("signatures/u.png"), the disk for a bare filename.
+// Building a disk path by hand instead — as this once did — cannot read a
+// signature that is only in the bucket, and resolves a key to
+// signatures/signatures/u.png, which does not exist. The value rides along as
+// signaturePath because the stampers cache images by it and take the image type
+// from its extension.
+async function signatureSource(value) {
+  return { signaturePath: String(value), signatureBytes: await readStored("signatures", value) };
+}
+
+// The same for several signers at once, each distinct image read once.
+async function signatureSources(values) {
+  const out = new Map();
+  for (const v of new Set(values.filter(Boolean))) out.set(v, await signatureSource(v));
+  return out;
+}
 
 const router = Router();
 const uid = (p = "req") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -326,12 +341,13 @@ router.post("/self-sign", authRequired, upload.single("file"), async (req, res, 
     if (!isPdf && !hasSig) return res.status(400).json({ error: "Place your signature on the sheet first" });
 
     const dateText = formatDdMmYy(Date.now());
-    const stamps = marks.map(m => m.type === "date"
-      ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
-      : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
 
     let signed;
     try {
+      const sig = hasSig ? await signatureSource(req.userRow.signature_path) : null;
+      const stamps = marks.map(m => m.type === "date"
+        ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
+        : { type: "signature", ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
       signed = isPdf
         ? Buffer.from(await applySelfMarks(file.buffer, stamps))
         : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
@@ -409,13 +425,14 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
       if (fileType !== "pdf" && !hasSig) return res.status(400).json({ error: "Dating the document yourself is available for PDF files only" });
       if (hasSig && !req.userRow?.signature_path) return res.status(400).json({ error: "Add your signature before signing the document yourself" });
       const dateText = formatDdMmYy(Date.now());
-      const stamps = selfMarks
-        .filter(m => typeof m.x === "number" && typeof m.y === "number" && typeof m.w === "number" && typeof m.h === "number")
-        .map(m => m.type === "date"
-          ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
-          : { type: "signature", signaturePath: path.join(SIG_DIR, req.userRow.signature_path), page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
-      if (stamps.length > 0) {
+      const placed = selfMarks
+        .filter(m => typeof m.x === "number" && typeof m.y === "number" && typeof m.w === "number" && typeof m.h === "number");
+      if (placed.length > 0) {
         try {
+          const sig = hasSig ? await signatureSource(req.userRow.signature_path) : null;
+          const stamps = placed.map(m => m.type === "date"
+            ? { type: "date", text: dateText, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h }
+            : { type: "signature", ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h });
           file.buffer = fileType === "pdf"
             ? Buffer.from(await applySelfMarks(file.buffer, stamps))
             : await signXlsxBuffer({ buffer: file.buffer, stamps: stamps.filter(s => s.type === "signature") });
@@ -1053,7 +1070,6 @@ export async function approveRequestHandler(req, res, next) {
     const auth = await maySignForTeam(req.user.id, row.target_team_id);
     if (!auth) return res.status(403).json({ error: "No signing authority for this team" });
 
-    const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
     // marker_json holds one box (legacy) or an array — the approver signs in each.
     const parsedMarker = JSON.parse(row.marker_json);
     const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
@@ -1061,12 +1077,13 @@ export async function approveRequestHandler(req, res, next) {
 
     let signedPath = null;
     try {
+      const sig = await signatureSource(req.userRow.signature_path);
       // every signature box + any date fields the requestor placed for the
       // approver, all showing this approval's date.
       signedPath = await stampAndStore({
         row,
         stamps: [
-          ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+          ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
           ...dateStampsFor(row.signer_date_fields_json, signedAt)
         ]
       });
@@ -1137,23 +1154,25 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     ORDER BY st.step_order, sg.signer_order
   `, [row.id]);
 
-  const stamps = allSigned.flatMap(s => {
-    const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
-    return [
-      // one stamp per signature box this signer placed (multi-box)
-      ...signerBoxes(s).map(b => ({
-        signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
-        signerName: s.user_name,
-        signedAt
-      })),
-      // the signer's own placeable date fields, all showing their signing date
-      ...dateStampsFor(s.date_fields_json, signedAt)
-    ];
-  });
-
   let signedPath;
   try {
+    // Read inside the try, so a signature that cannot be read rolls the signer
+    // back exactly as a stamping failure does.
+    const sigs = await signatureSources(allSigned.map(s => s.signature_path));
+    const stamps = allSigned.flatMap(s => {
+      const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
+      return [
+        // one stamp per signature box this signer placed (multi-box)
+        ...signerBoxes(s).map(b => ({
+          ...sigs.get(s.signature_path),
+          page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
+          signerName: s.user_name,
+          signedAt
+        })),
+        // the signer's own placeable date fields, all showing their signing date
+        ...dateStampsFor(s.date_fields_json, signedAt)
+      ];
+    });
     signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
@@ -1256,17 +1275,17 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
           }
           const auth = await maySignForTeam(req.user.id, row.target_team_id);
           if (!auth) { results.failed.push({ id, error: "No authority" }); continue; }
-          const sigPathFull = path.join(SIG_DIR, req.userRow.signature_path);
           // one box (legacy) or an array — stamp every box, same as single approve.
           const parsedMarker = JSON.parse(row.marker_json);
           const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
           const signedAt = Date.now();
           let signedPath;
           try {
+            const sig = await signatureSource(req.userRow.signature_path);
             signedPath = await stampAndStore({
               row,
               stamps: [
-                ...markerList.map(m => ({ signaturePath: sigPathFull, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+                ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
                 ...dateStampsFor(row.signer_date_fields_json, signedAt)
               ]
             });
@@ -1312,23 +1331,23 @@ async function approveWorkflowStepInline({ req, row, signer }) {
     ORDER BY st.step_order, sg.signer_order
   `, [row.id]);
 
-  const stamps = allSigned.flatMap(s => {
-    const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
-    return [
-      // one stamp per signature box this signer placed (multi-box)
-      ...signerBoxes(s).map(b => ({
-        signaturePath: path.join(SIG_DIR, s.signature_path),
-        page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
-        signerName: s.user_name,
-        signedAt
-      })),
-      // the signer's own placeable date fields, all showing their signing date
-      ...dateStampsFor(s.date_fields_json, signedAt)
-    ];
-  });
-
   let signedPath;
   try {
+    const sigs = await signatureSources(allSigned.map(s => s.signature_path));
+    const stamps = allSigned.flatMap(s => {
+      const signedAt = s.signed_at ? Number(s.signed_at) : Date.now();
+      return [
+        // one stamp per signature box this signer placed (multi-box)
+        ...signerBoxes(s).map(b => ({
+          ...sigs.get(s.signature_path),
+          page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
+          signerName: s.user_name,
+          signedAt
+        })),
+        // the signer's own placeable date fields, all showing their signing date
+        ...dateStampsFor(s.date_fields_json, signedAt)
+      ];
+    });
     signedPath = await stampAndStore({ row, stamps });
   } catch (e) {
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
@@ -1405,9 +1424,11 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
       const mt = String(req.file.mimetype || "").toLowerCase();
       const ext = mt.includes("mp4") || mt.includes("m4a") || mt.includes("aac") ? "m4a"
         : mt.includes("ogg") ? "ogg" : "webm";
-      voicePath = `${row.id}.${ext}`;
-      await fs.mkdir(VOICE_DIR, { recursive: true });
-      await fs.writeFile(path.join(VOICE_DIR, voicePath), req.file.buffer);
+      // Recorded as whatever the filestore returns: the bucket key once the
+      // bucket copy is verified, the bare filename when it stayed on disk.
+      voicePath = await writeStored("voicenotes", `${row.id}.${ext}`, req.file.buffer, {
+        contentType: ext === "m4a" ? "audio/mp4" : ext === "ogg" ? "audio/ogg" : "audio/webm",
+      });
     }
 
     await execute(
@@ -1438,10 +1459,36 @@ router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
     if (!(await authoriseAccess(req.user, row))) return res.status(404).end();
     const type = row.reject_voice_path.endsWith(".m4a") ? "audio/mp4"
       : row.reject_voice_path.endsWith(".ogg") ? "audio/ogg" : "audio/webm";
-    res.setHeader("Content-Type", type);
-    res.sendFile(path.join(VOICE_DIR, row.reject_voice_path));
+    let bytes;
+    try { bytes = await readStored("voicenotes", row.reject_voice_path); }
+    catch { return res.status(404).end(); }
+    sendMedia(req, res, bytes, type);
   } catch (e) { next(e); }
 });
+
+// Serve audio from memory with byte-range support. sendFile did this for free
+// when the note was a file on disk; a note read from the bucket is a buffer, and
+// Safari on iPhone will not play audio at all from a server that ignores Range.
+function sendMedia(req, res, bytes, type) {
+  const total = bytes.length;
+  res.setHeader("Content-Type", type);
+  res.setHeader("Accept-Ranges", "bytes");
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ""));
+  if (!m || (!m[1] && !m[2])) {
+    res.setHeader("Content-Length", total);
+    return res.end(bytes);
+  }
+  let start = m[1] ? parseInt(m[1], 10) : Math.max(0, total - parseInt(m[2], 10));
+  let end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+  if (start >= total || start > end) {
+    res.setHeader("Content-Range", `bytes */${total}`);
+    return res.status(416).end();
+  }
+  res.status(206);
+  res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+  res.setHeader("Content-Length", end - start + 1);
+  res.end(bytes.subarray(start, end + 1));
+}
 
 // ============================================================
 //   withdraw (within window — only when not instant)
