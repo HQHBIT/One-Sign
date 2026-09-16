@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -344,6 +344,76 @@ jobs:
               rm -f scripts/.repoint-tmp.mjs
               exit $STATUS ;;
             esac
+
+            # find-docs: search requests, users, emails for two named documents. Read-only.
+            # Also the web log for failed uploads today (client addresses stripped).
+            if [ "$MODE" = "find-docs" ]; then
+              cat > scripts/.finddocs-tmp.mjs <<'FINDDOCS_EOF'
+            // Where did two named documents go? Read-only.
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+
+            const __dirname = path.dirname(fileURLToPath(import.meta.url));
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            });
+            const ist = (ms) => ms ? new Date(Number(ms) + 5.5 * 3600e3).toISOString().replace("T", " ").slice(0, 16) + " IST" : "-";
+            const has = async (t, c) => (await conn.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", [t, c]))[0][0].n > 0;
+
+            console.log(`\n  FIND DOCUMENTS — database ${process.env.DB_NAME}`);
+
+            const [people] = await conn.query(
+              "SELECT id, name, email, role, active, org_id FROM users WHERE name LIKE ? OR email LIKE ? ORDER BY name", ["%tinwala%", "%tinwala%"]);
+            console.log(`\n  users matching "tinwala": ${people.length}`);
+            for (const p of people) console.log(`    ${p.id}  ${p.name} <${p.email}>  role=${p.role} active=${p.active} org=${p.org_id}`);
+
+            const cols = ["r.id", "r.file_name", "r.status", "r.created_at", "r.request_type", "u.name AS requestor"];
+            if (await has("requests", "withdrawn_at")) cols.push("r.withdrawn_at");
+            if (await has("requests", "deleted_at")) cols.push("r.deleted_at");
+            const show = (r) => `    ${r.id}  "${r.file_name}"  ${r.status}  ${ist(r.created_at)}  by ${r.requestor}${r.withdrawn_at ? "  WITHDRAWN " + ist(r.withdrawn_at) : ""}${r.deleted_at ? "  DELETED " + ist(r.deleted_at) : ""}`;
+
+            const [byName] = await conn.query(
+              `SELECT ${cols.join(", ")} FROM requests r LEFT JOIN users u ON u.id = r.requestor_id
+                WHERE r.file_name LIKE ? OR r.file_name LIKE ? OR r.file_name LIKE ? OR r.file_name LIKE ?
+                ORDER BY r.created_at DESC LIMIT 30`, ["%TAP Stall%", "%Naseem%", "%Akram%", "%Budget%"]);
+            console.log(`\n  requests whose file name mentions TAP Stall / Naseem / Akram / Budget: ${byName.length}`);
+            for (const r of byName) console.log(show(r));
+
+            if (people.length) {
+              const [mine] = await conn.query(
+                `SELECT ${cols.join(", ")} FROM requests r LEFT JOIN users u ON u.id = r.requestor_id
+                  WHERE r.requestor_id IN (${people.map(() => "?").join(",")}) ORDER BY r.created_at DESC LIMIT 25`, people.map((p) => p.id));
+              console.log(`\n  latest requests raised by those users: ${mine.length}`);
+              for (const r of mine) console.log(show(r));
+            }
+
+            // Emails and notifications that mention the documents — sent even if the row later vanished.
+            for (const [t, fields] of [["emails", ["subject", "body"]], ["notifications", ["title", "body", "message"]]]) {
+              const present = [];
+              for (const f of fields) if (await has(t, f)) present.push(f);
+              if (!present.length) continue;
+              const where = present.map((f) => `(${f} LIKE ? OR ${f} LIKE ? OR ${f} LIKE ?)`).join(" OR ");
+              const params = present.flatMap(() => ["%TAP Stall%", "%Naseem%", "%Akram%"]);
+              const timeCol = (await has(t, "sent_at")) ? "sent_at" : "created_at";
+              const [rows] = await conn.query(`SELECT ${present[0]} AS s, ${timeCol} AS at FROM ${t} WHERE ${where} ORDER BY ${timeCol} DESC LIMIT 10`, params);
+              console.log(`\n  ${t} mentioning them: ${rows.length}`);
+              for (const r of rows) console.log(`    ${ist(r.at)}  ${String(r.s).replace(/\s+/g, " ").slice(0, 110)}`);
+            }
+            await conn.end();
+            FINDDOCS_EOF
+              STATUS=0
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.finddocs-tmp.mjs || STATUS=$?
+              rm -f scripts/.finddocs-tmp.mjs
+              echo; echo "  WEB LOG: document uploads (POST /api/requests) that did not succeed, last 3 days"
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do [ -f "$f" ] && (sudo -n cat "$f" 2>/dev/null || cat "$f" 2>/dev/null); done \
+                | grep -E '"POST /api/requests(/batch)? ' | grep -vE '" (200|201) ' | sed -E 's/^[^ ]+ [^ ]+ [^ ]+ //' | awk '{print $1, $2, $3, $4, $6, $7}' | tail -25
+              echo; echo "  APP: create errors in the error log"
+              for n in onesign-backend-uat onesign-backend-waqf onesign-backend-hqhb; do f=/home/ubuntu/.pm2/logs/$n-error.log; [ -f "$f" ] && grep -iE '\[create|file is required|Only PDF|too large|LIMIT_FILE_SIZE|multer' "$f" | tail -10; done
+              exit $STATUS
+            fi
 
             # db-facts: sizes, row counts and recency of this box's database. Read-only.
             # confirm may carry CHECK_IDS=<comma separated request ids> to test for them.
