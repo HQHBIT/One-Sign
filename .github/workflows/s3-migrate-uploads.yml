@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -344,6 +344,49 @@ jobs:
               rm -f scripts/.repoint-tmp.mjs
               exit $STATUS ;;
             esac
+
+            # db-facts: sizes, row counts and recency of this box's database. Read-only.
+            # confirm may carry CHECK_IDS=<comma separated request ids> to test for them.
+            if [ "$MODE" = "db-facts" ]; then
+              cat > scripts/.dbfacts-tmp.mjs <<'DBFACTS_EOF'
+            // Read-only facts about this box's database, for planning a copy between boxes.
+            import mysql from "mysql2/promise";
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            });
+            const one = async (sql, p = []) => (await conn.query(sql, p))[0][0];
+            const size = await one("SELECT ROUND(SUM(data_length + index_length) / 1048576, 1) AS mb, COUNT(*) AS tables FROM information_schema.tables WHERE table_schema = DATABASE()");
+            console.log(`\n  database ${process.env.DB_NAME}: ${size.tables} tables, ${size.mb} MB`);
+            for (const t of ["requests", "users", "user_signatures", "request_step_signers", "request_steps", "emails", "notifications", "teams", "organisations"]) {
+              try {
+                const r = await one(`SELECT COUNT(*) AS n FROM ??`, [t]);
+                console.log(`    ${t.padEnd(24)} ${String(r.n).padStart(7)}`);
+              } catch { console.log(`    ${t.padEnd(24)}       - (no such table)`); }
+            }
+            const span = await one("SELECT MIN(created_at) AS first, MAX(created_at) AS last FROM requests");
+            console.log(`  requests span: ${new Date(Number(span.first)).toISOString()} .. ${new Date(Number(span.last)).toISOString()}`);
+            const [recent] = await conn.query("SELECT id, created_at FROM requests ORDER BY created_at DESC LIMIT 5");
+            console.log("  5 most recent request ids:");
+            for (const r of recent) console.log(`    ${r.id}  ${new Date(Number(r.created_at)).toISOString()}`);
+            // Ids given by the caller (comma separated) — do they exist here?
+            if (process.env.CHECK_IDS) {
+              const ids = process.env.CHECK_IDS.split(",").filter(Boolean);
+              const [found] = await conn.query(`SELECT id FROM requests WHERE id IN (${ids.map(() => "?").join(",")})`, ids);
+              console.log(`  of ${ids.length} id(s) from the other box, ${found.length} exist here: ${found.map((f) => f.id).join(" ")}`);
+            }
+            const orgs = await one("SELECT COUNT(*) AS n FROM organisations").catch(() => ({ n: "-" }));
+            const [orgRows] = await conn.query("SELECT id, name, app_url FROM organisations").catch(() => [[]]);
+            for (const o of orgRows) console.log(`  organisation: ${o.id} / ${o.name} / ${o.app_url}`);
+            console.log(`  scheduler-relevant: ${(await one("SELECT COUNT(*) AS n FROM requests WHERE status = 'pending'")).n} pending, ${(await one("SELECT COUNT(*) AS n FROM requests WHERE status = 'approved_pending'")).n} in the approval window`);
+            await conn.end();
+            DBFACTS_EOF
+              STATUS=0
+              case "$CONFIRM" in CHECK_IDS=*) export CHECK_IDS="${CONFIRM#CHECK_IDS=}" ;; esac
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.dbfacts-tmp.mjs || STATUS=$?
+              rm -f scripts/.dbfacts-tmp.mjs
+              exit $STATUS
+            fi
 
             # db-check: is every file the database references in the bucket? Read-only.
             if [ "$MODE" = "db-check" ]; then
