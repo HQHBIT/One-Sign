@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon, Flag } from "lucide-react";
+import { ReportIssueButton, reportIssueHref } from "./ReportIssue.jsx";
 
 // Relative "2h ago"-style stamp for the notification list.
 function ago(ts) {
@@ -87,6 +88,10 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
               <span className="hidden sm:inline">Home</span>
             </button>
           )}
+
+          {/* Report an issue — on every screen, because a problem can appear on
+              any of them and nobody should have to hunt for where to say so. */}
+          <ReportIssueButton />
 
           {/* Notification bell */}
           {notifs && (
@@ -236,6 +241,13 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
                     <HelpCircle size={15} className="opacity-70 shrink-0" /> Help
                   </button>
                 )}
+                {/* Also in the menu, next to Help: it is where people look for
+                    "how do I get support", and the header icon is easy to miss. */}
+                <a role="menuitem" href={reportIssueHref()} target="_blank" rel="noopener noreferrer"
+                  className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                  onClick={() => setMenuOpen(false)}>
+                  <Flag size={15} className="opacity-70 shrink-0" /> Report an issue
+                </a>
                 {onInstall && (
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
                     onClick={() => { setMenuOpen(false); onInstall(); }}>

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ArrowRight, ArrowLeft, Check, ScanFace } from "lucide-react";
 import { api } from "../api.js";
 import { PasswordInput } from "./PasswordInput.jsx";
+import { ReportIssueLink } from "./ReportIssue.jsx";
 import { loginBiometric, biometricSupported, biometricErrorMessage, forgetBiometricHere, savedBiometricEmail } from "../lib/biometric.js";
 
 // DISABLED: expense feature commented out
@@ -170,7 +171,12 @@ export function LoginScreen({ login, onSession, org = null, onChangeOrg = null }
           </div>
         </div>
 
-        <div className="text-[10px] opacity-30 tracking-widest uppercase fade-up fade-up-d3 pt-4">HQHB - Internal Build</div>
+        {/* Someone locked out cannot use the button inside the app, and being
+            locked out is exactly the thing worth reporting. */}
+        <div className="fade-up fade-up-d3 pt-4 flex flex-col items-center gap-2">
+          <ReportIssueLink className="opacity-50 hover:opacity-90" />
+          <div className="text-[10px] opacity-30 tracking-widest uppercase">HQHB - Internal Build</div>
+        </div>
       </div>
       {/* right panel */}
       <div className="flex items-center justify-center p-6 sm:p-8 md:p-16">
