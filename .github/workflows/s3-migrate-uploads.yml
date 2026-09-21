@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -78,6 +78,24 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"
+
+            # serving: which site does this box serve, and how fresh are its files?
+            if [ "$MODE" = "serving" ]; then
+              echo "=== built client on this box"
+              ls -l --time-style=long-iso /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null || echo '  no /home/ubuntu/OneSign/client/dist/index.html'
+              grep -oE '/assets/index-[^"]+\.js' /home/ubuntu/OneSign/client/dist/index.html 2>/dev/null | head -2
+              echo "=== nginx server blocks mentioning signflow"
+              for c in /etc/nginx/sites-enabled/*; do
+                grep -lE 'signflow' "$c" >/dev/null 2>&1 || continue
+                echo "  --- $c"
+                grep -nE 'server_name|listen|root|alias|try_files|proxy_pass' "$c" | sed 's/^/      /' | head -30
+              done
+              echo "=== what answers locally (ports)"
+              for p in 80 5000 5001 5101; do printf '  :%s -> ' $p; curl -s -o /dev/null -w '%{http_code}\n' -m 4 http://127.0.0.1:$p/api/health || echo none; done
+              echo "=== public address of this box"
+              curl -s -m 5 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo '  (no metadata)'; echo
+              exit 0
+            fi
 
             # box-cause: what took the box down before its last boot? Read-only.
             if [ "$MODE" = "box-cause" ]; then
