@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -115,6 +115,177 @@ jobs:
               done
               echo "=== memory now"; free -m | head -2; uptime
               exit 0
+            fi
+
+            # uat-backup
+            if [ "$MODE" = "uat-backup" ]; then
+              cat > scripts/.uat-backup-tmp.mjs <<'UAT_BACKUP_EOF'
+            // Back this box's SignFlow database up to the bucket, and write a manifest of
+            // every id it holds so another box can be asked what it is missing.
+            //
+            // Nothing is deleted and nothing on the box changes. The dump is written to
+            // /tmp, uploaded, READ BACK AND COMPARED, and only then removed from /tmp — a
+            // backup that has not been read back is a hope, not a backup.
+            import fs from "node:fs/promises";
+            import { createReadStream } from "node:fs";
+            import crypto from "node:crypto";
+            import { execFileSync } from "node:child_process";
+            import mysql from "mysql2/promise";
+            import zlibMod from "node:zlib";
+            import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            if (!bucket) { console.log("  No STORAGE_BUCKET in .env — refusing, there is nowhere to put a backup."); process.exit(1); }
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+
+            const db = {
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            };
+            const STAMP = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+            const PREFIX = `backups/uat-${STAMP}`;
+            const md5 = (buf) => crypto.createHash("md5").update(buf).digest("hex");
+
+            async function putVerified(key, body, contentType) {
+              await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+              const back = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+              const bytes = Buffer.from(await back.Body.transformToByteArray());
+              const ok = md5(bytes) === md5(body) && bytes.length === body.length;
+              console.log(`  ${ok ? "OK  " : "FAIL"} ${key}  ${bytes.length} bytes${ok ? " — read back and matched" : " — READ BACK DIFFERS"}`);
+              return ok;
+            }
+
+            console.log(`\n  BACKUP OF ${db.database} → ${bucket}/${PREFIX}\n`);
+
+            // ---- 1. the whole database, as a dump ----
+            const dumpPath = `/tmp/signflow-${STAMP}.sql`;
+            execFileSync("mysqldump", ["-h", db.host, "-P", String(db.port), "-u", db.user,
+              "--single-transaction", "--no-tablespaces", "--routines", "--events",
+              `--result-file=${dumpPath}`, db.database],
+              { env: { ...process.env, MYSQL_PWD: db.password }, stdio: ["ignore", "ignore", "inherit"] });
+            const dump = await fs.readFile(dumpPath);
+            if (dump.length < 10000) { console.log(`  The dump is only ${dump.length} bytes — refusing to call that a backup.`); process.exit(1); }
+            const gz = await new Promise((resolve, reject) => {
+              const chunks = [];
+              const zlib = zlibMod;
+              const g = zlib.createGzip();
+              g.on("data", (d) => chunks.push(d)).on("end", () => resolve(Buffer.concat(chunks))).on("error", reject);
+              g.end(dump);
+            });
+            let allOk = await putVerified(`${PREFIX}/signflow.sql.gz`, gz, "application/gzip");
+            console.log(`  (dump ${dump.length} bytes, compressed ${gz.length})`);
+
+            // ---- 2. a manifest of every id, so another box can say what it lacks ----
+            const conn = await mysql.createConnection(db);
+            const manifest = { takenAt: new Date().toISOString(), database: db.database, tables: {} };
+            const ID_TABLES = ["requests", "users", "user_signatures", "request_steps", "request_step_signers", "teams", "organisations", "signing_authority"];
+            for (const t of ID_TABLES) {
+              try {
+                const [cols] = await conn.query("SELECT column_name AS c FROM information_schema.columns WHERE table_schema = ? AND table_name = ?", [db.database, t]);
+                const names = cols.map((c) => c.c || c.column_name);
+                const key = names.includes("id") ? "id" : names.slice(0, 1)[0];
+                const [rows] = await conn.query(`SELECT ${names.includes("id") ? "id" : "*"} FROM ??`, [t]);
+                manifest.tables[t] = { idColumn: key, count: rows.length, ids: rows.map((r) => String(r[key] ?? Object.values(r)[0])) };
+              } catch (e) { manifest.tables[t] = { error: e.message }; }
+            }
+            // Requests carry enough detail to recognise one without opening the dump.
+            const [reqs] = await conn.query("SELECT r.id, r.file_name, r.status, r.created_at, r.file_path, r.signed_file_path, u.name AS requestor, u.email AS requestor_email FROM requests r LEFT JOIN users u ON u.id = r.requestor_id");
+            manifest.requests = reqs.map((r) => ({ ...r, created_at: Number(r.created_at) }));
+            await conn.end();
+
+            const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 1));
+            allOk = (await putVerified(`${PREFIX}/manifest.json`, manifestBuf, "application/json")) && allOk;
+
+            for (const [t, m] of Object.entries(manifest.tables)) console.log(`    ${t.padEnd(24)} ${m.error ? "error: " + m.error : m.count + " rows"}`);
+
+            await fs.unlink(dumpPath).catch(() => {});
+            console.log(`\n  ${allOk ? "Backup complete and verified." : "BACKUP INCOMPLETE — see the failures above."}`);
+            console.log(`  Location: ${bucket}/${PREFIX}/`);
+            console.log(`  To compare with the live box, run mode=live-diff with confirm=${PREFIX}\n`);
+            process.exit(allOk ? 0 : 1);
+            UAT_BACKUP_EOF
+              STATUS=0
+              env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.uat-backup-tmp.mjs || STATUS=$?
+              rm -f scripts/.uat-backup-tmp.mjs
+              exit $STATUS
+            fi
+
+            # live-diff
+            if [ "$MODE" = "live-diff" ]; then
+              cat > scripts/.live-diff-tmp.mjs <<'LIVE_DIFF_EOF'
+            // What does the OTHER box hold that this one does not? Read-only.
+            //
+            // Reads the manifest a backup wrote to the bucket and reports every id in it
+            // that is absent here — so "delete the old box" can be a decision about a known
+            // list rather than a hope.
+            import mysql from "mysql2/promise";
+            import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+
+            const PREFIX = (process.env.MANIFEST_PREFIX || "").trim().replace(/\/+$/, "");
+            if (!PREFIX) { console.log("  No manifest prefix given (confirm=backups/uat-…)."); process.exit(1); }
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+            const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${PREFIX}/manifest.json` }));
+            const manifest = JSON.parse(Buffer.from(await got.Body.transformToByteArray()).toString("utf8"));
+
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            });
+            const ist = (ms) => new Date(Number(ms) + 5.5 * 3600e3).toISOString().replace("T", " ").slice(0, 16) + " IST";
+
+            console.log(`\n  WHAT THE BACKED-UP BOX HAS THAT THIS ONE LACKS`);
+            console.log(`  manifest ${PREFIX} taken ${manifest.takenAt}\n`);
+            console.log("  " + "table".padEnd(26) + "there".padStart(7) + "here".padStart(7) + "MISSING HERE".padStart(14));
+
+            const missingByTable = {};
+            for (const [t, m] of Object.entries(manifest.tables)) {
+              if (m.error || !Array.isArray(m.ids)) continue;
+              const idCol = m.idColumn || "id";
+              let here = [];
+              try { [here] = await conn.query(`SELECT ${idCol === "id" ? "id" : "*"} FROM ??`, [t]); }
+              catch { console.log(`  ${t.padEnd(26)} (no such table here)`); continue; }
+              const hereIds = new Set(here.map((r) => String(r[idCol] ?? Object.values(r)[0])));
+              const missing = m.ids.filter((id) => !hereIds.has(id));
+              missingByTable[t] = missing;
+              console.log("  " + t.padEnd(26) + String(m.count).padStart(7) + String(here.length).padStart(7) + String(missing.length).padStart(14));
+            }
+
+            const missingRequests = new Set(missingByTable.requests || []);
+            if (missingRequests.size) {
+              console.log(`\n  REQUESTS PRESENT THERE, ABSENT HERE (${missingRequests.size}) — these would be lost if that box were wiped without keeping the backup:`);
+              for (const r of (manifest.requests || []).filter((r) => missingRequests.has(r.id))) {
+                console.log(`    ${r.id}  "${r.file_name}"  ${r.status}  ${ist(r.created_at)}  by ${r.requestor || "unknown"}`);
+                console.log(`        document: ${r.file_path || "-"}${r.signed_file_path ? `   signed: ${r.signed_file_path}` : ""}`);
+              }
+            } else {
+              console.log("\n  No requests are missing here — everything on that box is already on this one.");
+            }
+
+            const otherMissing = Object.entries(missingByTable).filter(([t, ids]) => t !== "requests" && ids.length);
+            if (otherMissing.length) {
+              console.log("\n  OTHER ROWS MISSING HERE (ids):");
+              for (const [t, ids] of otherMissing) console.log(`    ${t}: ${ids.slice(0, 25).join(" ")}${ids.length > 25 ? ` … and ${ids.length - 25} more` : ""}`);
+            }
+            await conn.end();
+            console.log("\n  Read-only: nothing was changed.\n");
+            LIVE_DIFF_EOF
+              STATUS=0
+              MANIFEST_PREFIX="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.live-diff-tmp.mjs || STATUS=$?
+              rm -f scripts/.live-diff-tmp.mjs
+              exit $STATUS
             fi
 
             # box-health: why is the site slow or down? Read-only, quick, and runs before
