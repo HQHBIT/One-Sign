@@ -119,7 +119,8 @@ jobs:
 
             # uat-backup
             if [ "$MODE" = "uat-backup" ]; then
-              cat > scripts/.uat-backup-tmp.mjs <<'UAT_BACKUP_EOF'
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.uat-backup-tmp.mjs <<'UAT_BACKUP_EOF'
             // Back this box's SignFlow database up to the bucket, and write a manifest of
             // every id it holds so another box can be asked what it is missing.
             //
@@ -218,7 +219,8 @@ jobs:
 
             # live-diff
             if [ "$MODE" = "live-diff" ]; then
-              cat > scripts/.live-diff-tmp.mjs <<'LIVE_DIFF_EOF'
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.live-diff-tmp.mjs <<'LIVE_DIFF_EOF'
             // What does the OTHER box hold that this one does not? Read-only.
             //
             // Reads the manifest a backup wrote to the bucket and reports every id in it
