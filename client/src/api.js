@@ -268,11 +268,6 @@ export const api = {
     return this.fetch("/api/requests/notify-batch", { method: "POST", body: JSON.stringify({ ids }) });
   },
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
-  // Report a problem or suggest an improvement. The server records it and
-  // emails whoever looks after SignFlow.
-  reportIssue({ message, category, page }) {
-    return this.fetch("/api/issues", { method: "POST", body: JSON.stringify({ message, category, page }) });
-  },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   approveRequest(id, instant, signatureId = null) {

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon, Flag } from "lucide-react";
-import { ReportIssueButton, ReportIssueDialog } from "./ReportIssue.jsx";
+import { ReportIssueButton, reportIssueHref } from "./ReportIssue.jsx";
 
 // Relative "2h ago"-style stamp for the notification list.
 function ago(ts) {
@@ -23,10 +23,6 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
     .slice(0, 2)
     .join("")
     .toUpperCase() || "?";
-
-  // The report dialog, opened from the menu item. It lives here rather than in
-  // the menu so it survives the menu closing underneath it.
-  const [reportOpen, setReportOpen] = useState(false);
 
   // Profile dropdown: open state + click-outside / Escape to close.
   const [menuOpen, setMenuOpen] = useState(false);
@@ -246,13 +242,12 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
                   </button>
                 )}
                 {/* Also in the menu, next to Help: it is where people look for
-                    "how do I get support", and on a phone it is the only way in,
-                    because the header button steps aside at that width. */}
-                <button role="menuitem" className={itemClass} style={itemStyle}
-                  onMouseEnter={hoverOn} onMouseLeave={hoverOff}
-                  onClick={() => { setMenuOpen(false); setReportOpen(true); }}>
+                    "how do I get support", and the header icon is easy to miss. */}
+                <a role="menuitem" href={reportIssueHref()} target="_blank" rel="noopener noreferrer"
+                  className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                  onClick={() => setMenuOpen(false)}>
                   <Flag size={15} className="opacity-70 shrink-0" /> Report an issue
-                </button>
+                </a>
                 {onInstall && (
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
                     onClick={() => { setMenuOpen(false); onInstall(); }}>
@@ -275,7 +270,6 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
           </button>
         </div>
       </div>
-      {reportOpen && <ReportIssueDialog onClose={() => setReportOpen(false)} />}
     </header>
   );
 }
