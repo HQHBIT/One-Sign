@@ -544,6 +544,41 @@ const templates = {
       `— ${BRAND.fromName}`,
     ].join("\n"),
   }),
+
+  // Somebody reported a problem, or asked for an improvement, from inside the
+  // app. This one goes to whoever looks after SignFlow rather than to a user,
+  // so it is written for them: what was said, who said it, and the screen they
+  // were on — because "it doesn't work" is the commonest report there is.
+  issue_report: (c) => ({
+    subject: `${c.category === "enhancement" ? "Enhancement" : "Issue"} reported by ${c.reporterName}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `${c.reporterName}: ${String(c.message || "").slice(0, 90)}`,
+      pillHtml: pill(c.category === "enhancement" ? "Enhancement" : "Issue reported",
+        c.category === "enhancement" ? "pending" : "rejected"),
+      heading: c.category === "enhancement" ? "An improvement was suggested" : "Someone reported an issue",
+      contentHtml:
+        String(c.message || "").split(/\n{2,}/).map((para) => p(esc(para).replace(/\n/g, "<br>"))).join("") +
+        details([
+          { label: "Reported by", value: c.reporterName },
+          { label: "Email", value: c.reporterEmail },
+          { label: "Role", value: c.reporterRole },
+          { label: "Organisation", value: c.org },
+          { label: "Screen", value: c.page },
+          { label: "When", value: c.at },
+        ]) +
+        caption(`Browser: ${esc(c.userAgent || "not reported")}`),
+    }),
+    text: [
+      `${c.category === "enhancement" ? "Enhancement" : "Issue"} reported in ${BRAND.fromName}`, ``,
+      String(c.message || ""), ``,
+      `Reported by: ${c.reporterName} <${c.reporterEmail}> (${c.reporterRole})`,
+      `Organisation: ${c.org}`,
+      `Screen: ${c.page}`,
+      `When: ${c.at}`,
+      `Browser: ${c.userAgent || "not reported"}`, ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
 };
 
 // Confidential requests swap in the redacted variant of whichever workflow

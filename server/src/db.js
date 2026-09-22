@@ -419,6 +419,32 @@ async function runSchema() {
     INDEX idx_notifications_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // Issues and improvement ideas reported from inside the app. The report is
+  // emailed the moment it arrives; this table is the record, so nothing is lost
+  // when an email bounces, and so the same person cannot flood the inbox — the
+  // route counts recent rows to decide that.
+  //
+  // The reporter's name, email and role are copied in rather than joined from
+  // users: a report should still read correctly after that account is renamed,
+  // deactivated or merged into another.
+  await tryExec(`CREATE TABLE IF NOT EXISTS issue_reports (
+    id             VARCHAR(64)   NOT NULL PRIMARY KEY,
+    org_id         VARCHAR(32)   DEFAULT NULL,
+    user_id        VARCHAR(64)   DEFAULT NULL,
+    reporter_name  VARCHAR(255)  DEFAULT NULL,
+    reporter_email VARCHAR(255)  DEFAULT NULL,
+    reporter_role  VARCHAR(32)   DEFAULT NULL,
+    category       VARCHAR(16)   NOT NULL DEFAULT 'issue',
+    message        TEXT          NOT NULL,
+    page           VARCHAR(255)  DEFAULT NULL,
+    user_agent     VARCHAR(500)  DEFAULT NULL,
+    created_at     BIGINT        NOT NULL,
+    emailed_to     VARCHAR(255)  DEFAULT NULL,
+    emailed        TINYINT(1)    NOT NULL DEFAULT 0,
+    INDEX idx_issue_reports_created (created_at),
+    INDEX idx_issue_reports_user (user_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the
