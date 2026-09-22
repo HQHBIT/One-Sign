@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [uat-wipe, backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [origin-check, uat-wipe, backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -515,6 +515,36 @@ jobs:
               STATUS=0
               BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.uat-wipe-tmp.mjs || STATUS=$?
               rm -f scripts/.uat-wipe-tmp.mjs
+              exit $STATUS
+            fi
+
+            # origin-check
+            if [ "$MODE" = "origin-check" ]; then
+              cat > scripts/.origin-check-tmp.mjs <<'ORIGIN_CHECK_EOF'
+            // Does THIS box answer for the live hostname, and where does it send it?
+            // Read-only: one local request and the nginx server block that matches.
+            import { execFileSync } from "node:child_process";
+
+            const HOST = (process.env.BACKUP_ARG || "signflow.umooriqtesadiyah.org").trim();
+            const sh = (cmd) => {
+              try { return execFileSync("bash", ["-lc", cmd], { encoding: "utf8" }); }
+              catch (e) { return (e.stdout || "") + (e.stderr || ""); }
+            };
+
+            console.log(`\n  DOES THIS BOX SERVE ${HOST}?\n`);
+            console.log("  local request with that Host header:");
+            console.log(sh(`curl -s -o /dev/null -w '    http://127.0.0.1/api/health  -> %{http_code} in %{time_total}s\\n' -m 10 -H 'Host: ${HOST}' http://127.0.0.1/api/health`));
+            console.log(sh(`curl -s -o /dev/null -w '    https://127.0.0.1/api/health -> %{http_code} in %{time_total}s\\n' -m 10 -k -H 'Host: ${HOST}' https://127.0.0.1/api/health`));
+
+            console.log("  nginx blocks naming it (server_name, listen, proxy_pass, root):");
+            console.log(sh(`grep -rl '${HOST.replace(/\./g, "\\.")}' /etc/nginx/sites-enabled/ 2>/dev/null | while read f; do echo "    --- $f"; awk '/server[ \\t]*\\{/{blk=""} {blk=blk"\\n"$0} /server_name/{if (index($0,"${HOST}")) show=1} /^\\}/{if (show) {print blk; show=0}}' "$f" | grep -E 'server_name|listen|proxy_pass|root|return|ssl_certificate ' | sed 's/^/      /'; done`));
+
+            console.log("  this box's public address:");
+            console.log("    " + sh("curl -s -m 5 http://169.254.169.254/latest/meta-data/public-ipv4 || echo '(no metadata)'").trim());
+            ORIGIN_CHECK_EOF
+              STATUS=0
+              BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.origin-check-tmp.mjs || STATUS=$?
+              rm -f scripts/.origin-check-tmp.mjs
               exit $STATUS
             fi
 
