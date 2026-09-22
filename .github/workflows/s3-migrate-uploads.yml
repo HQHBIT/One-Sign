@@ -520,7 +520,8 @@ jobs:
 
             # origin-check
             if [ "$MODE" = "origin-check" ]; then
-              cat > scripts/.origin-check-tmp.mjs <<'ORIGIN_CHECK_EOF'
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.origin-check-tmp.mjs <<'ORIGIN_CHECK_EOF'
             // Does THIS box answer for the live hostname, and where does it send it?
             // Read-only: one local request and the nginx server block that matches.
             import { execFileSync } from "node:child_process";
