@@ -88,6 +88,8 @@ jobs:
           SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
           SENDGRID_FROM_NAME: ${{ secrets.SENDGRID_FROM_NAME }}
           CONFIDENTIAL_KEY: ${{ secrets.CONFIDENTIAL_KEY }}
+          ISSUE_HOOK_SECRET: ${{ secrets.ISSUE_HOOK_SECRET }}
+          ISSUE_REPORT_EMAIL: ${{ secrets.ISSUE_REPORT_EMAIL }}
           # Amazon S3, with the one IAM key every box and the copy workflow share.
           # No endpoint and no path-style: an empty endpoint is what selects AWS.
           STORAGE_ENDPOINT: ""
@@ -106,7 +108,7 @@ jobs:
           host: ${{ secrets.WAQF_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.WAQF_EC2_SSH_KEY }}
-          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,JWT_SECRET
+          envs: SENDGRID_API_KEY,SENDGRID_FROM_EMAIL,SENDGRID_FROM_NAME,CONFIDENTIAL_KEY,STORAGE_ENDPOINT,STORAGE_REGION,STORAGE_BUCKET,STORAGE_FORCE_PATH_STYLE,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,JWT_SECRET,ISSUE_HOOK_SECRET,ISSUE_REPORT_EMAIL
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -215,6 +217,10 @@ jobs:
             # a box with no ORG_SLUG shows visitors a "not set up" page instead of
             # guessing, which would put them at another organisation's door.
             set_env ORG_SLUG "waqf"
+            # Issue notifications: the shared secret reops presents, and where the
+            # notification goes. Unset secrets arrive empty and set_env skips them.
+            set_env ISSUE_HOOK_SECRET "$ISSUE_HOOK_SECRET"
+            set_env ISSUE_REPORT_EMAIL "$ISSUE_REPORT_EMAIL"
             # Preflight: never start a process that cannot boot. Without these the
             # app falls back to root@localhost with no password and the hardcoded
             # "dev-secret-change-me" token key, so it crash-loops behind a green
@@ -236,7 +242,7 @@ jobs:
             # and db.js destructures with defaults, which apply to undefined but not
             # to "". That is what took UAT down on 2026-08-29: DB_USER arrived empty
             # and the app tried to connect as ''@'localhost'.
-            unset SENDGRID_API_KEY SENDGRID_FROM_EMAIL SENDGRID_FROM_NAME \
+            unset SENDGRID_API_KEY ISSUE_HOOK_SECRET ISSUE_REPORT_EMAIL SENDGRID_FROM_EMAIL SENDGRID_FROM_NAME \
                   CONFIDENTIAL_KEY STORAGE_ENDPOINT STORAGE_REGION STORAGE_BUCKET \
                   STORAGE_FORCE_PATH_STYLE STORAGE_ACCESS_KEY STORAGE_SECRET_KEY \
                   DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME JWT_SECRET \
