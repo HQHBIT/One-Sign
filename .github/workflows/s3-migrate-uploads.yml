@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [uat-wipe, backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -340,6 +340,181 @@ jobs:
               STATUS=0
               BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.backup-file-tmp.mjs || STATUS=$?
               rm -f scripts/.backup-file-tmp.mjs
+              exit $STATUS
+            fi
+
+            # uat-wipe
+            if [ "$MODE" = "uat-wipe" ]; then
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.uat-wipe-tmp.mjs <<'UAT_WIPE_EOF'
+            // Delete this box's SignFlow data — its uploaded files and its database — after
+            // proving the backup exists. Nothing belonging to any other application on the
+            // box is touched: only uploads/ under this server directory, and only the one
+            // database named in .env.
+            //
+            //   BACKUP_ARG=<backup prefix>           list what would go, delete nothing
+            //   BACKUP_ARG=<backup prefix>|WIPE-UAT  do it
+            //
+            // IT REFUSES UNLESS THE BACKUP IS THERE. The dump and manifest are fetched from
+            // the bucket and checked, and every file about to be deleted must already exist
+            // in the bucket at the same size. A deletion that trusts an earlier report is
+            // how data goes missing; this one re-checks at the moment it deletes.
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import { execFileSync } from "node:child_process";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+            import { S3Client, HeadObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+
+            const [prefixRaw, confirm] = String(process.env.BACKUP_ARG || "").split("|").map((s) => (s || "").trim());
+            const PREFIX = (prefixRaw || "").replace(/\/+$/, "");
+            const APPLY = confirm === "WIPE-UAT";
+            if (!PREFIX) { console.log("  Need BACKUP_ARG=<backup prefix>[|WIPE-UAT]"); process.exit(1); }
+
+            const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+            const UPLOADS = path.join(SERVER, "uploads");
+            const AREAS = ["documents", "signed", "signatures", "voicenotes"];
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+            const db = {
+              host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow",
+            };
+            const MB = (n) => `${(n / 1048576).toFixed(1)} MB`;
+
+            console.log(`\n  ${APPLY ? "WIPE" : "DRY RUN — nothing will be deleted"} · uploads + database "${db.database}" on this box`);
+            console.log(`  backup: ${bucket}/${PREFIX}\n`);
+
+            // ---- 1. the backup must be there, and readable ----
+            let manifest;
+            for (const name of ["signflow.sql.gz", "manifest.json"]) {
+              try {
+                const h = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `${PREFIX}/${name}` }));
+                console.log(`  OK   backup has ${name} (${h.ContentLength} bytes)`);
+                if (name === "signflow.sql.gz" && h.ContentLength < 10000) throw new Error("dump too small to be a backup");
+              } catch (e) {
+                console.log(`  FAIL backup is missing ${name} (${e?.name || e?.message}) — refusing to delete anything.`);
+                process.exit(1);
+              }
+            }
+            try {
+              const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${PREFIX}/manifest.json` }));
+              manifest = JSON.parse(Buffer.from(await got.Body.transformToByteArray()).toString("utf8"));
+            } catch (e) { console.log(`  FAIL cannot read the manifest (${e?.message}) — refusing.`); process.exit(1); }
+
+            // The database must still hold what the backup says it held: a backup of a
+            // different day's data is not a backup of what is about to be deleted.
+            const conn = await mysql.createConnection(db);
+            let sameShape = true;
+            for (const [t, m] of Object.entries(manifest.tables || {})) {
+              if (m.error) continue;
+              const [[row]] = await conn.query("SELECT COUNT(*) AS n FROM ??", [t]);
+              const now = Number(row.n);
+              const ok = now === m.count;
+              if (!ok) sameShape = false;
+              console.log(`  ${ok ? "OK  " : "WARN"} ${t.padEnd(24)} backup ${String(m.count).padStart(6)}   now ${String(now).padStart(6)}`);
+            }
+            if (!sameShape) {
+              console.log("\n  The database has changed since the backup was taken. Take a fresh backup before wiping.");
+              await conn.end();
+              process.exit(1);
+            }
+
+            // ---- 2. every file about to go must already be in the bucket ----
+            const files = [];
+            for (const area of AREAS) {
+              let names = [];
+              try { names = (await fs.readdir(path.join(UPLOADS, area), { withFileTypes: true })).filter((d) => d.isFile()).map((d) => d.name); } catch {}
+              for (const n of names) {
+                const full = path.join(UPLOADS, area, n);
+                const st = await fs.stat(full);
+                files.push({ area, name: n, full, size: st.size, key: `${area}/${n}` });
+              }
+            }
+            const total = files.reduce((a, f) => a + f.size, 0);
+            console.log(`\n  ${files.length} file(s) on this box, ${MB(total)}`);
+
+            const notInBucket = [];
+            const differs = [];
+            let checked = 0;
+            const queue = files.slice();
+            const worker = async () => {
+              while (queue.length) {
+                const f = queue.pop();
+                try {
+                  const h = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: f.key }));
+                  if (h.ContentLength !== f.size) differs.push(f);
+                } catch (e) {
+                  if (e?.$metadata?.httpStatusCode === 404) notInBucket.push(f);
+                  else { console.log(`  FAIL bucket error on ${f.key}: ${e?.name}`); process.exit(1); }
+                }
+                if (++checked % 500 === 0) console.log(`  … checked ${checked}/${files.length}`);
+              }
+            };
+            await Promise.all([worker(), worker(), worker(), worker()]);
+
+            // A file whose bucket copy differs is only safe to delete if THIS box's own
+            // version was kept beside the backup.
+            const keptSeparately = [];
+            for (const f of differs) {
+              try {
+                await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: `${PREFIX}/this-box-only/${f.key}` }));
+                keptSeparately.push(f);
+              } catch { /* not kept */ }
+            }
+            const unsafeDiffers = differs.filter((f) => !keptSeparately.includes(f));
+
+            console.log(`  in the bucket: ${files.length - notInBucket.length - differs.length}`);
+            if (keptSeparately.length) console.log(`  differing but kept in the backup: ${keptSeparately.length}`);
+            if (notInBucket.length) {
+              console.log(`  NOT IN THE BUCKET: ${notInBucket.length}`);
+              for (const f of notInBucket.slice(0, 20)) console.log(`    ${f.key} (${MB(f.size)})`);
+            }
+            if (unsafeDiffers.length) {
+              console.log(`  DIFFERENT IN THE BUCKET and not kept: ${unsafeDiffers.length}`);
+              for (const f of unsafeDiffers.slice(0, 20)) console.log(`    ${f.key}`);
+            }
+            if (notInBucket.length || unsafeDiffers.length) {
+              console.log("\n  Refusing: some files exist only here. Copy them first, then run this again.");
+              await conn.end();
+              process.exit(1);
+            }
+
+            if (!APPLY) {
+              console.log(`\n  Would delete: ${files.length} file(s) (${MB(total)}) and the database "${db.database}".`);
+              console.log("  DRY RUN — nothing was deleted.\n");
+              await conn.end();
+              process.exit(0);
+            }
+
+            // ---- 3. stop the app, then delete ----
+            try {
+              execFileSync("bash", ["-lc", "pm2 stop onesign_backend_uat && pm2 save"], { stdio: ["ignore", "inherit", "inherit"] });
+              console.log("\n  SignFlow stopped on this box (other applications untouched).");
+            } catch { console.log("\n  Could not stop the SignFlow process — continuing; it will error on missing data until removed."); }
+
+            let deleted = 0, freed = 0;
+            for (const f of files) {
+              try { await fs.unlink(f.full); deleted++; freed += f.size; } catch (e) { console.log(`  could not delete ${f.key}: ${e.message}`); }
+            }
+            console.log(`  Deleted ${deleted} file(s), ${MB(freed)} freed.`);
+
+            await conn.end();
+            const admin = await mysql.createConnection({ ...db, database: undefined });
+            await admin.query(`DROP DATABASE \`${db.database}\``);
+            await admin.end();
+            console.log(`  Dropped the database "${db.database}".`);
+            console.log(`\n  Done. Everything deleted here is in ${bucket}/${PREFIX}/ and in the bucket's own documents/signed/signatures folders.\n`);
+            UAT_WIPE_EOF
+              STATUS=0
+              BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.uat-wipe-tmp.mjs || STATUS=$?
+              rm -f scripts/.uat-wipe-tmp.mjs
               exit $STATUS
             fi
 
