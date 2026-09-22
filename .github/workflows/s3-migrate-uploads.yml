@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -120,6 +120,7 @@ jobs:
             # uat-backup
             if [ "$MODE" = "uat-backup" ]; then
               cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
             cat > scripts/.uat-backup-tmp.mjs <<'UAT_BACKUP_EOF'
             // Back this box's SignFlow database up to the bucket, and write a manifest of
             // every id it holds so another box can be asked what it is missing.
@@ -220,6 +221,7 @@ jobs:
             # live-diff
             if [ "$MODE" = "live-diff" ]; then
               cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
             cat > scripts/.live-diff-tmp.mjs <<'LIVE_DIFF_EOF'
             // What does the OTHER box hold that this one does not? Read-only.
             //
@@ -287,6 +289,57 @@ jobs:
               STATUS=0
               MANIFEST_PREFIX="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.live-diff-tmp.mjs || STATUS=$?
               rm -f scripts/.live-diff-tmp.mjs
+              exit $STATUS
+            fi
+
+            # backup-file
+            if [ "$MODE" = "backup-file" ]; then
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.backup-file-tmp.mjs <<'BACKUP_FILE_EOF'
+            // Put one file from this box into a backup folder in the bucket, verified.
+            //
+            // For the case the copy refuses to handle: a file whose bucket copy DIFFERS,
+            // because the same document was signed on two boxes and each produced its own
+            // signed PDF. Overwriting would destroy the other box's version, so that one is
+            // kept here instead, beside the database dump.
+            //
+            //   confirm=<backup prefix>|<area/filename>
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import crypto from "node:crypto";
+            import { fileURLToPath } from "node:url";
+            import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+
+            const [prefix, rel] = String(process.env.BACKUP_ARG || "").split("|").map((s) => (s || "").trim());
+            if (!prefix || !rel) { console.log("  Need confirm=<backup prefix>|<area/filename>"); process.exit(1); }
+            if (rel.includes("..")) { console.log("  Refusing a path that climbs out of uploads/"); process.exit(1); }
+
+            const UPLOADS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "uploads");
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+            const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
+            const full = path.resolve(UPLOADS, rel);
+            if (!full.startsWith(path.resolve(UPLOADS))) { console.log("  Refusing a path outside uploads/"); process.exit(1); }
+
+            const body = await fs.readFile(full);
+            const key = `${prefix.replace(/\/+$/, "")}/this-box-only/${rel}`;
+            await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: "application/octet-stream" }));
+            const back = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+            const bytes = Buffer.from(await back.Body.transformToByteArray());
+            const ok = md5(bytes) === md5(body);
+            console.log(`\n  ${ok ? "OK  " : "FAIL"} ${key}  ${bytes.length} bytes${ok ? " — read back and matched" : " — READ BACK DIFFERS"}`);
+            console.log(`  (this box's own version of ${rel}, kept because the bucket holds a different one)\n`);
+            process.exit(ok ? 0 : 1);
+            BACKUP_FILE_EOF
+              STATUS=0
+              BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.backup-file-tmp.mjs || STATUS=$?
+              rm -f scripts/.backup-file-tmp.mjs
               exit $STATUS
             fi
 
