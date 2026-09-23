@@ -370,6 +370,8 @@ export const api = {
   // boxes are required when the destination is a signature stage
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
+  // Issues submitted on the reops form and handed to us — admin only.
+  issueReports() { return this.fetch("/api/issues"); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   // addDate (HQHB): when the requestor placed no date field, stamp today's date
