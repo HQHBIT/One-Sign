@@ -43,7 +43,7 @@ on:
         required: true
         default: baseline
         type: choice
-        options: [origin-check, uat-wipe, backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
+        options: [verify-retirement, origin-check, uat-wipe, backup-file, live-diff, uat-backup, box-health, box-cause, serving, find-docs, db-facts, db-check, repoint-dry-run, repoint-apply, repoint-revert, baseline, probe, app-check, recent, api-trace, dry-run, apply]
       confirm:
         description: 'apply: type APPLY. repoint-apply: type REPOINT. repoint-revert: rollback file path'
         required: false
@@ -546,6 +546,101 @@ jobs:
               STATUS=0
               BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.origin-check-tmp.mjs || STATUS=$?
               rm -f scripts/.origin-check-tmp.mjs
+              exit $STATUS
+            fi
+
+            # verify-retirement
+            if [ "$MODE" = "verify-retirement" ]; then
+              cd /home/ubuntu/OneSign/server || { echo "MISSING /home/ubuntu/OneSign/server"; exit 1; }
+            cat > scripts/.verify-retirement-tmp.mjs <<'VERIFY_RETIREMENT_EOF'
+            // Two questions, answered from scratch rather than from an earlier report:
+            //   1. Is the backup really there, and does it really open?
+            //   2. Is the data really gone from this box?
+            // Read-only. BACKUP_ARG=<backup prefix>
+            import fs from "node:fs/promises";
+            import path from "node:path";
+            import zlib from "node:zlib";
+            import crypto from "node:crypto";
+            import { fileURLToPath } from "node:url";
+            import mysql from "mysql2/promise";
+            import { S3Client, HeadObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+
+            const PREFIX = (process.env.BACKUP_ARG || "").trim().replace(/\/+$/, "");
+            const UPLOADS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "uploads");
+            const bucket = (process.env.STORAGE_BUCKET || "").trim();
+            const s3 = new S3Client({
+              region: (process.env.STORAGE_REGION || "").trim() || undefined,
+              endpoint: (process.env.STORAGE_ENDPOINT || "").trim() || undefined,
+              credentials: process.env.STORAGE_ACCESS_KEY
+                ? { accessKeyId: process.env.STORAGE_ACCESS_KEY.trim(), secretAccessKey: (process.env.STORAGE_SECRET_KEY || "").trim() }
+                : undefined,
+            });
+            const MB = (n) => `${(n / 1048576).toFixed(2)} MB`;
+
+            // ---------- 1. the backup ----------
+            if (PREFIX) {
+              console.log(`\n  THE BACKUP — ${bucket}/${PREFIX}`);
+              let token, objects = [];
+              do {
+                const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: PREFIX + "/", ContinuationToken: token }));
+                objects.push(...(page.Contents || []));
+                token = page.IsTruncated ? page.NextContinuationToken : undefined;
+              } while (token);
+              for (const o of objects) console.log(`    ${o.LastModified.toISOString().slice(0, 16).replace("T", " ")}  ${String(o.Size).padStart(9)}  ${o.Key.replace(PREFIX + "/", "")}`);
+
+              // Download the dump and actually open it — a file of the right size that
+              // cannot be decompressed is not a backup.
+              const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${PREFIX}/signflow.sql.gz` }));
+              const gz = Buffer.from(await got.Body.transformToByteArray());
+              const sql = zlib.gunzipSync(gz).toString("utf8");
+              const tables = [...sql.matchAll(/CREATE TABLE `([^`]+)`/g)].map((m) => m[1]);
+              const inserts = (sql.match(/INSERT INTO/g) || []).length;
+              console.log(`\n    the dump opens: ${MB(gz.length)} compressed → ${MB(sql.length)} of SQL`);
+              console.log(`    ${tables.length} tables, ${inserts} INSERT statements`);
+              console.log(`    md5 of the compressed file: ${crypto.createHash("md5").update(gz).digest("hex")}`);
+
+              // The three requests that existed only on the retired box must be in it.
+              for (const id of ["req_mu3owarr_z7t44", "req_mu3qutah_qsnrq", "req_mu3qv9zr_57d8i"]) {
+                console.log(`    contains ${id}: ${sql.includes(id) ? "YES" : "NO — MISSING"}`);
+              }
+              const manifest = JSON.parse(Buffer.from(await (await s3.send(new GetObjectCommand({ Bucket: bucket, Key: `${PREFIX}/manifest.json` }))).Body.transformToByteArray()).toString("utf8"));
+              console.log(`    manifest lists ${manifest.requests?.length ?? "?"} requests, taken ${manifest.takenAt}`);
+            }
+
+            // ---------- 2. this box ----------
+            console.log("\n  THIS BOX");
+            let files = 0, bytes = 0;
+            for (const area of ["documents", "signed", "signatures", "voicenotes"]) {
+              let names = [];
+              try { names = (await fs.readdir(path.join(UPLOADS, area), { withFileTypes: true })).filter((d) => d.isFile()).map((d) => d.name); } catch {}
+              let size = 0;
+              for (const n of names) { try { size += (await fs.stat(path.join(UPLOADS, area, n))).size; } catch {} }
+              files += names.length; bytes += size;
+              console.log(`    uploads/${area.padEnd(12)} ${String(names.length).padStart(5)} file(s)  ${MB(size)}`);
+            }
+            console.log(`    total                ${String(files).padStart(5)} file(s)  ${MB(bytes)}`);
+
+            const dbName = process.env.DB_NAME || "signflow";
+            try {
+              const conn = await mysql.createConnection({
+                host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+                user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "",
+              });
+              const [rows] = await conn.query("SELECT schema_name FROM information_schema.schemata WHERE schema_name = ?", [dbName]);
+              console.log(`    database "${dbName}": ${rows.length ? "STILL PRESENT" : "gone"}`);
+              if (rows.length) {
+                const [[c]] = await conn.query(`SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = ?`, [dbName]);
+                console.log(`      (${c.n} tables)`);
+              }
+              await conn.end();
+            } catch (e) {
+              console.log(`    database "${dbName}": could not check (${e.code || e.message})`);
+            }
+            console.log("");
+            VERIFY_RETIREMENT_EOF
+              STATUS=0
+              BACKUP_ARG="$CONFIRM" env -u TARGET_ACCESS_KEY -u TARGET_SECRET_KEY -u TARGET_BUCKET -u TARGET_REGION node --env-file=.env scripts/.verify-retirement-tmp.mjs || STATUS=$?
+              rm -f scripts/.verify-retirement-tmp.mjs
               exit $STATUS
             fi
 
