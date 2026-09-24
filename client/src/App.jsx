@@ -48,6 +48,7 @@ import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
+import { FolderedList } from "./components/FolderedList.jsx";
 import { HelpGuide } from "./components/HelpGuide.jsx";
 import { useInstall, InstallBanner, IosInstallSheet } from "./components/InstallPrompt.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
@@ -1251,27 +1252,25 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
   );
 }
 
-function ApprovedList({ items, teams, users, user, back, title = "Approved requests" }) {
+function ApprovedList({ items, teams, users, user, back, notify, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
   return (
-    <div>
-      <BackHeader back={back} title={title} step={`${items.length} signed`} />
-      {items.length === 0 ? <Empty icon={Archive} text={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`} /> : (
-        <div className="card mt-8 overflow-hidden">
-          {items.map((r, i) => (
-            <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={(
-                <div className="flex flex-wrap gap-2">
-                  <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
-                  <DownloadBtn req={r} user={user} />
-                  <PrintBtn req={r} />
-                </div>
-              )} />
-          ))}
-        </div>
-      )}
+    <>
+      <FolderedList items={items} title={title} back={back} notify={notify}
+        emptyIcon={Archive} emptyText={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`}
+        renderRow={(r, i, moveMenu) => (
+          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} draggableId={r.id}
+            actions={(
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
+                <DownloadBtn req={r} user={user} />
+                <PrintBtn req={r} />
+                {moveMenu}
+              </div>
+            )} />
+        )} />
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
-    </div>
+    </>
   );
 }
 
@@ -2178,34 +2177,32 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
   const act = items.find(r => r.id === actId);
   const inMyWindow = r => r.status === "approved_pending" && r.approverId === user.id && !r.instantApproval;
   return (
-    <div>
-      <BackHeader back={back} title="Approved requests" step={`${items.length} signed`} />
-      {items.length === 0 ? <Empty icon={Archive} text="No approved requests yet." /> : (
-        <div className="card mt-8 overflow-hidden">
-          {items.map((r, i) => (
-            <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={(
-                <div className="flex flex-wrap gap-2">
-                  {inMyWindow(r) ? (
-                    <button className="btn-danger text-xs" onClick={() => setActId(r.id)}
-                      title="Still inside your 1-hour window — reject or withdraw">
-                      <XCircle size={12} /> Reject / Withdraw
-                    </button>
-                  ) : (
-                    <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
-                  )}
-                  <DownloadBtn req={r} user={user} />
-                  <PrintBtn req={r} />
-                </div>
-              )} />
-          ))}
-        </div>
-      )}
+    <>
+      <FolderedList items={items} title="Approved requests" back={back} notify={notify}
+        emptyIcon={Archive} emptyText="No approved requests yet."
+        renderRow={(r, i, moveMenu) => (
+          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} draggableId={r.id}
+            actions={(
+              <div className="flex flex-wrap gap-2">
+                {inMyWindow(r) ? (
+                  <button className="btn-danger text-xs" onClick={() => setActId(r.id)}
+                    title="Still inside your 1-hour window — reject or withdraw">
+                    <XCircle size={12} /> Reject / Withdraw
+                  </button>
+                ) : (
+                  <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
+                )}
+                <DownloadBtn req={r} user={user} />
+                <PrintBtn req={r} />
+                {moveMenu}
+              </div>
+            )} />
+        )} />
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
       {act && <ApproveDrawer req={act} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
         onClose={() => setActId(null)} notify={notify} />}
-    </div>
+    </>
   );
 }
 
