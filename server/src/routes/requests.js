@@ -740,7 +740,7 @@ async function getNextPendingSigner(requestId) {
 // ============================================================
 //   authorise access
 // ============================================================
-async function authoriseAccess(user, row) {
+export async function authoriseAccess(user, row) {
   if (!row) return false;
   // Confidential documents exclude the IT Admin BY DESIGN — that is the whole
   // point of the feature. Must stay above the admin shortcut below.

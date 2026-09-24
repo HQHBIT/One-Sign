@@ -1,4 +1,4 @@
-import { FileText, FileSpreadsheet, Zap, GitBranch } from "lucide-react";
+import { FileText, FileSpreadsheet, Zap, GitBranch, GripVertical } from "lucide-react";
 import { ConfidentialBadge } from "./UnlockGate.jsx";
 import { APPROVAL_WINDOW_MS, requestTypeLabel, requestTypeColor } from "../lib/constants.js";
 import { fmt, fmtShort } from "../lib/format.js";
@@ -6,7 +6,10 @@ import { StatusPill } from "./StatusPill.jsx";
 import { Countdown } from "./Countdown.jsx";
 import { activeStep, nextPendingSigner } from "../lib/turn.js";
 
-export function RequestRow({ r, teams, users, i, actions, subtitle }) {
+// `draggableId`: when set, the row can be picked up and dropped on a folder;
+// it carries the request id as text/x-request-id. A grip appears so the row
+// looks like something that can be moved.
+export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId = null }) {
   const requestorName = r.requestorName || users.find(u => u.id === r.requestorId)?.name || "—";
   const approverName = r.approverName || users.find(u => u.id === r.approverId)?.name;
   const team = teams.find(t => t.id === r.targetTeamId);
@@ -30,7 +33,14 @@ export function RequestRow({ r, teams, users, i, actions, subtitle }) {
   const typeColor = requestTypeColor(typeKey);
 
   return (
-    <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
+    <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`}
+      style={{ borderColor: "var(--c-ink-08)", cursor: draggableId ? "grab" : undefined }}
+      draggable={!!draggableId}
+      onDragStart={draggableId ? (e) => {
+        e.dataTransfer.setData("text/x-request-id", draggableId);
+        e.dataTransfer.effectAllowed = "move";
+      } : undefined}>
+      {draggableId && <GripVertical size={14} className="opacity-30 shrink-0 hidden sm:block" aria-hidden="true" />}
       <div className="w-9 h-9 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
         {r.fileType === "pdf" ? <FileText size={15} /> : <FileSpreadsheet size={15} />}
       </div>

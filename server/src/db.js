@@ -445,6 +445,38 @@ async function runSchema() {
     INDEX idx_issue_reports_user (user_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // Personal folders for finished documents. Filing is PER PERSON: the same
+  // document appears in the requestor's list and in each signer's, and one
+  // person's tidying must not rearrange anyone else's screen — so placement
+  // lives in folder_items keyed by (user, request), not on the request.
+  //
+  // The primary key on folder_items is what makes "one folder per document"
+  // a rule the database keeps, not one the screen remembers to follow. The
+  // cascades do the housekeeping: delete a folder and its documents fall back
+  // into the main list; delete a document or a user and the placements go.
+  await tryExec(`CREATE TABLE IF NOT EXISTS folders (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    user_id     VARCHAR(64)  NOT NULL,
+    org_id      VARCHAR(32)  DEFAULT NULL,
+    name        VARCHAR(60)  NOT NULL,
+    created_at  BIGINT       NOT NULL,
+    UNIQUE KEY uq_folders_user_name (user_id, name),
+    INDEX idx_folders_user (user_id),
+    CONSTRAINT fk_folders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  await tryExec(`CREATE TABLE IF NOT EXISTS folder_items (
+    user_id     VARCHAR(64)  NOT NULL,
+    request_id  VARCHAR(64)  NOT NULL,
+    folder_id   VARCHAR(64)  NOT NULL,
+    added_at    BIGINT       NOT NULL,
+    PRIMARY KEY (user_id, request_id),
+    INDEX idx_folder_items_folder (folder_id),
+    CONSTRAINT fk_folder_items_user    FOREIGN KEY (user_id)    REFERENCES users(id)    ON DELETE CASCADE,
+    CONSTRAINT fk_folder_items_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    CONSTRAINT fk_folder_items_folder  FOREIGN KEY (folder_id)  REFERENCES folders(id)  ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the

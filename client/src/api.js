@@ -268,6 +268,16 @@ export const api = {
     return this.fetch("/api/requests/notify-batch", { method: "POST", body: JSON.stringify({ ids }) });
   },
   searchUsers(q) { return this.fetch(`/api/users/search?q=${encodeURIComponent(q)}`).then(r => r.users); },
+
+  // -------- personal folders --------
+  folders() { return this.fetch("/api/folders"); },                                   // { folders, placements }
+  createFolder(name) { return this.fetch("/api/folders", { method: "POST", body: JSON.stringify({ name }) }).then(r => r.folder); },
+  renameFolder(id, name) { return this.fetch(`/api/folders/${id}`, { method: "PUT", body: JSON.stringify({ name }) }).then(r => r.folder); },
+  deleteFolder(id) { return this.fetch(`/api/folders/${id}`, { method: "DELETE" }); },
+  // folderId null = back to the main list
+  fileRequest(requestId, folderId) {
+    return this.fetch(`/api/folders/items/${requestId}`, { method: "PUT", body: JSON.stringify({ folderId }) });
+  },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   approveRequest(id, instant, signatureId = null) {
