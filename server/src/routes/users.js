@@ -852,6 +852,26 @@ export async function mergeUsers(survivorId, loserId, performedBy = null) {
       } catch { /* source file missing — skip */ }
     }
 
+    // 4b. Folders and filing. The keeper inherits the duplicate's folders; a
+    //     name both accounts used is kept under "(2)" rather than dropped, so
+    //     nothing anyone filed is lost. Where both accounts had filed the same
+    //     document, the keeper's placement wins.
+    const [loserFolders] = await conn.execute("SELECT id, name FROM folders WHERE user_id = ?", [loserId]);
+    for (const f of loserFolders) {
+      const [clashRows] = await conn.execute("SELECT id FROM folders WHERE user_id = ? AND name = ?", [survivorId, f.name]);
+      if (clashRows.length) {
+        await conn.execute("UPDATE folders SET name = ? WHERE id = ?", [`${f.name} (2)`.slice(0, 60), f.id]);
+      }
+    }
+    [r] = await conn.execute("UPDATE folders SET user_id = ? WHERE user_id = ?", [survivorId, loserId]);
+    moved.folders = r.affectedRows;
+    await conn.execute(
+      `DELETE fi FROM folder_items fi
+         JOIN folder_items keep ON keep.request_id = fi.request_id AND keep.user_id = ?
+        WHERE fi.user_id = ?`, [survivorId, loserId]);
+    [r] = await conn.execute("UPDATE folder_items SET user_id = ? WHERE user_id = ?", [survivorId, loserId]);
+    moved.folderItems = r.affectedRows;
+
     // 5. Carry the identity onto the keeper: keep its ITS, and remember the
     //    loser's address as secondary so oneAccess-by-email still finds it.
     const loserEmail = String(loser.email || "").toLowerCase();
