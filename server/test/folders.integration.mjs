@@ -143,6 +143,28 @@ try {
   ck((await call(U, "PUT", `/api/folders/items/${REQ_HIDDEN}`, { folderId: LEAVE })).status === 404, "filing a document you cannot see is refused");
   ck((await call(U, "PUT", `/api/folders/items/req_does_not_exist`, { folderId: LEAVE })).status === 404, "filing a document that does not exist is refused");
 
+  // ---- several at once, all or nothing ----
+  r = await call(U, "POST", "/api/folders", { name: "Bulk" });
+  const BULK = (await r.json()).folder?.id;
+  r = await call(U, "PUT", "/api/folders/items", { requestIds: [REQ1, REQ2], folderId: BULK });
+  b = await r.json();
+  ck(r.status === 200 && b.moved === 2, `two documents move together (${r.status}, moved ${b.moved})`);
+  let bulkView = await folders(U);
+  ck(bulkView.placements[REQ1] === BULK && bulkView.placements[REQ2] === BULK, "and both land in the folder");
+  ck(bulkView.folders.find((f) => f.id === BULK)?.count === 2, "with the count to match");
+  r = await call(U, "PUT", "/api/folders/items", { requestIds: [REQ1, REQ2, REQ_HIDDEN], folderId: LEAVE });
+  bulkView = await folders(U);
+  ck(r.status === 404, `one document you cannot see refuses the whole move (${r.status})`);
+  ck(bulkView.placements[REQ1] === BULK && bulkView.placements[REQ2] === BULK, "and nothing moved");
+  ck((await call(U, "PUT", "/api/folders/items", { requestIds: [REQ1], folderId: "fld_nope" })).status === 404, "an unknown folder refuses the move");
+  ck((await call(U, "PUT", "/api/folders/items", { requestIds: [], folderId: BULK })).status === 400, "an empty selection is refused");
+  ck((await call(U, "PUT", "/api/folders/items", { requestIds: "x", folderId: BULK })).status === 400, "a non-list is refused");
+  r = await call(U, "PUT", "/api/folders/items", { requestIds: [REQ1, REQ2, REQ2], folderId: null });
+  b = await r.json();
+  bulkView = await folders(U);
+  ck(r.status === 200 && b.moved === 2 && !bulkView.placements[REQ1] && !bulkView.placements[REQ2], "several unfile together, duplicates ignored");
+  await call(U, "PUT", `/api/folders/items/${REQ1}`, { folderId: LEAVE });   // as the merge check below expects
+
   // ---- signing in is required ----
   ck((await fetch(`${BASE}/api/folders`)).status === 401, "folders need a session");
 

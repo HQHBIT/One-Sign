@@ -9,7 +9,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Folder, FolderInput, FolderPlus, Check } from "lucide-react";
 
-export function MoveToMenu({ folders, currentFolderId, onMove, onCreateAndMove }) {
+// `label`, `disabled` and `primary` let the same menu sit on the selection bar
+// ("Move 3 to…", greyed until something is ticked) as well as on a row.
+export function MoveToMenu({ folders, currentFolderId, onMove, onCreateAndMove, label = "Move to…", disabled = false, primary = false }) {
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
@@ -33,8 +35,8 @@ export function MoveToMenu({ folders, currentFolderId, onMove, onCreateAndMove }
 
   return (
     <div className="relative" ref={ref}>
-      <button className="btn-ghost text-xs" onClick={() => setOpen((o) => !o)} title="Move to a folder">
-        <FolderInput size={12} /> Move to…
+      <button className={`${primary ? "btn-gold" : "btn-ghost"} text-xs`} disabled={disabled} onClick={() => setOpen((o) => !o)} title="Move to a folder">
+        <FolderInput size={12} /> {label}
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 z-20 rounded-lg overflow-hidden text-sm"

@@ -278,6 +278,10 @@ export const api = {
   fileRequest(requestId, folderId) {
     return this.fetch(`/api/folders/items/${requestId}`, { method: "PUT", body: JSON.stringify({ folderId }) });
   },
+  // several at once; the server moves all of them or none
+  fileRequests(requestIds, folderId) {
+    return this.fetch("/api/folders/items", { method: "PUT", body: JSON.stringify({ requestIds, folderId }) });
+  },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   approveRequest(id, instant, signatureId = null) {

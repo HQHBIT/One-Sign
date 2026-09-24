@@ -80,5 +80,27 @@ export function useFolders({ notify } = {}) {
     catch (e) { setFolders(beforeF); setPlacements(beforeP); refused(e, "Could not move the document"); }
   };
 
-  return { folders, placements, loaded, createFolder, renameFolder, deleteFolder, moveTo, reload: load };
+  // Several at once. Same optimism, one revert if the server refuses any of them.
+  // Returns how many actually moved, so the caller can word its toast.
+  const moveMany = async (requestIds, folderId) => {
+    const ids = [...new Set(requestIds)].filter((id) => (placements[id] || null) !== (folderId || null));
+    if (ids.length === 0) return 0;
+    const beforeF = folders, beforeP = placements;
+    const delta = {};
+    for (const id of ids) {
+      const from = placements[id] || null;
+      if (from) delta[from] = (delta[from] || 0) - 1;
+      if (folderId) delta[folderId] = (delta[folderId] || 0) + 1;
+    }
+    setPlacements((p) => {
+      const next = { ...p };
+      for (const id of ids) { if (folderId) next[id] = folderId; else delete next[id]; }
+      return next;
+    });
+    setFolders((fs) => fs.map((f) => (delta[f.id] ? { ...f, count: f.count + delta[f.id] } : f)));
+    try { await api.fileRequests(ids, folderId); return ids.length; }
+    catch (e) { setFolders(beforeF); setPlacements(beforeP); refused(e, "Could not move the documents"); return 0; }
+  };
+
+  return { folders, placements, loaded, createFolder, renameFolder, deleteFolder, moveTo, moveMany, reload: load };
 }

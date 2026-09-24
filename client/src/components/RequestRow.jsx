@@ -9,7 +9,11 @@ import { activeStep, nextPendingSigner } from "../lib/turn.js";
 // `draggableId`: when set, the row can be picked up and dropped on a folder;
 // it carries the request id as text/x-request-id. A grip appears so the row
 // looks like something that can be moved.
-export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId = null }) {
+// `selectable`: the list is in selection mode — a checkbox takes the grip's
+// place, the row cannot be dragged, and `selected`/`onToggle` say whether it
+// is ticked and what ticking does.
+export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId = null, selectable = false, selected = false, onToggle }) {
+  const canDrag = !!draggableId && !selectable;
   const requestorName = r.requestorName || users.find(u => u.id === r.requestorId)?.name || "—";
   const approverName = r.approverName || users.find(u => u.id === r.approverId)?.name;
   const team = teams.find(t => t.id === r.targetTeamId);
@@ -34,13 +38,16 @@ export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId 
 
   return (
     <div className={`px-3 sm:px-5 py-3 sm:py-4 flex items-start sm:items-center gap-3 sm:gap-4 ${i > 0 ? "border-t" : ""}`}
-      style={{ borderColor: "var(--c-ink-08)", cursor: draggableId ? "grab" : undefined }}
-      draggable={!!draggableId}
-      onDragStart={draggableId ? (e) => {
+      style={{ borderColor: "var(--c-ink-08)", cursor: canDrag ? "grab" : undefined, backgroundColor: selected ? "rgba(184,137,74,.08)" : undefined }}
+      draggable={canDrag}
+      onDragStart={canDrag ? (e) => {
         e.dataTransfer.setData("text/x-request-id", draggableId);
         e.dataTransfer.effectAllowed = "move";
       } : undefined}>
-      {draggableId && <GripVertical size={14} className="opacity-30 shrink-0 hidden sm:block" aria-hidden="true" />}
+      {selectable ? (
+        <input type="checkbox" className="shrink-0 w-4 h-4 cursor-pointer" checked={selected} onChange={onToggle}
+          aria-label={`Select ${r.fileName}`} style={{ accentColor: "var(--c-gold)" }} />
+      ) : draggableId && <GripVertical size={14} className="opacity-30 shrink-0 hidden sm:block" aria-hidden="true" />}
       <div className="w-9 h-9 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
         {r.fileType === "pdf" ? <FileText size={15} /> : <FileSpreadsheet size={15} />}
       </div>
