@@ -55,18 +55,20 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
   };
 
   // The bar's move: every ticked row at once, then say what happened and stop selecting.
-  const moveSelected = async (folderId) => {
+  // `name` is passed when the folder was made a moment ago and is not in
+  // this render's list yet.
+  const moveSelected = async (folderId, name = null) => {
     const ids = [...selected];
     const n = await moveMany(ids, folderId);
     if (n > 0) {
-      const where = folderId ? `to ${folders.find((f) => f.id === folderId)?.name || "the folder"}` : "back to the main list";
+      const where = folderId ? `to ${name || folders.find((f) => f.id === folderId)?.name || "the folder"}` : "back to the main list";
       notify?.(`${n} document${n === 1 ? "" : "s"} moved ${where}`, "success");
     }
     stopSelecting();
   };
   const createAndMoveSelected = async (name) => {
     const f = await createFolder(name);
-    if (f) moveSelected(f.id);
+    if (f) moveSelected(f.id, f.name);
   };
 
   const filedCount = items.length - (current ? 0 : visible.length);
