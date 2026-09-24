@@ -8,6 +8,14 @@ server/uploads/signed/*
 !server/uploads/documents/.gitkeep
 !server/uploads/signatures/.gitkeep
 !server/uploads/signed/.gitkeep
+server/uploads/issues/*
+server/uploads/voicenotes/*
+!server/uploads/issues/.gitkeep
+!server/uploads/voicenotes/.gitkeep
+
+# Any copy of a box .env, whatever the suffix — they hold real keys.
+server/.env.*
+server/.env-*
 .DS_Store
 *.log
 .vite
