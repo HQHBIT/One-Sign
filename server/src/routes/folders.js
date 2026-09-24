@@ -12,7 +12,7 @@
 //   rows and the documents reappear in the main list.
 // ============================================================
 import { Router } from "express";
-import { query, queryOne, execute } from "../db.js";
+import { query, queryOne, execute, getPool } from "../db.js";
 import { authRequired } from "../auth.js";
 import { deploymentOrg } from "../org.js";
 import { authoriseAccess } from "./requests.js";
@@ -69,6 +69,48 @@ router.post("/", authRequired, async (req, res, next) => {
     await execute("INSERT INTO folders (id, user_id, org_id, name, created_at) VALUES (?, ?, ?, ?, ?)",
       [id, req.user.id, req.userRow?.org_id || deploymentOrg() || null, name, Date.now()]);
     res.json({ folder: { id, name, count: 0 } });
+  } catch (e) { next(e); }
+});
+
+// PUT /api/folders/items { requestIds: [...], folderId | null } — several at once.
+// Every id is checked BEFORE anything is written, and the writes share one
+// transaction, so a selection either moves whole or not at all. Declared
+// before /items/:requestId so "items" is never read as a request id.
+const MAX_BULK = 200;
+router.put("/items", authRequired, async (req, res, next) => {
+  try {
+    const raw = req.body?.requestIds;
+    if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: "Choose at least one document" });
+    const ids = [...new Set(raw.map((v) => String(v ?? "").trim()).filter(Boolean))];
+    if (ids.length === 0 || ids.length > MAX_BULK) return res.status(400).json({ error: `Choose between 1 and ${MAX_BULK} documents` });
+    const folderId = req.body?.folderId ? String(req.body.folderId) : null;
+    if (folderId && !(await mine(req.user.id, folderId))) return res.status(404).json({ error: "Not found" });
+    for (const id of ids) {
+      const row = await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
+      if (!row || !(await authoriseAccess(req.user, row))) return res.status(404).json({ error: "Not found" });
+    }
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      const now = Date.now();
+      for (const id of ids) {
+        if (folderId) {
+          await conn.execute(
+            `INSERT INTO folder_items (user_id, request_id, folder_id, added_at) VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE folder_id = VALUES(folder_id), added_at = VALUES(added_at)`,
+            [req.user.id, id, folderId, now]);
+        } else {
+          await conn.execute("DELETE FROM folder_items WHERE user_id = ? AND request_id = ?", [req.user.id, id]);
+        }
+      }
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+    res.json({ moved: ids.length, folderId });
   } catch (e) { next(e); }
 });
 
