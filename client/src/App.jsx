@@ -1258,8 +1258,8 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
     <>
       <FolderedList items={items} title={title} back={back} notify={notify}
         emptyIcon={Archive} emptyText={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`}
-        renderRow={(r, i, moveMenu) => (
-          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} draggableId={r.id}
+        renderRow={(r, i, moveMenu, rowProps) => (
+          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
             actions={(
               <div className="flex flex-wrap gap-2">
                 <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
@@ -2180,8 +2180,8 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
     <>
       <FolderedList items={items} title="Approved requests" back={back} notify={notify}
         emptyIcon={Archive} emptyText="No approved requests yet."
-        renderRow={(r, i, moveMenu) => (
-          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} draggableId={r.id}
+        renderRow={(r, i, moveMenu, rowProps) => (
+          <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
             actions={(
               <div className="flex flex-wrap gap-2">
                 {inMyWindow(r) ? (
