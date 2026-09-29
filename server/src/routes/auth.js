@@ -5,7 +5,6 @@ import { isEnabled as confidentialEnabled, keyStatus as confidentialKeyStatus } 
 import { queryOne, query, hydrateUser, execute, listOrganisations, getOrganisation } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { genTempPassword } from "./users.js";
 import { validateRegistration } from "../registrationValidation.js";
 import { rateLimit, byEmail } from "../ratelimit.js";
 
@@ -306,35 +305,19 @@ router.post("/change-password", authRequired, async (req, res, next) => {
 
 // ---------- public: forgot password ----------
 // POST /api/auth/forgot-password  body: { email }
-// User-initiated reset. Generates a fresh temp password, hashes it, and emails
-// the plaintext. Intentionally returns the same 200 response whether the email
-// exists or not — this prevents account enumeration via response timing /
-// response shape. Logs server-side either way for the admin's email log.
+// Legacy entry point, kept so an old bookmark or client still works — but it
+// NEVER touches a credential. It used to overwrite the account's password on
+// request and mail the new one, which let anyone who knew a colleague's address
+// lock them out at will (audit 2026-09, finding
+// forgot-password-rotates-credential-before-mailbox-proof). It now starts the
+// same mailed-code flow as /forgot-password/send-otp; the password changes only
+// in /forgot-password/verify-otp, once the code has been proved. Same uniform
+// { ok: true } whether or not the address exists.
 router.post("/forgot-password", otpLimit, async (req, res, next) => {
   try {
-    const { email } = req.body || {};
-    if (!email || typeof email !== "string") {
-      return res.status(400).json({ error: "Email required" });
-    }
-    const row = await queryOne(
-      "SELECT * FROM users WHERE LOWER(email) = LOWER(?)",
-      [email.trim()]
-    );
-    if (row) {
-      const password = genTempPassword();
-      const hash = bcrypt.hashSync(password, 10);
-      await execute(
-        "UPDATE users SET password_hash = ?, last_temp_password = ?, last_temp_password_at = ? WHERE id = ?",
-        [hash, password, Date.now(), row.id]
-      );
-      const signInUrl = req.protocol + "://" + req.get("host");
-      await sendEmail({
-        to: row.email,
-        template: "reset_password",
-        ctx: { name: row.name, email: row.email, password, signInUrl, byAdmin: false }
-      });
-    }
-    // Always return ok: true — don't leak whether the email exists.
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
+    await startPasswordOtp(email);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -411,25 +394,30 @@ router.post("/forgot-password/send-otp", otpLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
-    const user = await queryOne("SELECT id, name, email, active FROM users WHERE LOWER(email) = ?", [email]);
-    if (user && (user.active == null || Number(user.active) === 1)) {
-      const now = Date.now();
-      const recent = await queryOne("SELECT created_at FROM password_otps WHERE email = ? ORDER BY created_at DESC LIMIT 1", [email]);
-      if (!recent || now - Number(recent.created_at) > 45000) {
-        const code = String(crypto.randomInt(100000, 1000000)); // cryptographically-random 6 digits
-        const hash = bcrypt.hashSync(code, 10);
-        const id = "otp_" + now.toString(36) + "_" + Math.random().toString(36).slice(2, 7);
-        await execute("DELETE FROM password_otps WHERE email = ?", [email]); // one live code per email
-        await execute(
-          "INSERT INTO password_otps (id, email, otp_hash, expires_at, attempts, used, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)",
-          [id, email, hash, now + 10 * 60 * 1000, now]
-        );
-        await sendEmail({ to: user.email, template: "password_otp", ctx: { name: user.name, otp: code, minutes: 10 } });
-      }
-    }
+    await startPasswordOtp(email);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+
+// Mails a fresh code to an active account with this (lower-cased) address and
+// does nothing at all otherwise — no users row is touched on this path. Shared
+// by /forgot-password and /forgot-password/send-otp so both doors behave alike.
+async function startPasswordOtp(email) {
+  const user = await queryOne("SELECT id, name, email, active FROM users WHERE LOWER(email) = ?", [email]);
+  if (!user || !(user.active == null || Number(user.active) === 1)) return;
+  const now = Date.now();
+  const recent = await queryOne("SELECT created_at FROM password_otps WHERE email = ? ORDER BY created_at DESC LIMIT 1", [email]);
+  if (recent && now - Number(recent.created_at) <= 45000) return;
+  const code = String(crypto.randomInt(100000, 1000000)); // cryptographically-random 6 digits
+  const hash = bcrypt.hashSync(code, 10);
+  const id = "otp_" + now.toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+  await execute("DELETE FROM password_otps WHERE email = ?", [email]); // one live code per email
+  await execute(
+    "INSERT INTO password_otps (id, email, otp_hash, expires_at, attempts, used, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)",
+    [id, email, hash, now + 10 * 60 * 1000, now]
+  );
+  await sendEmail({ to: user.email, template: "password_otp", ctx: { name: user.name, otp: code, minutes: 10 } });
+}
 
 // POST /api/auth/forgot-password/verify-otp  body: { email, otp, newPassword }
 // Verifies the code and sets the new password immediately. The self-chosen password
