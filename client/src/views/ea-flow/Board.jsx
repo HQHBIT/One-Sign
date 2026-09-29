@@ -203,7 +203,7 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
       </div>
       {doc.note && <div className="text-xs opacity-60 line-clamp-2">{doc.note}</div>}
       <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)" }} title={`In ${stage.name} since ${fmtWhen(doc.enteredStageAt)}`}><Clock size={10} /> {fmtDuration(inStage)}</span>
+        <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={`In ${stage.name} since ${fmtWhen(doc.enteredStageAt)}`}><Clock size={10} /> {fmtDuration(inStage)}</span>
         {doc.completedAt && <span className="pill pill-approved"><CircleCheck size={10} /> Complete</span>}
         {status === "waiting" && <span className="pill pill-pending"><Hourglass size={10} /> Awaiting {rq.signerName?.split(" ")[0]}</span>}
         {status === "signed" && <span className="pill pill-approved"><CircleCheck size={10} /> Signed by {rq.signerName?.split(" ")[0]}</span>}
