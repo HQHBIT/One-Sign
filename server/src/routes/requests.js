@@ -737,6 +737,22 @@ async function getNextPendingSigner(requestId) {
   `, [requestId]);
 }
 
+// May this person reject this request, in its current state? See the note
+// above the reject route for the rule.
+async function canReject(user, row) {
+  if (row.status === "approved_pending") return row.approver_id === user.id;
+  if (row.status !== "pending") return false;
+  const next = await getNextPendingSigner(row.id);
+  if (next) return next.user_id === user.id;
+  // No step signers at all → a legacy single-team request, where the team's
+  // signing authority is the approval authority. A workflow request whose
+  // active step has no pending signer is nobody's to reject.
+  const hasSteps = await queryOne("SELECT 1 AS ok FROM request_steps WHERE request_id = ? LIMIT 1", [row.id]);
+  if (hasSteps || !row.target_team_id) return false;
+  const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [user.id, row.target_team_id]);
+  return !!auth;
+}
+
 // ============================================================
 //   authorise access
 // ============================================================
@@ -1345,27 +1361,27 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 }
 
 // ============================================================
-//   reject  — any signer or admin/team-authority can reject
+//   reject  — a party to the CURRENT stage can reject
 // ============================================================
 // Accepts plain JSON ({ reason }) or multipart with an optional recorded voice
 // note (field "voice") alongside the typed reason — the approver can explain a
 // rejection by speaking, typing, or both.
+//
+// Who counts as a party depends on where the request is:
+//   pending, workflow request   → the signer whose turn it is
+//   pending, legacy single-team → anyone holding that team's signing authority
+//   approved_pending            → the approver who signed (same rule as withdraw)
+// target_team_id on a workflow request is only step 1's routing; it used to be
+// read as authority over the whole route, so a step-1 signer who was named on
+// no step could reject at step 2 — or after everyone had signed — and drop the
+// signed document (audit 2026-09, finding reject-accepts-first-step-team-authority).
 router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
     if (!["pending", "approved_pending"].includes(row.status)) return res.status(400).json({ error: "Cannot reject in current status" });
 
-    // Workflow: only the next pending signer can reject
-    const next = await getNextPendingSigner(row.id);
-    let allowed = false;
-    if (next && next.user_id === req.user.id) allowed = true;
-    if (!allowed && row.target_team_id) {
-      const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [req.user.id, row.target_team_id]);
-      if (auth) allowed = true;
-    }
-    if (!allowed && row.approver_id === req.user.id) allowed = true;
-    if (!allowed) return res.status(403).json({ error: "No authority to reject" });
+    if (!(await canReject(req.user, row))) return res.status(403).json({ error: "No authority to reject" });
 
     const reason = req.body?.reason || "";
 
