@@ -1,8 +1,9 @@
 import { useState, useEffect, lazy, Suspense } from "react";
-import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, Clock, XCircle } from "lucide-react";
+import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, Clock, XCircle, KanbanSquare } from "lucide-react";
 import { api } from "../api.js";
 import { RequestRow } from "../components/RequestRow.jsx";
 import { SignatureModal } from "../components/SignatureModal.jsx";
+import { FlowTab } from "./ea-flow/FlowTab.jsx";
 
 // Pulls in pdfjs only when a document is actually opened.
 const DocPreview = lazy(() => import("../viewer.jsx").then(m => ({ default: m.DocPreview })));
@@ -17,9 +18,12 @@ const DocPreview = lazy(() => import("../viewer.jsx").then(m => ({ default: m.Do
 // standard requestor dashboard) so both experiences stay identical by
 // construction rather than by copy.
 export function ExecutiveAssistantView(props) {
-  const { user, users, teams, notify, PersonalView } = props;
+  const { user, users, teams, notify, PersonalView, orgId } = props;
   const [execs, setExecs] = useState(null);
-  const [active, setActive] = useState("me"); // "me" | executiveId
+  const [active, setActive] = useState("me"); // "me" | executiveId | "flow"
+  // The document flow (boards of stages, dashboard) exists on HQHB only; the
+  // server refuses it elsewhere, this just keeps the tab out of the way.
+  const flowOn = orgId === "hqhb";
 
   useEffect(() => {
     api.assistExecutives().then(setExecs).catch(e => { notify(e.message || "Could not load your executives", "error"); setExecs([]); });
@@ -36,6 +40,7 @@ export function ExecutiveAssistantView(props) {
         {execs.map(ex => (
           <SwitchTab key={ex.id} active={active === ex.id} onClick={() => setActive(ex.id)} icon={Briefcase} label={ex.name} />
         ))}
+        {flowOn && <SwitchTab active={active === "flow"} onClick={() => setActive("flow")} icon={KanbanSquare} label="Document flow" />}
         {execs.length === 0 && (
           <span className="text-xs opacity-50">No executives linked yet — an administrator (or the executive) can add you from their “My assistant” menu.</span>
         )}
@@ -43,7 +48,9 @@ export function ExecutiveAssistantView(props) {
 
       {active === "me"
         ? (PersonalView ? <PersonalView {...props} /> : null)
-        : current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
+        : active === "flow" && flowOn
+          ? <FlowTab executives={execs} notify={notify} />
+          : current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
     </div>
   );
 }

@@ -609,36 +609,61 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
 // team signing authority, or to already have a signature on file — the recipient
 // adds a signature when they go to sign. PDF only (the signing path stamps PDFs).
 async function createDirectRequest({ req, res, file, ext, fileType, note, instantApproval, signers, requestType = "general", confidential = 0 }) {
+  try {
+    const row = await raiseDirectRequest({
+      user: req.user, file, ext, fileType, note, instantApproval, signers, requestType, confidential,
+      orientation: parseOrientation(req.body?.orientation),
+      // The batch flow defers per-document notices and sends ONE summary email per
+      // signer afterwards (POST /notify-batch) — otherwise a 10-document batch means
+      // 10 back-to-back emails to the same person.
+      deferNotify: req.body?.deferNotify === "true" || req.body?.deferNotify === true,
+    });
+    res.json({ request: await hydrateRequest(row) });
+  } catch (e) {
+    if (e instanceof DirectRequestError) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+}
+
+// A refusal the caller should turn into a 4xx answer (as opposed to a fault).
+export class DirectRequestError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+// The direct-request path with no HTTP in it: `user` routes `file` to `signers`
+// and gets the new requests row back. POST /api/requests (direct) is one caller;
+// the executive-assistant document flow is another, sending a card's current
+// bytes to the executive its stage names. Refusals are DirectRequestError.
+export async function raiseDirectRequest({ user, file, ext, fileType, note = "", instantApproval = 0, signers, requestType = "general", confidential = 0, orientation = null, deferNotify = false }) {
   // PDF and Excel both supported — the signing path stamps each accordingly.
-  if (!Array.isArray(signers) || signers.length === 0) return res.status(400).json({ error: "Add at least one recipient" });
+  if (!Array.isArray(signers) || signers.length === 0) throw new DirectRequestError(400, "Add at least one recipient");
   for (const [i, s] of signers.entries()) {
-    if (!s.userId) return res.status(400).json({ error: `Recipient ${i + 1}: userId required` });
+    if (!s.userId) throw new DirectRequestError(400, `Recipient ${i + 1}: userId required`);
     // Accept a boxes[] array (one signer, several signature spots) or the legacy
     // single x/y/w/h shape.
     if (!Array.isArray(s.boxes) || s.boxes.length === 0) {
       if (typeof s.x === "number" && typeof s.y === "number" && typeof s.w === "number" && typeof s.h === "number") {
         s.boxes = [{ page: s.page || 1, x: s.x, y: s.y, w: s.w, h: s.h }];
       } else {
-        return res.status(400).json({ error: `Recipient ${i + 1}: signature box not placed` });
+        throw new DirectRequestError(400, `Recipient ${i + 1}: signature box not placed`);
       }
     }
     if (s.boxes.some(b => typeof b.x !== "number" || typeof b.y !== "number" || typeof b.w !== "number" || typeof b.h !== "number")) {
-      return res.status(400).json({ error: `Recipient ${i + 1}: invalid signature box` });
+      throw new DirectRequestError(400, `Recipient ${i + 1}: invalid signature box`);
     }
   }
 
   const userIds = [...new Set(signers.map(s => s.userId))];
-  if (userIds.includes(req.user.id)) return res.status(400).json({ error: "You can't request a signature from yourself" });
+  if (userIds.includes(user.id)) throw new DirectRequestError(400, "You can't request a signature from yourself");
   const userRows = await query(`SELECT id FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`, userIds);
-  if (userRows.length !== userIds.length) return res.status(400).json({ error: "One or more recipients no longer exist" });
+  if (userRows.length !== userIds.length) throw new DirectRequestError(400, "One or more recipients no longer exist");
 
-  const orientation = parseOrientation(req.body?.orientation);
   let bakedBuffer, pageRotations;
   try {
     ({ bakedBuffer, pageRotations } = await bakeRequestFile({ buffer: file.buffer, fileType, orientation }));
   } catch (e) {
     console.error("[create direct] bake failed", e);
-    return res.status(400).json({ error: "Could not process PDF orientation" });
+    throw new DirectRequestError(400, "Could not process PDF orientation");
   }
   for (const s of signers) {
     s.boxes = s.boxes.map(b => {
@@ -662,7 +687,7 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     await conn.execute(`
       INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential]);
+    `, [id, user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential]);
 
     const stepId = uid("st");
     await conn.execute(
@@ -686,13 +711,8 @@ async function createDirectRequest({ req, res, file, ext, fileType, note, instan
     conn.release();
   }
 
-  // The batch flow defers per-document notices and sends ONE summary email per
-  // signer afterwards (POST /notify-batch) — otherwise a 10-document batch means
-  // 10 back-to-back emails to the same person.
-  const deferNotify = req.body?.deferNotify === "true" || req.body?.deferNotify === true;
-  if (!deferNotify) await notifyNextSigner(id, file.originalname, req.user.name);
-  const row = await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
-  res.json({ request: await hydrateRequest(row) });
+  if (!deferNotify) await notifyNextSigner(id, file.originalname, user.name);
+  return await queryOne("SELECT * FROM requests WHERE id = ?", [id]);
 }
 
 // Tell whoever is next in line that the document has reached them. Mid-workflow

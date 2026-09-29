@@ -477,6 +477,67 @@ async function runSchema() {
     CONSTRAINT fk_folder_items_folder  FOREIGN KEY (folder_id)  REFERENCES folders(id)  ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // --- executive-assistant document flow (HQHB) ------------------------------
+  // An assistant keeps boards of stages and moves documents through them. A
+  // stage may call for an executive's signature, in which case entering it
+  // raises an ordinary request (ea_documents.request_id). Every move is one
+  // ea_movements row; the dashboard's "how long did it sit where" is computed
+  // from those rows and nothing else. Everything is scoped to the owning
+  // assistant. See docs/superpowers/specs/2026-09-29-ea-document-flow-design.md.
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_boards (
+    id          VARCHAR(64)  NOT NULL PRIMARY KEY,
+    owner_id    VARCHAR(64)  NOT NULL,
+    org_id      VARCHAR(32)  DEFAULT NULL,
+    name        VARCHAR(60)  NOT NULL,
+    created_at  BIGINT       NOT NULL,
+    UNIQUE KEY uq_ea_board_name (owner_id, name),
+    INDEX idx_ea_boards_owner (owner_id),
+    CONSTRAINT fk_ea_boards_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_stages (
+    id                  VARCHAR(64)  NOT NULL PRIMARY KEY,
+    board_id            VARCHAR(64)  NOT NULL,
+    name                VARCHAR(60)  NOT NULL,
+    position            INT          NOT NULL,
+    requires_signature  TINYINT(1)   NOT NULL DEFAULT 0,
+    signer_id           VARCHAR(64)  DEFAULT NULL,
+    created_at          BIGINT       NOT NULL,
+    UNIQUE KEY uq_ea_stage_name (board_id, name),
+    INDEX idx_ea_stages_board (board_id, position),
+    CONSTRAINT fk_ea_stages_board  FOREIGN KEY (board_id)  REFERENCES ea_boards(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_stages_signer FOREIGN KEY (signer_id) REFERENCES users(id)     ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_documents (
+    id                VARCHAR(64)   NOT NULL PRIMARY KEY,
+    board_id          VARCHAR(64)   NOT NULL,
+    stage_id          VARCHAR(64)   NOT NULL,
+    title             VARCHAR(120)  NOT NULL,
+    note              TEXT,
+    file_name         VARCHAR(255)  NOT NULL,
+    file_path         VARCHAR(255)  NOT NULL,
+    file_type         ENUM('pdf','xlsx') NOT NULL,
+    request_id        VARCHAR(64)   DEFAULT NULL,
+    created_by        VARCHAR(64)   NOT NULL,
+    created_at        BIGINT        NOT NULL,
+    entered_stage_at  BIGINT        NOT NULL,
+    completed_at      BIGINT        DEFAULT NULL,
+    INDEX idx_ea_documents_board (board_id, stage_id),
+    CONSTRAINT fk_ea_documents_board   FOREIGN KEY (board_id)   REFERENCES ea_boards(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_documents_stage   FOREIGN KEY (stage_id)   REFERENCES ea_stages(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_ea_documents_request FOREIGN KEY (request_id) REFERENCES requests(id)  ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_movements (
+    id             VARCHAR(64)  NOT NULL PRIMARY KEY,
+    document_id    VARCHAR(64)  NOT NULL,
+    from_stage_id  VARCHAR(64)  DEFAULT NULL,
+    to_stage_id    VARCHAR(64)  NOT NULL,
+    moved_at       BIGINT       NOT NULL,
+    moved_by       VARCHAR(64)  NOT NULL,
+    request_id     VARCHAR(64)  DEFAULT NULL,
+    INDEX idx_ea_movements_doc (document_id, moved_at),
+    CONSTRAINT fk_ea_movements_doc FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the
