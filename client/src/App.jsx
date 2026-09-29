@@ -469,7 +469,7 @@ export default function App() {
         <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
         <Shell
-          user={user}
+          user={user} orgId={orgId}
           users={users} teams={teams} requests={requests} emails={emails}
           notifs={notifs} onOpenNotification={openNotification}
           onMarkAllNotifsRead={markAllNotifsRead} onToggleEmailNotifs={toggleEmailNotifications}
