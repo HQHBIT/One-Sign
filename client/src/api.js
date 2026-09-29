@@ -282,6 +282,34 @@ export const api = {
   fileRequests(requestIds, folderId) {
     return this.fetch("/api/folders/items", { method: "PUT", body: JSON.stringify({ requestIds, folderId }) });
   },
+
+  // -------- executive-assistant document flow (HQHB only) --------
+  eaBoards() { return this.fetch("/api/ea-flow/boards").then(r => r.boards); },
+  eaCreateBoard(name) { return this.fetch("/api/ea-flow/boards", { method: "POST", body: JSON.stringify({ name }) }).then(r => r.board); },
+  eaRenameBoard(id, name) { return this.fetch(`/api/ea-flow/boards/${id}`, { method: "PUT", body: JSON.stringify({ name }) }).then(r => r.board); },
+  eaDeleteBoard(id) { return this.fetch(`/api/ea-flow/boards/${id}`, { method: "DELETE" }); },
+  eaAddStage(boardId, body) { return this.fetch(`/api/ea-flow/boards/${boardId}/stages`, { method: "POST", body: JSON.stringify(body) }).then(r => r.stage); },
+  eaUpdateStage(id, body) { return this.fetch(`/api/ea-flow/stages/${id}`, { method: "PUT", body: JSON.stringify(body) }).then(r => r.stage); },
+  eaDeleteStage(id) { return this.fetch(`/api/ea-flow/stages/${id}`, { method: "DELETE" }); },
+  eaOrderStages(boardId, stageIds) { return this.fetch(`/api/ea-flow/boards/${boardId}/stages/order`, { method: "PUT", body: JSON.stringify({ stageIds }) }).then(r => r.stages); },
+  eaDocuments(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/documents`).then(r => r.documents); },
+  eaAddDocument(boardId, { file, title, note }) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (title) fd.append("title", title);
+    if (note) fd.append("note", note);
+    return this.fetch(`/api/ea-flow/boards/${boardId}/documents`, { method: "POST", body: fd }).then(r => r.document);
+  },
+  // The card's current bytes (the signed copy once signed), as a blob URL.
+  async eaDocumentFileUrl(id) {
+    const res = await this.fetch(`/api/ea-flow/documents/${id}/file`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
+  eaUpdateDocument(id, body) { return this.fetch(`/api/ea-flow/documents/${id}`, { method: "PUT", body: JSON.stringify(body) }).then(r => r.document); },
+  eaDeleteDocument(id) { return this.fetch(`/api/ea-flow/documents/${id}`, { method: "DELETE" }); },
+  // boxes are required when the destination is a signature stage
+  eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
+  eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   approveRequest(id, instant, signatureId = null) {
