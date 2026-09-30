@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Printer } from "lucide-react";
 import { api } from "../api.js";
+import { spreadsheetPrintDoc } from "../lib/printDoc.js";
 
 export function PrintBtn({ req }) {
   // Printing produces a copy that leaves every control behind.
@@ -55,18 +56,13 @@ export function PrintBtn({ req }) {
           if (!ws || !ws["!ref"]) return;
           body += XLSX.utils.sheet_to_html(ws, { editable: false });
         });
-        pw.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
-          <title>${req.fileName}</title>
-          <style>
-            body{font-family:Calibri,Arial,sans-serif;font-size:9.5pt;margin:10mm;}
-            table{border-collapse:collapse;width:100%;page-break-inside:auto;}
-            td,th{border:1px solid #aaa;padding:2px 5px;vertical-align:top;word-break:break-word;}
-            tr{page-break-inside:avoid;}
-            @media print{body{margin:6mm;}}
-          </style></head><body>${body}</body></html>`);
+        // sheet_to_html output and the file name are attacker-influenceable, so
+        // they go into a sandboxed iframe with a strict CSP (see lib/printDoc.js).
+        pw.document.write(spreadsheetPrintDoc({ title: req.fileName, tableHtml: body }));
         pw.document.close();
         pw.focus();
-        setTimeout(() => { pw.print(); URL.revokeObjectURL(url); }, 400);
+        // Give the sandboxed iframe a moment to render before printing.
+        setTimeout(() => { pw.print(); URL.revokeObjectURL(url); }, 600);
       }
     } catch (e) { pw.close(); alert(e.message || "Print failed"); }
     finally { setBusy(false); }

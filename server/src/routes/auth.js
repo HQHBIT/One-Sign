@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { isEnabled as confidentialEnabled, keyStatus as confidentialKeyStatus } from "../confidential.js";
 import { queryOne, query, hydrateUser, execute, listOrganisations, getOrganisation } from "../db.js";
 import { signToken, authRequired } from "../auth.js";
+import { deploymentOrg } from "../org.js";
 import { sendEmail } from "../email.js";
 import { validateRegistration } from "../registrationValidation.js";
 import { rateLimit, byEmail } from "../ratelimit.js";
@@ -68,17 +69,31 @@ router.get("/config", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// The oneAccess door is open only when BOTH the server is configured for SSO
+// AND this deployment's organisation permits it. The organisation permission
+// (organisations.allow_oneaccess) used to be read only by /auth/config — a
+// display decision — so the endpoints that actually grant a session never
+// checked it, and an SSO token could be redeemed on an org that disabled SSO
+// (audit CV-02). This gate is enforced where authority is granted.
+async function oneAccessDoorOpen() {
+  if (!oneAccessEnabled()) return false;
+  const org = await getOrganisation(deploymentOrg());
+  return !!(org && org.active && org.allowOneAccess);
+}
+
 // Bounce the browser to the oneAccess login page (redirect=<slug>).
-router.get("/oneaccess/start", (req, res) => {
-  if (!oneAccessEnabled()) return res.status(404).json({ error: "oneAccess not configured" });
-  res.redirect(loginRedirectUrl());
+router.get("/oneaccess/start", async (req, res, next) => {
+  try {
+    if (!(await oneAccessDoorOpen())) return res.status(404).json({ error: "oneAccess not configured" });
+    res.redirect(loginRedirectUrl());
+  } catch (e) { next(e); }
 });
 
 // SSO landing: oneAccess redirects the user back with ?token=<access_jwt>; the SPA
 // posts it here. We verify it locally, mirror the user, and issue a SignFlow session.
 router.post("/oneaccess/callback", async (req, res, next) => {
   try {
-    if (!oneAccessEnabled()) return res.status(404).json({ error: "oneAccess not configured" });
+    if (!(await oneAccessDoorOpen())) return res.status(404).json({ error: "oneAccess not configured" });
     const token = String(req.body?.token || "").trim();
     if (!token) return res.status(400).json({ error: "Missing token" });
 
@@ -124,7 +139,7 @@ export async function resolveTeamIdForDepartment(dept) {
   const match = teams.find((t) => normDept(t.name) === target);
   if (match) return match.id;
   const id = "t_oa_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, ?, ?, 'hqhb')", [id, raw, Date.now()]);
+  await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, ?, ?, ?)", [id, raw, Date.now(), deploymentOrg()]);
   return id;
 }
 
@@ -181,10 +196,11 @@ export async function upsertOneAccessUser({ its, email, emails, name, department
   const safeEmail = email || (its ? `${its}@oneaccess.local` : `${id}@oneaccess.local`);
   const role = "requestor"; // oneAccess users are never admins — admin access is email/password only
   await execute(
-    // org_id pinned to 'hqhb': oneAccess is offered by HQHB alone, so an SSO
-    // login must never create an account in another organisation.
-    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, work_email_set, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', 0, ?, 'hqhb')",
-    [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now()]
+    // org_id is this deployment's organisation. SSO is reachable only where the
+    // organisation permits it (see oneAccessDoorOpen), so an SSO login creates
+    // an account in the box's own organisation and never in another one.
+    "INSERT INTO users (id, email, password_hash, name, role, its_id, department, team_id, jamaat, jamiaat, auth_provider, work_email_set, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'oneaccess', 0, ?, ?)",
+    [id, safeEmail, randomHash, name, role, its || null, dept || null, teamId, jam || null, jamia || null, Date.now(), deploymentOrg()]
   );
   return await queryOne("SELECT * FROM users WHERE id = ?", [id]);
 }
