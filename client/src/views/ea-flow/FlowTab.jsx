@@ -7,9 +7,12 @@ import { Dashboard } from "./Dashboard.jsx";
 
 // The assistant's document flow: their boards, one open at a time, each
 // viewable as the board itself or as the dashboard of where things sat.
-export function FlowTab({ executives, notify }) {
+export function FlowTab({ notify }) {
   const confirm = useConfirmation();
   const [boards, setBoards] = useState(null);
+  // Every active executive on this box — who a signature stage may name.
+  const [executives, setExecutives] = useState([]);
+  useEffect(() => { api.eaExecutives().then(setExecutives).catch(() => setExecutives([])); }, []);
   const [current, setCurrent] = useState(null);
   const [view, setView] = useState("board");        // board | dashboard
   const [naming, setNaming] = useState(false);       // creating a board

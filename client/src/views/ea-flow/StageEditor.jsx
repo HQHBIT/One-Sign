@@ -35,7 +35,7 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
             <span className="text-sm font-medium inline-flex items-center gap-1.5"><PenLine size={13} /> This stage needs a signature</span>
             <span className="block text-xs opacity-60 mt-0.5">
               Moving a document here sends it to the executive to sign, exactly like a normal request. It can move on once they have signed.
-              {executives.length === 0 && " — no executive is linked to you yet."}
+              {executives.length === 0 && " — no executive accounts exist yet."}
             </span>
           </span>
         </label>

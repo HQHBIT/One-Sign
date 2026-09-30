@@ -44,10 +44,12 @@ const myStage = (uid_, id) => queryOne(
 const myDoc = (uid_, id) => queryOne(
   "SELECT d.* FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id WHERE d.id = ? AND b.owner_id = ?", [id, uid_]);
 const boardStages = (boardId) => query("SELECT * FROM ea_stages WHERE board_id = ? ORDER BY position ASC", [boardId]);
-// An executive this assistant is linked to (the only people a signature stage may name).
-const linkedExecutive = (assistantId, execId) => queryOne(
-  `SELECT u.id, u.name FROM executive_assistants ea JOIN users u ON u.id = ea.executive_id
-    WHERE ea.assistant_id = ? AND ea.executive_id = ? AND u.active = 1`, [assistantId, execId]);
+// Anyone with the Executive role may be named by a signature stage — not only
+// the executives this assistant is linked to. (The owner asked for every
+// executive signatory to be available; a linked executive is still what the
+// assistant needs to approve ON BEHALF of someone, which is a separate right.)
+const signableExecutives = () => query("SELECT id, name, email FROM users WHERE role = 'executive' AND active = 1 ORDER BY name");
+const signableExecutive = (execId) => queryOne("SELECT id, name FROM users WHERE id = ? AND role = 'executive' AND active = 1", [execId]);
 
 async function stageOut(s) {
   const signer = s.signer_id ? await queryOne("SELECT id, name FROM users WHERE id = ?", [s.signer_id]) : null;
@@ -82,6 +84,11 @@ async function docOut(d, stageById) {
     waitingForSignature: !!stage?.requires_signature && isWaiting(rq),
   };
 }
+
+// GET /executives — everyone a signature stage may name.
+router.get("/executives", async (req, res, next) => {
+  try { res.json({ executives: await signableExecutives() }); } catch (e) { next(e); }
+});
 
 // ============================================================
 //   boards
@@ -155,7 +162,7 @@ async function signatureSettings(req, body, current = null) {
   if (!requiresSignature) return { requiresSignature: 0, signerId: null };
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
   if (!signerId) return "Choose whose signature this stage needs";
-  if (!(await linkedExecutive(req.user.id, signerId))) return "That executive is not linked to you";
+  if (!(await signableExecutive(signerId))) return "Choose one of the executives";
   return { requiresSignature: 1, signerId };
 }
 
@@ -331,8 +338,8 @@ router.post("/documents/:id/move", async (req, res, next) => {
       const boxes = Array.isArray(req.body?.boxes) ? req.body.boxes : [];
       if (!boxes.length || boxes.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
         return res.status(400).json({ error: "Place the signature box on the document first" });
-      const signer = to.signer_id && await linkedExecutive(req.user.id, to.signer_id);
-      if (!signer) return res.status(400).json({ error: "This stage's executive is no longer linked to you" });
+      const signer = to.signer_id && await signableExecutive(to.signer_id);
+      if (!signer) return res.status(400).json({ error: "This stage's executive is no longer available — edit the stage" });
       const { bytes } = await currentBytes(d);
       const ext = d.file_type === "pdf" ? "pdf" : "xlsx";
       try {
