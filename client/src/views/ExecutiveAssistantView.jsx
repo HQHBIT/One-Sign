@@ -49,7 +49,7 @@ export function ExecutiveAssistantView(props) {
       {active === "me"
         ? (PersonalView ? <PersonalView {...props} /> : null)
         : active === "flow" && flowOn
-          ? <FlowTab executives={execs} notify={notify} />
+          ? <FlowTab notify={notify} />
           : current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
     </div>
   );

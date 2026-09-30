@@ -98,10 +98,15 @@ try {
   const addStage = (body) => call(EA, "POST", `/api/ea-flow/boards/${BOARD}/stages`, body);
   r = await addStage({ name: "Received" }); const S_IN = (await j(r)).stage?.id;
   ck(r.status === 200 && !!S_IN, "stage added");
-  r = await addStage({ name: "CEO signature", requiresSignature: true, signerId: UNLINKED });
-  ck(r.status === 400, `a signature stage naming an executive not linked to this assistant is refused (${r.status})`);
+  b = await j(await call(EA, "GET", "/api/ea-flow/executives"));
+  ck(b.executives?.some((x) => x.id === UNLINKED) && b.executives?.some((x) => x.id === EXEC) && !b.executives?.some((x) => x.id === REQR), "every active executive is offered, linked or not; non-executives are not");
+  r = await addStage({ name: "Also signs", requiresSignature: true, signerId: REQR });
+  ck(r.status === 400, `a signature stage naming a non-executive is refused (${r.status})`);
+  r = await addStage({ name: "Also signs", requiresSignature: true, signerId: UNLINKED });
+  ck(r.status === 200, `a signature stage may name an executive the assistant is not linked to (${r.status})`);
+  await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
   r = await addStage({ name: "CEO signature", requiresSignature: true, signerId: EXEC }); const S_SIG = (await j(r)).stage?.id;
-  ck(r.status === 200 && !!S_SIG, "signature stage added naming the linked executive");
+  ck(r.status === 200 && !!S_SIG, "signature stage added naming the executive");
   r = await addStage({ name: "Filed" }); const S_OUT = (await j(r)).stage?.id;
   ck((await addStage({ name: "received" })).status === 409, "duplicate stage name refused");
   r = await call(EA, "PUT", `/api/ea-flow/boards/${BOARD}/stages/order`, { stageIds: [S_IN, S_OUT] });

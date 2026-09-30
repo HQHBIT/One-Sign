@@ -284,6 +284,7 @@ export const api = {
   },
 
   // -------- executive-assistant document flow (HQHB only) --------
+  eaExecutives() { return this.fetch("/api/ea-flow/executives").then(r => r.executives); },
   eaBoards() { return this.fetch("/api/ea-flow/boards").then(r => r.boards); },
   eaCreateBoard(name) { return this.fetch("/api/ea-flow/boards", { method: "POST", body: JSON.stringify({ name }) }).then(r => r.board); },
   eaRenameBoard(id, name) { return this.fetch(`/api/ea-flow/boards/${id}`, { method: "PUT", body: JSON.stringify({ name }) }).then(r => r.board); },
