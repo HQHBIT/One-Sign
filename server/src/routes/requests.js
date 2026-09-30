@@ -518,18 +518,28 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   const userRows = await query(`SELECT * FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`, userIds);
   const userById = Object.fromEntries(userRows.map(u => [u.id, u]));
   for (const step of workflow) {
+    // Does this step's team have any designated signing authority? Bare team
+    // membership qualifies a signer ONLY when the team has none — the fallback
+    // that keeps routing usable before an approver is designated. When the team
+    // does have approvers, a member who is not one cannot be named (audit CV-03:
+    // members are the requestor population, so this stopped a requestor slipping
+    // into an approver team's step).
+    const teamHasApprovers = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE team_id = ? LIMIT 1", [step.teamId]);
     for (const s of step.signers) {
       const u = userById[s.userId];
       if (!u) return res.status(400).json({ error: `Unknown signer: ${s.userId}` });
       if (u.active != null && Number(u.active) === 0) return res.status(400).json({ error: `${u.name} is no longer active` });
-      // A signer qualifies either by holding the team's signing authority, or by
-      // being a MEMBER of that team — the fallback that keeps team routing usable
-      // when no approver has been designated yet. (Only the named person can
-      // actually sign; the approve path checks identity + signature.)
+      // Separation of duties: you cannot route your own request to yourself and
+      // then approve it (audit CV-03). Mirrors the direct path's self-refusal.
+      if (s.userId === req.user.id) return res.status(400).json({ error: "You can't name yourself as a signer of your own request" });
       const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [s.userId, step.teamId]);
       const isMember = u.team_id === step.teamId;
-      if (!auth && !isMember) {
-        return res.status(400).json({ error: `${u.name} is neither an approver for nor a member of ${teamById[step.teamId].name}` });
+      if (!(auth || (isMember && !teamHasApprovers))) {
+        return res.status(400).json({
+          error: teamHasApprovers
+            ? `${u.name} is not an approver for ${teamById[step.teamId].name}`
+            : `${u.name} is neither an approver for nor a member of ${teamById[step.teamId].name}`,
+        });
       }
     }
   }
