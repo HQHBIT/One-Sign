@@ -27,11 +27,11 @@ const trimSlash = (s) => (s || "").replace(/\/+$/, "");
 // tokens: audit CV-02.) client_id/secret are for the server-to-server External
 // API only, which SignFlow doesn't use — optional here.
 export const oneAccess = {
-  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL || ""),
-  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL || ""),
-  appSlug: process.env.ONEACCESS_APP_SLUG || "",   // redirect=<slug>
+  apiBase: trimSlash(process.env.ONEACCESS_API_BASE_URL || "https://oneaccess.umooriqtesadiyah.org/api"),
+  frontendUrl: trimSlash(process.env.ONEACCESS_FRONTEND_URL || "https://oneaccess.umooriqtesadiyah.org"),
+  appSlug: process.env.ONEACCESS_APP_SLUG || "signflow-uat",   // redirect=<slug>
   appId: process.env.ONEACCESS_APP_ID || "",
-  redirectUrl: process.env.ONEACCESS_REDIRECT_URL || "", // registered base_url
+  redirectUrl: process.env.ONEACCESS_REDIRECT_URL || "https://signflow.umooriqtesadiyah.org", // registered base_url
   clientId: process.env.ONEACCESS_CLIENT_ID || "",            // external API only — unused by SSO
   clientSecret: process.env.ONEACCESS_CLIENT_SECRET || "",    // external API only — unused by SSO
   publicKeyPath: process.env.ONEACCESS_PUBLIC_KEY_PATH || "./keys/oneaccess-public.pem",
