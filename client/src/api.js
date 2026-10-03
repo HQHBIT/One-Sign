@@ -408,6 +408,16 @@ export const api = {
     return URL.createObjectURL(blob);
   },
 
+  // -------- "Send for Shz Saab Approval" (WAQF HOD tracking board) --------
+  // Forward one of my own fully-signed documents to the HOD, optional comment.
+  forwardForShz(requestId, comment) {
+    return this.fetch("/api/shz/forward", { method: "POST", body: JSON.stringify({ requestId, comment: comment || "" }) }).then(r => r.forward);
+  },
+  // HOD dashboard: everything sent for Shz Saab approval.
+  shzForwards() { return this.fetch("/api/shz/forwards").then(r => r.forwards); },
+  // Which of my documents have already been sent (requestId -> forwardedAt ms).
+  shzSent() { return this.fetch("/api/shz/sent").then(r => r.sent).catch(() => ({})); },
+
   // -------- confidential documents --------
   // Email a fresh unlock code, then exchange it for a 60-second viewing window.
   async requestUnlockCode(id) {
