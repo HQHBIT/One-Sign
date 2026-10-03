@@ -1252,8 +1252,112 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
   );
 }
 
+// Full date-time in IST, e.g. "03 Oct 2026, 4:32:15 pm IST".
+function fmtIST(ms) {
+  if (!ms) return "";
+  try {
+    const s = new Date(Number(ms)).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric",
+      hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+    });
+    return s.replace(/ /g, " ") + " IST";
+  } catch { return new Date(Number(ms)).toLocaleString() + " IST"; }
+}
+
+// WAQF: forward one of MY OWN fully-signed documents to the HOD for Shz Saab
+// approval, with an optional comment. Once sent, shows when (IST). Renders
+// nothing outside WAQF, or for a document that isn't my own signed one.
+function ShzForwardButton({ req, user, sentAt, onSent, notify }) {
+  const [open, setOpen] = useState(false);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (user?.orgId !== "waqf" || req.requestorId !== user.id || req.status !== "approved") return null;
+  if (sentAt) {
+    return (
+      <span className="text-xs px-2 py-1 rounded inline-flex items-center gap-1"
+        style={{ backgroundColor: "rgba(45,95,47,.12)", color: "var(--c-forest)" }}
+        title={`Sent for Shz Saab Approval on ${fmtIST(sentAt)}`}>
+        <Check size={12} /> Sent for Shz Saab · {fmtIST(sentAt)}
+      </span>
+    );
+  }
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const f = await api.forwardForShz(req.id, comment.trim());
+      notify?.("Sent for Shz Saab Approval", "success");
+      setOpen(false); setComment("");
+      onSent?.(req.id, f.forwardedAt);
+    } catch (e) { notify?.(e.message || "Could not send", "error"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <>
+      <button className="btn-ghost text-xs" onClick={() => setOpen(true)}
+        title="Forward this signed document to the HOD for Shz Saab approval">
+        <Send size={12} /> Send for Shz Saab Approval
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.45)" }} onClick={() => !busy && setOpen(false)}>
+          <div className="card p-6 w-full max-w-md anim-in" onClick={e => e.stopPropagation()}>
+            <div className="font-display text-xl mb-1">Send for Shz Saab Approval</div>
+            <div className="text-sm opacity-60 mb-4 truncate">{req.fileName}</div>
+            <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Comment (optional)</label>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} className="w-full mb-4" placeholder="Anything the HOD should note…" disabled={busy} autoFocus />
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+              <button className="btn-primary" onClick={submit} disabled={busy}><Send size={14} /> {busy ? "Sending…" : "Send"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// The HOD tracking board (WAQF), shown to anyone on the HOD team. View-only:
+// every document sent for Shz Saab approval, with requestor, optional comment,
+// and the IST timestamp — plus a link to open the signed document.
+function HodDashboard({ user, notify, back }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { api.shzForwards().then(setRows).catch(() => setRows([])); }, []);
+  const viewSigned = async (requestId) => {
+    try { const url = await api.getRequestFileBlob(requestId, "signed"); window.open(url, "_blank"); }
+    catch (e) { notify?.(e.message || "Could not open the document", "error"); }
+  };
+  return (
+    <div>
+      <BackHeader back={back} title="Shz Saab Approvals" step={rows ? `${rows.length} sent` : "…"} />
+      {rows == null ? (
+        <div className="card p-6 text-sm opacity-50 mt-8">Loading…</div>
+      ) : rows.length === 0 ? (
+        <Empty icon={Inbox} text="Nothing has been sent for Shz Saab approval yet." />
+      ) : (
+        <div className="card mt-8 overflow-hidden divide-y" style={{ borderColor: "var(--c-ink-08)" }}>
+          {rows.map((f) => (
+            <div key={f.id} className="p-4 flex flex-col sm:flex-row sm:items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate">{f.fileName}</div>
+                <div className="text-xs opacity-60 mt-0.5">From {f.requestorName}</div>
+                {f.comment && <div className="text-sm mt-1.5 px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.08)" }}>{f.comment}</div>}
+                <div className="text-xs mt-1.5 inline-flex items-center gap-1 opacity-70"><Clock size={11} /> Sent {fmtIST(f.forwardedAt)}</div>
+              </div>
+              <div className="shrink-0">
+                <button className="btn-ghost text-xs" onClick={() => viewSigned(f.requestId)}><Eye size={12} /> View document</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ApprovedList({ items, teams, users, user, back, notify, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
+  // WAQF only: which of my documents have already been sent for Shz Saab approval.
+  const [sentMap, setSentMap] = useState({});
+  useEffect(() => { if (user?.orgId === "waqf") api.shzSent().then(setSentMap).catch(() => {}); }, [user?.orgId]);
   return (
     <>
       <FolderedList items={items} title={title} back={back} notify={notify}
@@ -1265,6 +1369,8 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
                 <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 <DownloadBtn req={r} user={user} />
                 <PrintBtn req={r} />
+                <ShzForwardButton req={r} user={user} sentAt={sentMap[r.id]} notify={notify}
+                  onSent={(id, at) => setSentMap(m => ({ ...m, [id]: at }))} />
                 {moveMenu}
               </div>
             )} />
@@ -1494,8 +1600,10 @@ function ApproverView(props) {
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
+  if (tab === "shz-hod") return <HodDashboard user={user} users={users} teams={teams} notify={notify} back={() => setTab("home")} />;
 
   const tiles = [
+    ...(user.isHod ? [{ key: "shz-hod", icon: Building2, title: "Shz Saab Approvals", desc: "Documents sent to the HOD for Shz Saab approval.", color: "var(--c-gold)" }] : []),
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },

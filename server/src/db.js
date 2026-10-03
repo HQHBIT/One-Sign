@@ -392,6 +392,22 @@ async function runSchema() {
     INDEX idx_cal_request (request_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // ---------- "Send for Shz Saab Approval" — WAQF HOD tracking board ----------
+  // A requestor forwards one of their OWN fully-signed documents to the HOD
+  // (Shz Saab) for visibility. View-only: the HOD sees WHAT was sent and WHEN.
+  // One forward per document, so request_id is unique. WAQF-only in the routes.
+  await tryExec(`CREATE TABLE IF NOT EXISTS shz_forwards (
+    id            VARCHAR(64)  NOT NULL PRIMARY KEY,
+    request_id    VARCHAR(64)  NOT NULL UNIQUE,
+    requestor_id  VARCHAR(64)  NOT NULL,
+    comment       TEXT         DEFAULT NULL,
+    forwarded_at  BIGINT       NOT NULL,
+    org_id        VARCHAR(32)  NOT NULL,
+    INDEX idx_shz_org (org_id),
+    CONSTRAINT fk_shz_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    CONSTRAINT fk_shz_requestor FOREIGN KEY (requestor_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
   // attaches a document and places boxes each time they use it.
@@ -824,6 +840,16 @@ function shapeOrganisation(r) {
 export async function hydrateUser(row) {
   if (!row) return null;
   const [auth] = await pool.execute("SELECT team_id FROM signing_authority WHERE user_id = ?", [row.id]);
+  const authTeams = auth.map(r => r.team_id);
+  // WAQF "Send for Shz Saab Approval": the HOD dashboard is shown to whoever is on
+  // the team named "HOD" in this user's organisation — an approver on it, or a
+  // member of it. No dedicated role; membership of that team IS being the HOD.
+  const [hodRows] = await pool.execute(
+    "SELECT id FROM teams WHERE org_id = ? AND LOWER(name) = 'hod' LIMIT 1",
+    [row.org_id || "hqhb"]
+  );
+  const hodTeamId = hodRows[0]?.id || null;
+  const isHod = !!hodTeamId && (authTeams.includes(hodTeamId) || row.team_id === hodTeamId);
   return {
     id: row.id,
     email: row.email,
@@ -854,7 +880,10 @@ export async function hydrateUser(row) {
     darkModeVariant: row.dark_mode_variant || "invert",
     hasSignature: !!row.signature_path,
     signatureAspect: row.signature_aspect != null ? Number(row.signature_aspect) : null,
-    signingAuthorityTeams: auth.map(r => r.team_id),
+    signingAuthorityTeams: authTeams,
+    // WAQF HOD tracking board: true when this user sits on the "HOD" team.
+    isHod,
+    hodTeamId,
     // Plaintext most-recent temp password — only meaningful right after reset
     // / invite / forgot-password. Falls back to null otherwise.
     lastTempPassword: row.last_temp_password || null,
