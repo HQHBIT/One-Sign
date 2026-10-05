@@ -342,3 +342,50 @@ jobs:
                 echo "not deployed to this box yet (it ships with the confidential fix)"
               fi
             fi
+
+            echo "=============== 13. disk, inodes, and what is holding MySQL locks (read-only) ==============="
+            echo "--- disk usage ---"
+            df -h / /home /var/lib/mysql 2>/dev/null | sort -u
+            echo "--- inode usage (/) ---"
+            df -i / 2>/dev/null | tail -1
+            echo "--- uploads size ---"
+            du -sh /home/ubuntu/OneSign/server/uploads 2>/dev/null
+            du -sh /home/ubuntu/OneSign/server/uploads/* 2>/dev/null | sort -h | tail -6
+            echo "--- biggest things under /home/ubuntu (top 8) ---"
+            du -xsh /home/ubuntu/* 2>/dev/null | sort -h | tail -8
+            echo "--- open InnoDB transactions, lock waits, process list ---"
+            cd /home/ubuntu/OneSign/server 2>/dev/null || exit 0
+            cat > scripts/.locks-tmp.mjs <<'MJS'
+            // Read-only: lists open transactions, who is blocking whom, and long-idle sessions.
+            // Prints thread ids, users, hosts, ages and query text only — never any credential.
+            import mysql from "mysql2/promise";
+            const cfg = { host: process.env.DB_HOST || "localhost", port: parseInt(process.env.DB_PORT || "3306", 10),
+              user: process.env.DB_USER || "root", password: process.env.DB_PASSWORD || "", database: process.env.DB_NAME || "signflow" };
+            if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
+            const c = await mysql.createConnection(cfg);
+            const show = (title, rows) => { console.log(`${title}: ${rows.length}`); for (const r of rows) console.log("   " + JSON.stringify(r)); };
+            const [trx] = await c.query(`SELECT trx_id, trx_state, trx_started, TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS age_s,
+              trx_mysql_thread_id AS thread, trx_rows_locked, trx_rows_modified, LEFT(trx_query, 160) AS query
+              FROM information_schema.innodb_trx ORDER BY trx_started`);
+            show("open transactions", trx);
+            let waits = [];
+            try { [waits] = await c.query(`SELECT waiting_pid, LEFT(waiting_query,120) AS waiting_query, blocking_pid, LEFT(blocking_query,120) AS blocking_query, wait_age FROM sys.innodb_lock_waits`); }
+            catch (e) { console.log("sys.innodb_lock_waits unavailable (" + e.message + ") — trying performance_schema");
+              try { [waits] = await c.query(`SELECT r.trx_mysql_thread_id AS waiting_pid, LEFT(r.trx_query,120) AS waiting_query,
+                b.trx_mysql_thread_id AS blocking_pid, LEFT(b.trx_query,120) AS blocking_query, TIMESTAMPDIFF(SECOND,b.trx_started,NOW()) AS blocker_age_s
+                FROM performance_schema.data_lock_waits w
+                JOIN information_schema.innodb_trx r ON r.trx_id = w.REQUESTING_ENGINE_TRANSACTION_ID
+                JOIN information_schema.innodb_trx b ON b.trx_id = w.BLOCKING_ENGINE_TRANSACTION_ID`); }
+              catch (e2) { console.log("lock-wait view unavailable: " + e2.message); } }
+            show("lock waits (who is blocking whom)", waits);
+            const [pl] = await c.query(`SELECT id, user, host, db, command, time AS secs, state, LEFT(info,140) AS info
+              FROM information_schema.processlist WHERE command <> 'Sleep' OR time > 300 ORDER BY time DESC LIMIT 30`);
+            show("process list (active, or idle > 5 min)", pl);
+            const [vars] = await c.query(`SHOW VARIABLES WHERE Variable_name IN ('innodb_lock_wait_timeout','max_connections','wait_timeout')`);
+            show("relevant variables", vars);
+            const [st] = await c.query(`SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Innodb_row_lock_waits','Innodb_row_lock_time_max','Innodb_row_lock_current_waits')`);
+            show("lock/connection status", st);
+            await c.end();
+            MJS
+            node --env-file=.env scripts/.locks-tmp.mjs 2>&1 || echo "lock inspection could not run on this box"
+            rm -f scripts/.locks-tmp.mjs
