@@ -389,3 +389,21 @@ jobs:
             MJS
             node --env-file=.env scripts/.locks-tmp.mjs 2>&1 || echo "lock inspection could not run on this box"
             rm -f scripts/.locks-tmp.mjs
+
+            echo "=============== 14. what is filling the disk (read-only) ==============="
+            echo "--- top-level dirs on the root filesystem ---"
+            sudo du -xsh /* 2>/dev/null | sort -h | tail -12
+            echo "--- /var breakdown ---"
+            sudo du -xsh /var/* 2>/dev/null | sort -h | tail -10
+            echo "--- mysql data dir and binary logs ---"
+            sudo du -sh /var/lib/mysql 2>/dev/null
+            sudo ls -la /var/lib/mysql 2>/dev/null | grep -iE "binlog|bin\.[0-9]|relay|ib_logfile|ibdata|undo|ibtmp" | awk '{print $5, $9}' | sort -n | tail -12
+            sudo du -ch /var/lib/mysql/binlog.* 2>/dev/null | tail -1
+            echo "--- logs ---"
+            sudo du -xsh /var/log /var/log/journal /var/log/nginx 2>/dev/null
+            sudo ls -laS /var/log 2>/dev/null | awk 'NR>1{print $5, $9}' | head -8
+            du -sh /home/ubuntu/.pm2/logs 2>/dev/null; ls -laS /home/ubuntu/.pm2/logs 2>/dev/null | awk 'NR>1{print $5, $9}' | head -6
+            echo "--- caches, snaps, tmp ---"
+            sudo du -xsh /var/cache/apt /var/lib/snapd /snap /tmp /var/tmp 2>/dev/null
+            echo "--- deleted-but-still-open files holding space ---"
+            sudo lsof -nP +L1 2>/dev/null | awk 'NR>1{print $7, $1, $2, $9}' | sort -n | tail -8
