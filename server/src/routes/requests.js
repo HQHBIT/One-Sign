@@ -16,6 +16,7 @@ import {
 import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
+import { deploymentOrg } from "../org.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
@@ -115,6 +116,29 @@ function dateStampsFor(fields, signedAtMs) {
   return parseDateFields(fields).map(d => ({
     type: "date", text, page: d.page || 1, x: d.x, y: d.y, w: d.w, h: d.h
   }));
+}
+
+// HQHB: when the requestor placed NO date field for a signer, the approver may
+// ask for one at signing time ({ addDate: true }). It is stamped automatically
+// directly under each signature box, in a box 3/8 of the signature's height —
+// the same proportion as the requestor's standard date field (6 mm against a
+// 16 mm signature) — so the date reads clearly smaller than the signature.
+// The fields are PERSISTED into the signer's date-field column rather than
+// stamped once: a workflow rebuilds the signed PDF from the original on every
+// signature, so a one-off stamp would vanish the moment the next signer signed.
+function wantsDate(req) {
+  const v = req.body?.addDate;
+  return (v === true || v === "true" || v === 1 || v === "1") && deploymentOrg() === "hqhb";
+}
+const AUTO_DATE_RATIO = 0.375; // date box height as a fraction of the signature box
+const AUTO_DATE_GAP = 0.4;     // gap between signature and date, in % of page height
+export function autoDateFieldsBelow(boxes) {
+  return (boxes || []).map(b => {
+    const h = Math.max(1, Number(b.h) * AUTO_DATE_RATIO);
+    let y = Number(b.y) + Number(b.h) + AUTO_DATE_GAP;
+    if (y + h > 100) y = Math.max(0, Number(b.y) - AUTO_DATE_GAP - h); // no room below → sit above
+    return { page: b.page || 1, x: Number(b.x), y, w: Number(b.w), h };
+  });
 }
 
 // A signer's signature box(es): the stored multi-box list (boxes_json) if present,
@@ -1072,6 +1096,15 @@ export async function approveRequestHandler(req, res, next) {
     const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
     const signedAt = Date.now();
 
+    // HQHB: the approver asked for a date and the requestor placed none — add one
+    // under each signature box and persist it, so the signed document and every
+    // later preview agree (see autoDateFieldsBelow).
+    if (wantsDate(req) && parseDateFields(row.signer_date_fields_json).length === 0) {
+      const auto = autoDateFieldsBelow(markerList.map(m => ({ page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h })));
+      await execute("UPDATE requests SET signer_date_fields_json = ? WHERE id = ?", [JSON.stringify(auto), row.id]);
+      row.signer_date_fields_json = JSON.stringify(auto);
+    }
+
     let signedPath = null;
     try {
       const sig = await signatureSource(req.userRow.signature_path);
@@ -1142,6 +1175,16 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     [Date.now(), req.userRow.signature_path, signer.id]
   );
 
+  // HQHB: the approver asked for a date and the requestor placed none for them —
+  // persist one under each of their signature boxes BEFORE the rebuild reads
+  // this row, so it is stamped now and survives every later signer's rebuild.
+  let autoDated = false;
+  if (wantsDate(req) && parseDateFields(signer.date_fields_json).length === 0) {
+    const auto = autoDateFieldsBelow(signerBoxes(signer));
+    await execute("UPDATE request_step_signers SET date_fields_json = ? WHERE id = ?", [JSON.stringify(auto), signer.id]);
+    autoDated = true;
+  }
+
   // Collect all signed signers in order to stamp
   const allSigned = await query(`
     SELECT sg.*, u.name AS user_name FROM request_step_signers sg
@@ -1175,6 +1218,8 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     console.error("[approve workflow] stamp failed", e);
     // Roll back the signer status so it can be retried
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
+    // …and the date we auto-added for this attempt, so a retry starts clean.
+    if (autoDated) await execute("UPDATE request_step_signers SET date_fields_json = NULL WHERE id = ?", [signer.id]);
     return res.status(500).json({ error: "Failed to stamp signature" });
   }
 

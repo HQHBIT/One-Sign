@@ -313,10 +313,12 @@ export const api = {
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
-  approveRequest(id, instant, signatureId = null) {
+  // addDate (HQHB): when the requestor placed no date field, stamp today's date
+  // in a smaller box under the signature.
+  approveRequest(id, instant, signatureId = null, addDate = false) {
     return this.fetch(`/api/requests/${id}/approve`, {
       method: "POST",
-      body: JSON.stringify({ instant: !!instant, ...(signatureId ? { signatureId } : {}) }),
+      body: JSON.stringify({ instant: !!instant, ...(signatureId ? { signatureId } : {}), ...(addDate ? { addDate: true } : {}) }),
     });
   },
   batchApproveRequests(ids, instant) {
