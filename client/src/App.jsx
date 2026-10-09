@@ -340,9 +340,9 @@ export default function App() {
     try { await api.remindRequest(id); notify("Reminder sent", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
-  const approveRequest = async (id, instant, signatureId = null) => {
+  const approveRequest = async (id, instant, signatureId = null, addDate = false) => {
     try {
-      await api.approveRequest(id, instant, signatureId);
+      await api.approveRequest(id, instant, signatureId, addDate);
       notify(instant ? "Approved!" : "Approved! You have 1 hour to change your mind.", "success");
       await refresh(user);
     }
@@ -1416,6 +1416,14 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
         </div>
         <div className="p-4 sm:p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
+          {/* The requestor's remarks explain the ask, so they come BEFORE the
+              document — the same order as the approver's review drawer. */}
+          {req.note && (
+            <div className="card p-4 text-sm mb-4">
+              <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Note from {users.find(u => u.id === req.requestorId)?.name || "the requestor"}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
+            </div>
+          )}
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
@@ -1427,7 +1435,6 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
-          {req.note && <div className="mt-4 card p-4 text-sm"><div className="text-xs tracking-wider uppercase opacity-50 mb-2">Requestor note</div>{req.note}</div>}
           {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
             <div className="mt-4 card p-4 text-sm" style={{ borderLeft: "3px solid var(--c-rust)" }}>
               <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Rejection</div>
@@ -1899,6 +1906,9 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [mySigs, setMySigs] = useState([]);
   const [sigId, setSigId] = useState(null);
   const [sigThumbs, setSigThumbs] = useState({});
+  // HQHB: stamp today's date (smaller, under the signature) when the requestor
+  // placed no date field for this signer. Opt-in, so it is a real choice.
+  const [addDate, setAddDate] = useState(false);
   useEffect(() => {
     let dead = false;
     const urls = [];
@@ -1930,6 +1940,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
     if (nextPendingUser?.userId === user.id) mySlot = nextPendingUser;
   }
   const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
+  // Offer "add date" only where it makes sense: HQHB, a PDF (dates are PDF-only),
+  // and no date field already placed for this signer by the requestor.
+  const noDateField = isWorkflow ? !((mySlot?.dateFields || []).length) : !((req.signerDateFields || []).length);
+  const showAddDate = user?.orgId === "hqhb" && !/\.xlsx?$/i.test(req.fileName || "") && noDateField;
 
   const enterPreview = async () => {
     try {
@@ -2083,15 +2097,22 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
                       ))}
                     </div>
                   )}
+                  {showAddDate && (
+                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none"
+                      title="The requestor placed no date field — tick to stamp today's date, smaller, just under your signature">
+                      <input type="checkbox" checked={addDate} onChange={e => setAddDate(e.target.checked)} />
+                      <span>Add today's date below my signature</span>
+                    </label>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId); onClose(); }}
+                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId, addDate); onClose(); }}
                     title="Sign and finalise the document immediately">
                     <Zap size={14} /> Instant Approval
                   </button>
                   <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
-                    onClick={async () => { await approveRequest(req.id, false, sigId); onClose(); }}
+                    onClick={async () => { await approveRequest(req.id, false, sigId, addDate); onClose(); }}
                     title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
                     <Clock size={14} /> Enable 1hr Rejection Window
                   </button>
