@@ -832,6 +832,12 @@ export async function authoriseAccess(user, row) {
     );
     if (auth) return true;
   }
+  // The WAQF HOD may view any document forwarded to them for Shz Saab approval.
+  // View-only: the existence of a shz_forwards row is what grants the sight.
+  if (user.isHod) {
+    const fwd = await queryOne("SELECT 1 AS ok FROM shz_forwards WHERE request_id = ?", [row.id]);
+    if (fwd) return true;
+  }
   return false;
 }
 
