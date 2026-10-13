@@ -24,6 +24,7 @@ import executiveAssistantsRoutes from "./routes/executive-assistants.js";
 import assistRoutes from "./routes/assist.js";
 import emailApproveRoutes from "./routes/email-approve.js";
 import eaFlowRoutes from "./routes/ea-flow.js";
+import shzRoutes from "./routes/shz.js";
 // import expensesRoutes from "./routes/expenses.js"; // DISABLED: expense feature commented out
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -99,6 +100,7 @@ async function main() {
   app.use("/api/assist", assistRoutes);
   app.use("/api/email-approve", emailApproveRoutes);
   app.use("/api/ea-flow", eaFlowRoutes);        // absent on any deployment other than HQHB
+  app.use("/api/shz", shzRoutes);               // "Send for Shz Saab Approval" — WAQF only
   app.use("/api", adminRoutes);
 
   // Serve built client assets in production
