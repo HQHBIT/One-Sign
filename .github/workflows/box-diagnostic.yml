@@ -113,6 +113,20 @@ jobs:
                 console.log("organisations: " + JSON.stringify(o));
                 const [u] = await c.execute("SELECT org_id, COUNT(*) AS n FROM users GROUP BY org_id");
                 console.log("users by org: " + JSON.stringify(u));
+                // Supporting documents: does the table exist, and did anything
+                // ever land in it? Separates "never uploaded" from "uploaded but
+                // not shown", which look identical from the approver_s screen.
+                try {
+                  const [a] = await c.execute("SELECT COUNT(*) AS n FROM request_attachments");
+                  console.log("request_attachments rows: " + a[0].n);
+                  const [recent] = await c.execute(
+                    "SELECT id, request_id, file_name, file_type, file_size, confidential, uploaded_at FROM request_attachments ORDER BY uploaded_at DESC LIMIT 10");
+                  for (const r of recent) console.log("  att " + r.id + " on " + r.request_id + " | " + r.file_name + " | " + r.file_size + "B | " + new Date(Number(r.uploaded_at)).toISOString());
+                  const [lastReqs] = await c.execute(
+                    "SELECT r.id, r.file_name, r.status, r.created_at, (SELECT COUNT(*) FROM request_attachments a WHERE a.request_id = r.id) AS atts FROM requests r ORDER BY r.created_at DESC LIMIT 8");
+                  console.log("most recent requests (newest first):");
+                  for (const r of lastReqs) console.log("  " + r.id + " | " + r.file_name + " | " + r.status + " | attachments=" + r.atts + " | " + new Date(Number(r.created_at)).toISOString());
+                } catch (e) { console.log("request_attachments: " + e.code + " — " + e.message); }
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
             ' 2>&1 | tail -12
