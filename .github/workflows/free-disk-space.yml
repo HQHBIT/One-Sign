@@ -1,0 +1,42 @@
+name: Free disk space (one-shot, caches and logs only)
+
+# Manual-only. Frees SAFE space on one box when its root disk is full: the apt
+# cache, the systemd journal, rotated log archives, disabled snap revisions, and
+# packages nothing depends on any more. It NEVER touches application uploads,
+# the MySQL data directory, or the swapfile. Remove once the root volume has
+# been resized — a full disk is a capacity problem, not a cleanup problem.
+
+on:
+  workflow_dispatch:
+    inputs:
+      box:
+        description: "Which box"
+        required: true
+        default: hqhb
+        type: choice
+        options: [uat, hqhb, waqf]
+
+jobs:
+  free:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free safe space on the ${{ inputs.box }} box
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
+          username: ubuntu
+          key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
+          script: |
+            set +e
+            echo "=== BEFORE ==="; df -h / | tail -1
+            echo "--- apt cache ---"; sudo apt-get clean >/dev/null 2>&1; echo "apt cache cleaned"
+            echo "--- systemd journal ---"; sudo journalctl --vacuum-size=20M 2>&1 | tail -1
+            echo "--- rotated log archives ---"
+            n=$(sudo find /var/log -type f \( -name "*.gz" -o -name "*.[0-9]" \) -print -delete 2>/dev/null | wc -l); echo "$n rotated log files removed"
+            echo "--- release deleted-but-open journal files ---"; sudo systemctl restart systemd-journald; echo "journald restarted"
+            echo "--- disabled snap revisions ---"
+            sudo snap set system refresh.retain=2 2>/dev/null
+            snap list --all 2>/dev/null | awk '/disabled/{print $1, $3}' | while read -r name rev; do sudo snap remove "$name" --revision="$rev" 2>&1 | tail -1; done
+            echo "--- packages nothing depends on (old kernels etc.) ---"; sudo apt-get autoremove --purge -y 2>&1 | grep -E "freed|0 to remove|Removing" | tail -3
+            echo "=== AFTER ==="; df -h / | tail -1
+            echo "(uploads, MySQL data and the swapfile were NOT touched)"
