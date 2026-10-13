@@ -25,6 +25,7 @@ import assistRoutes from "./routes/assist.js";
 import emailApproveRoutes from "./routes/email-approve.js";
 import eaFlowRoutes from "./routes/ea-flow.js";
 import shzRoutes from "./routes/shz.js";
+import attachmentsRoutes from "./routes/attachments.js";
 // import expensesRoutes from "./routes/expenses.js"; // DISABLED: expense feature commented out
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,9 @@ async function main() {
   app.use("/api/workflow-templates", workflowTemplatesRoutes);
   app.use("/api/users", usersRoutes);
   app.use("/api/teams", teamsRoutes);
+  // Mounted BEFORE requestsRoutes so /:id/attachments is matched here rather
+  // than falling through to a /:id route. HQHB only — 404 elsewhere.
+  app.use("/api/requests", attachmentsRoutes);
   app.use("/api/requests", requestsRoutes);
   // app.use("/api/expenses", expensesRoutes); // DISABLED: expense feature commented out
   app.use("/api/registrations", registrationsRoutes);

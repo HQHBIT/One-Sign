@@ -27,7 +27,7 @@ const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview 
 const ViewerFallback = () =>
   <div className="card p-10 text-sm opacity-50 text-center">Loading viewer…</div>;
 
-export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType, presetWorkflow, defaultConfidential = false }) {
+export function NewRequest({ user, teams, users, addRequest, notify, onDone, defaultType, presetWorkflow, defaultConfidential = false, orgId = null }) {
   const [file, setFile] = useState(null);
   const [docRotation, setDocRotation] = useState(0); // 0/90/180/270 — squared up before placing, baked in on submit
   const [mode, setMode] = useState(presetWorkflow ? "workflow" : "single"); // "single" | "workflow" | "direct"
@@ -118,6 +118,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   const readDoc = (f) => new Promise(resolve => {
     const r = new FileReader();
     r.onload = () => resolve({
+      uid: "d" + Math.random().toString(36).slice(2, 9),
       name: f.name, base64: r.result, type: f.type, blob: f,
       ext: f.name.split(".").pop().toLowerCase() === "pdf" ? "pdf" : "xlsx",
       teamId: "", markers: [],
@@ -620,7 +621,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
         docs={docs} setDocs={setDocs} teams={teams} typeSection={typeSection}
         addRequest={addRequest} notify={notify} onDone={onDone}
         requestType={requestType} confidential={confidential}
-        onAddFiles={handleFile} maxDocs={MAX_DOCS}
+        onAddFiles={handleFile} maxDocs={MAX_DOCS} orgId={orgId}
         onStartOver={() => setDocs([])}
       />
     );
@@ -1119,7 +1120,7 @@ function UserPick({ value, onPick, onClear, placeholder }) {
   );
 }
 
-function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, requestType, confidential, onAddFiles, maxDocs, onStartOver }) {
+function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, requestType, confidential, onAddFiles, maxDocs, onStartOver, orgId = null }) {
   const [routing, setRouting] = useState(null);   // null | "same" | "different"
   const [approverAll, setApproverAll] = useState(null); // {userId, name, email}
   const [active, setActive] = useState(0);
@@ -1154,8 +1155,22 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
   };
 
   const approverFor = (d) => routing === "same" ? approverAll : d.approver;
-  const docReady = (d) => d.markers.length > 0 && !!(approverFor(d) && approverFor(d).userId);
-  const allReady = routing && docs.length > 0 && docs.every(docReady);
+
+  // Supporting documents that nobody signs. An HQHB practice, so the control is
+  // absent elsewhere — and the server refuses regardless, since the routes 404
+  // off HQHB. Keyed on the DEPLOYMENT's organisation rather than user.orgId:
+  // users created on the WAQF box before org_id was set on insert still read as
+  // 'hqhb', so gating on the stored column would show this to WAQF requestors.
+  const attachmentsAllowed = orgId === "hqhb";
+  const isAttachment = (d) => attachmentsAllowed && d.mode === "attachment";
+  const signedDocs = docs.filter(d => !isAttachment(d));
+
+  const docReady = (d) => isAttachment(d)
+    ? !!d.attachTo && signedDocs.some(x => x.uid === d.attachTo)
+    : d.markers.length > 0 && !!(approverFor(d) && approverFor(d).userId);
+  // Something has to be signed: a batch of attachments alone has nothing to
+  // approve and nothing to attach to.
+  const allReady = routing && docs.length > 0 && signedDocs.length > 0 && docs.every(docReady);
   const notReadyCount = docs.filter(d => !docReady(d)).length;
 
   // ---- submit: one request per document; failures stay in the queue ----
@@ -1164,9 +1179,12 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
     const failed = [];
     const okIdx = new Set();
     const createdIds = [];
-    for (let i = 0; i < docs.length; i++) {
-      const d = docs[i];
-      setProgress("Sending " + (i + 1) + " of " + docs.length + "…");
+    // Only signed documents become requests. The rest are uploaded onto them
+    // afterwards, keyed by the uid the "attach to" picker stored.
+    const idByUid = new Map();
+    for (let i = 0; i < signedDocs.length; i++) {
+      const d = signedDocs[i];
+      setProgress("Sending " + (i + 1) + " of " + signedDocs.length + "…");
       try {
         const person = approverFor(d);
         // deferNotify: the per-document email is held back; after the loop one
@@ -1178,9 +1196,23 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
             dateFields: [] }],
           note, requestType, confidential, deferNotify: true,
         });
-        if (r?.request?.id) createdIds.push(r.request.id);
-        okIdx.add(i);
+        if (r?.request?.id) { createdIds.push(r.request.id); idByUid.set(d.uid, r.request.id); }
+        okIdx.add(docs.indexOf(d));
       } catch (e) { failed.push(d.name + ": " + (e.message || "failed")); }
+    }
+
+    // Attachments ride along. Uploaded AFTER their parent request exists but
+    // BEFORE notifyBatch below, so an approver is never told about a request
+    // whose supporting document has not landed yet.
+    for (const d of docs) {
+      if (!isAttachment(d)) continue;
+      const parentId = idByUid.get(d.attachTo);
+      if (!parentId) { failed.push(d.name + ": the document it attaches to was not sent"); continue; }
+      try {
+        setProgress("Attaching " + d.name + "…");
+        await api.addAttachment(parentId, d.blob);
+        okIdx.add(docs.indexOf(d));
+      } catch (e) { failed.push(d.name + ": " + (e.message || "could not be attached")); }
     }
     // One summary notice per signer, listing their documents by name. If this
     // fails the requests still exist and show in the approver's Awaiting list —
@@ -1262,6 +1294,35 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
         {routing && doc && (
           <Section n="03" title={"Place the signature boxes — " + doc.name}
             desc={"Document " + Math.min(active + 1, docs.length) + " of " + docs.length + ". Click-drag on the document; every drag adds another box."}>
+            {attachmentsAllowed && (
+              <div className="flex items-center gap-2 mb-3 text-xs">
+                <button type="button" onClick={() => patchDoc(active, { mode: "signature", attachTo: null })}
+                  className={"btn-ghost " + (isAttachment(doc) ? "" : "ring-2")}>Needs a signature</button>
+                <button type="button" onClick={() => patchDoc(active, { mode: "attachment", approver: null, markers: [] })}
+                  className={"btn-ghost " + (isAttachment(doc) ? "ring-2" : "")}>Send as supporting document</button>
+              </div>
+            )}
+
+            {isAttachment(doc) ? (
+              <div className="card p-4">
+                <div className="text-sm font-medium mb-1">Nobody signs this document</div>
+                <div className="text-xs opacity-70 mb-3">
+                  It goes to the approver with the document you choose below, for them to read
+                  before deciding. It is never signed and never added to the signed copy.
+                </div>
+                <select value={doc.attachTo || ""} onChange={e => patchDoc(active, { attachTo: e.target.value || null })}
+                  className="w-full">
+                  <option value="">Which document should it go with?</option>
+                  {signedDocs.map(sd => <option key={sd.uid} value={sd.uid}>{sd.name}</option>)}
+                </select>
+                {signedDocs.length === 0 && (
+                  <div className="text-xs mt-2" style={{ color: "#8B6914" }}>
+                    Every document is marked as supporting. At least one has to be signed.
+                  </div>
+                )}
+              </div>
+            ) : (
+            <>
             {routing === "different" && (
               <div className="mb-3">
                 <UserPick value={doc.approver || null}
@@ -1275,9 +1336,13 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
                 boxSpec={{ heightMm: SIGNATURE_HEIGHTS_MM.standard, aspect: DEFAULT_SIGNATURE_ASPECT }}
                 onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
             </Suspense>
+            </>
+            )}
             <div className="flex items-center justify-between mt-3 text-xs">
               <button className="btn-ghost" disabled={active === 0} onClick={() => setActive(a => a - 1)}>&lsaquo; Previous document</button>
-              <span className="opacity-60">{doc.markers.length} box{doc.markers.length === 1 ? "" : "es"} on this document</span>
+              <span className="opacity-60">{isAttachment(doc)
+                ? "Supporting document — not signed"
+                : doc.markers.length + " box" + (doc.markers.length === 1 ? "" : "es") + " on this document"}</span>
               <button className="btn-ghost" disabled={active >= docs.length - 1} onClick={() => setActive(a => a + 1)}>Next document &rsaquo;</button>
             </div>
           </Section>
@@ -1290,12 +1355,19 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
               placeholder="Optional note for the approver(s)…" className="w-full mb-3" />
             {!allReady && (
               <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.10)", color: "#8B6914" }}>
-                {notReadyCount} document{notReadyCount === 1 ? " still needs" : "s still need"} an approver and at least one signature box.
+                {signedDocs.length === 0
+                  ? "At least one document has to be signed — the rest can go as supporting documents."
+                  : notReadyCount + " document" + (notReadyCount === 1 ? " still needs" : "s still need") +
+                    " an approver and at least one signature box, or a document to be attached to."}
               </div>
             )}
             <div className="flex justify-end">
               <button className="btn-primary" disabled={!allReady || busy} onClick={submit}>
-                <Send size={14} /> {busy ? (progress || "Sending…") : "Send " + docs.length + " request" + (docs.length === 1 ? "" : "s")}
+                <Send size={14} /> {busy ? (progress || "Sending…") : (
+                  "Send " + signedDocs.length + " request" + (signedDocs.length === 1 ? "" : "s") +
+                  (docs.length - signedDocs.length > 0
+                    ? " + " + (docs.length - signedDocs.length) + " attachment" + (docs.length - signedDocs.length === 1 ? "" : "s")
+                    : ""))}
               </button>
             </div>
           </Section>
