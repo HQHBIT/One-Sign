@@ -169,7 +169,7 @@ const UNLOCK_MAX_ISSUES = 5;
 const UNLOCK_ISSUE_WINDOW_MS = 15 * 60_000;
 
 // Records the ACT of access — never any content.
-async function logAccess(req, requestId, action) {
+export async function logAccess(req, requestId, action) {
   try {
     await execute(
       "INSERT INTO confidential_access_log (request_id, user_id, action, at, ip) VALUES (?, ?, ?, ?, ?)",
@@ -212,7 +212,7 @@ function redactConfidential(hydrated, row, user) {
 const UNLOCK_REQUIRED =
   String(process.env.CONFIDENTIAL_UNLOCK_REQUIRED ?? "true").trim().toLowerCase() === "true";
 
-async function requireUnlocked(req, row) {
+export async function requireUnlocked(req, row) {
   if (!UNLOCK_REQUIRED) return null;
   const live = await queryOne(
     `SELECT 1 AS ok FROM confidential_unlocks

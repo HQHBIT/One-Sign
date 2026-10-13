@@ -44,6 +44,7 @@ import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { OrgUnavailable } from "./components/OrgUnavailable.jsx";
+import { AttachmentList } from "./components/AttachmentList.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -1530,6 +1531,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
+          <AttachmentList requestId={req.id} />
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
@@ -2157,6 +2159,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
+          <AttachmentList requestId={req.id} />
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />

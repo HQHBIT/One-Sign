@@ -408,6 +408,27 @@ async function runSchema() {
     CONSTRAINT fk_shz_requestor FOREIGN KEY (requestor_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // Supporting documents that ride along with a request but are never signed.
+  // A batch where only one document needs a signature sends the rest as these:
+  // the approver reads them to decide, and the signed artefact stays exactly
+  // the document they agreed to sign. Confidentiality is copied from the parent
+  // request at upload — a confidential request must not leak through its
+  // attachments. HQHB-only in the routes.
+  await tryExec(`CREATE TABLE IF NOT EXISTS request_attachments (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    request_id   VARCHAR(64)  NOT NULL,
+    file_name    VARCHAR(255) NOT NULL,
+    file_path    VARCHAR(255) NOT NULL,
+    file_type    ENUM('pdf','xlsx') NOT NULL,
+    file_size    BIGINT       NOT NULL DEFAULT 0,
+    confidential TINYINT(1)   NOT NULL DEFAULT 0,
+    uploaded_by  VARCHAR(64)  NOT NULL,
+    uploaded_at  BIGINT       NOT NULL,
+    INDEX idx_ra_request (request_id),
+    CONSTRAINT fk_ra_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ra_user FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
   // attaches a document and places boxes each time they use it.

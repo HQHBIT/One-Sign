@@ -263,6 +263,27 @@ export const api = {
     if (deferNotify) fd.append("deferNotify", "true");
     return this.fetch("/api/requests", { method: "POST", body: fd });
   },
+  // ---------- supporting documents that nobody signs (HQHB only) ----------
+  // A batch where only one document needs a signature sends the rest as these:
+  // they ride along on the signed document's request and the approver reads them
+  // to decide. The routes are absent (404) on any other organisation's box.
+  addAttachment(requestId, file) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return this.fetch(`/api/requests/${requestId}/attachments`, { method: "POST", body: fd });
+  },
+  attachments(requestId) {
+    return this.fetch(`/api/requests/${requestId}/attachments`).then(r => r.attachments || []);
+  },
+  removeAttachment(requestId, attachmentId) {
+    return this.fetch(`/api/requests/${requestId}/attachments/${attachmentId}`, { method: "DELETE" });
+  },
+  // An object URL, not a plain href: the route needs the bearer token, which a
+  // bare <a href> would not carry.
+  async attachmentBlob(requestId, attachmentId) {
+    const res = await this.fetch(`/api/requests/${requestId}/attachments/${attachmentId}/file`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
   // After a deferred batch: one summary email per signer, every document named.
   notifyBatch(ids) {
     return this.fetch("/api/requests/notify-batch", { method: "POST", body: JSON.stringify({ ids }) });
