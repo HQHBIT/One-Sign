@@ -126,6 +126,14 @@ jobs:
                     "SELECT r.id, r.file_name, r.status, r.created_at, (SELECT COUNT(*) FROM request_attachments a WHERE a.request_id = r.id) AS atts FROM requests r ORDER BY r.created_at DESC LIMIT 8");
                   console.log("most recent requests (newest first):");
                   for (const r of lastReqs) console.log("  " + r.id + " | " + r.file_name + " | " + r.status + " | attachments=" + r.atts + " | " + new Date(Number(r.created_at)).toISOString());
+                  // Who is allowed to see these? authoriseAccess grants the
+                  // requestor, requests.approver_id, and anyone in
+                  // request_step_signers. If a request with an attachment has no
+                  // signer rows and no approver_id, nobody but the requestor can.
+                  const [who] = await c.execute(
+                    "SELECT r.id, r.status, r.confidential, r.requestor_id, r.approver_id, (SELECT GROUP_CONCAT(sg.user_id) FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id WHERE st.request_id = r.id) AS signers FROM requests r WHERE EXISTS (SELECT 1 FROM request_attachments a WHERE a.request_id = r.id)");
+                  console.log("who may see each request that has an attachment:");
+                  for (const r of who) console.log("  " + r.id + " | status=" + r.status + " | confidential=" + r.confidential + " | requestor=" + r.requestor_id + " | approver_id=" + (r.approver_id || "NULL") + " | step_signers=" + (r.signers || "NONE"));
                 } catch (e) { console.log("request_attachments: " + e.code + " — " + e.message); }
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " — " + e.message));
