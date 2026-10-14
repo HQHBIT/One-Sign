@@ -1219,7 +1219,11 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
       if (!parentId) { failed.push(d.name + ": the document it attaches to was not sent"); continue; }
       try {
         setProgress("Attaching " + d.name + "…");
-        await api.addAttachment(parentId, d.blob);
+        // Position relative to the document it goes with, taken straight from the
+        // order in the Documents list: above it renders above, below renders below.
+        const parentDoc = docs.find(x => x.uid === parentOf(d));
+        const sortOrder = docs.indexOf(d) - docs.indexOf(parentDoc);
+        await api.addAttachment(parentId, d.blob, sortOrder);
         okIdx.add(docs.indexOf(d));
       } catch (e) { failed.push(d.name + ": " + (e.message || "could not be attached")); }
     }

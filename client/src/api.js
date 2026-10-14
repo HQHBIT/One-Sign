@@ -267,9 +267,12 @@ export const api = {
   // A batch where only one document needs a signature sends the rest as these:
   // they ride along on the signed document's request and the approver reads them
   // to decide. The routes are absent (404) on any other organisation's box.
-  addAttachment(requestId, file) {
+  // sortOrder is the position the requestor arranged, relative to the document
+  // being signed: negative renders before it, positive after.
+  addAttachment(requestId, file, sortOrder = 1) {
     const fd = new FormData();
     fd.append("file", file, file.name);
+    fd.append("sortOrder", String(sortOrder));
     return this.fetch(`/api/requests/${requestId}/attachments`, { method: "POST", body: fd });
   },
   attachments(requestId) {

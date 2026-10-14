@@ -424,10 +424,15 @@ async function runSchema() {
     confidential TINYINT(1)   NOT NULL DEFAULT 0,
     uploaded_by  VARCHAR(64)  NOT NULL,
     uploaded_at  BIGINT       NOT NULL,
+    sort_order   INT          NOT NULL DEFAULT 1,
     INDEX idx_ra_request (request_id),
     CONSTRAINT fk_ra_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
     CONSTRAINT fk_ra_user FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Where a supporting document sits relative to the document being signed, as
+  // the requestor arranged them: negative renders before it, positive after.
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN sort_order INT NOT NULL DEFAULT 1`);
 
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
