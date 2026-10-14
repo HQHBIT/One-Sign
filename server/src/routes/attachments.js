@@ -61,6 +61,9 @@ const shape = (r) => ({
   fileSize: Number(r.file_size || 0),
   confidential: !!Number(r.confidential),
   uploadedAt: Number(r.uploaded_at),
+  // Where it sits relative to the signed document, as the requestor arranged
+  // them: negative renders before it, positive after.
+  sortOrder: Number(r.sort_order ?? 1),
 });
 
 // The parent request, or a response already sent. Everything here hangs off a
@@ -111,11 +114,16 @@ router.post("/:id/attachments", ...gate, upload.single("file"), async (req, res,
       { contentType: contentTypeFor(fileType) }
     );
 
+    // The requestor sends the position they arranged; anything unparseable
+    // falls back to 1, which puts it after the signed document.
+    const rawOrder = parseInt(req.body?.sortOrder, 10);
+    const sortOrder = Number.isFinite(rawOrder) ? rawOrder : 1;
+
     await execute(
       `INSERT INTO request_attachments
-         (id, request_id, file_name, file_path, file_type, file_size, confidential, uploaded_by, uploaded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, row.id, file.originalname, storedName, fileType, file.buffer.length, confidential, req.user.id, Date.now()]
+         (id, request_id, file_name, file_path, file_type, file_size, confidential, uploaded_by, uploaded_at, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, row.id, file.originalname, storedName, fileType, file.buffer.length, confidential, req.user.id, Date.now(), sortOrder]
     );
 
     const saved = await queryOne("SELECT * FROM request_attachments WHERE id = ?", [id]);
@@ -134,7 +142,7 @@ router.get("/:id/attachments", ...gate, async (req, res, next) => {
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
 
     const rows = await query(
-      "SELECT * FROM request_attachments WHERE request_id = ? ORDER BY uploaded_at ASC", [row.id]);
+      "SELECT * FROM request_attachments WHERE request_id = ? ORDER BY sort_order ASC, uploaded_at ASC", [row.id]);
     res.json({ attachments: rows.map(shape) });
   } catch (e) { next(e); }
 });

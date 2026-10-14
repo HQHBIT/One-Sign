@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -44,7 +44,6 @@ import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { OrgUnavailable } from "./components/OrgUnavailable.jsx";
-import { AttachmentList } from "./components/AttachmentList.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -1450,6 +1449,65 @@ function buildWorkflowMarkers(req, teams, { highlightUserId } = {}) {
   return out;
 }
 
+// ============================================================
+//   SUPPORTING DOCUMENTS, SHOWN AS DOCUMENTS
+//   ------------------------------------------------------------
+//   A document sent for reading only is rendered exactly like the one being
+//   signed — same viewer, same width — rather than reduced to a link the
+//   approver has to decide to click. It carries no signature boxes and no
+//   action, because nothing is ever signed on it.
+//
+//   Position comes from the requestor's own ordering: sortOrder is negative for
+//   documents they put above the signed one and positive for below, so
+//   `place` renders the matching half around it.
+//
+//   No organisation check: the routes are absent off HQHB, so the list comes
+//   back empty and this renders nothing.
+// ============================================================
+function SupportingDocs({ requestId, place = "after", locked = false }) {
+  const [items, setItems] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    const urls = [];
+    (async () => {
+      let list = [];
+      try { list = await api.attachments(requestId); } catch { return; }
+      const mine = (list || []).filter(a => (place === "before" ? a.sortOrder < 0 : a.sortOrder >= 0));
+      const loaded = [];
+      for (const a of mine) {
+        try {
+          const url = await api.attachmentBlob(requestId, a.id);
+          urls.push(url);
+          loaded.push({ ...a, file: { name: a.fileName, base64: url, ext: a.fileType === "pdf" ? "pdf" : "xlsx" } });
+        } catch { /* one unreadable document must not hide the rest */ }
+      }
+      if (alive) setItems(loaded); else urls.forEach(u => URL.revokeObjectURL(u));
+    })();
+    // Object URLs are per-mount; releasing them on unmount keeps a long review
+    // session from holding every document it has opened.
+    return () => { alive = false; urls.forEach(u => URL.revokeObjectURL(u)); };
+  }, [requestId, place]);
+
+  // A confidential parent hides its supporting documents behind the same gate.
+  if (locked || !items.length) return null;
+
+  return (
+    <>
+      {items.map(a => (
+        <div key={a.id} className="mb-4">
+          <div className="text-xs tracking-wider uppercase opacity-50 mb-2 flex items-center gap-1.5">
+            <Paperclip size={12} /> {a.fileName} — sent for reading, not signed
+          </div>
+          <Suspense fallback={<ViewerFallback />}>
+            <DocPreview file={a.file} markers={[]} fill />
+          </Suspense>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
   // One scroller only: the drawer. The website scrollbar disappears while the
@@ -1531,7 +1589,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
-          <AttachmentList requestId={req.id} />
+          <SupportingDocs requestId={req.id} place="before" locked={locked} />
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
@@ -1543,6 +1601,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
+          <SupportingDocs requestId={req.id} place="after" locked={locked} />
           {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
             <div className="mt-4 card p-4 text-sm" style={{ borderLeft: "3px solid var(--c-rust)" }}>
               <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Rejection</div>
@@ -2159,7 +2218,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
-          <AttachmentList requestId={req.id} />
+          <SupportingDocs requestId={req.id} place="before" locked={locked} />
           {locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
@@ -2171,6 +2230,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading…</div>}
+          <SupportingDocs requestId={req.id} place="after" locked={locked} />
         </div>
 
         {/* ── Pinned action bar(s) ── */}
