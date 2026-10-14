@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useMemo, Suspense, lazy } from "react";
 import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
-  Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock
+  Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock, Paperclip
 } from "lucide-react";
 import { STEP_COLORS, REQUEST_TYPES } from "../lib/constants.js";
 import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset, setPreset } from "../lib/boxSize.js";
@@ -1165,13 +1165,22 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
   const isAttachment = (d) => attachmentsAllowed && d.mode === "attachment";
   const signedDocs = docs.filter(d => !isAttachment(d));
 
+  // With exactly one document being signed there is only one thing a supporting
+  // document could go with, so it is chosen automatically. The picker still
+  // appears when there are several, where the answer is genuinely a choice.
+  const soleSignedUid = signedDocs.length === 1 ? signedDocs[0].uid : null;
+  const parentOf = (d) => d.attachTo || soleSignedUid;
+
   const docReady = (d) => isAttachment(d)
-    ? !!d.attachTo && signedDocs.some(x => x.uid === d.attachTo)
+    ? !!parentOf(d) && signedDocs.some(x => x.uid === parentOf(d))
     : d.markers.length > 0 && !!(approverFor(d) && approverFor(d).userId);
   // Something has to be signed: a batch of attachments alone has nothing to
   // approve and nothing to attach to.
   const allReady = routing && docs.length > 0 && signedDocs.length > 0 && docs.every(docReady);
   const notReadyCount = docs.filter(d => !docReady(d)).length;
+  // Counted apart so a review-only document is never told it needs a signature.
+  const needsSigning = docs.filter(d => !isAttachment(d) && !docReady(d)).length;
+  const needsParent = docs.filter(d => isAttachment(d) && !docReady(d)).length;
 
   // ---- submit: one request per document; failures stay in the queue ----
   const submit = async () => {
@@ -1206,7 +1215,7 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
     // whose supporting document has not landed yet.
     for (const d of docs) {
       if (!isAttachment(d)) continue;
-      const parentId = idByUid.get(d.attachTo);
+      const parentId = idByUid.get(parentOf(d));
       if (!parentId) { failed.push(d.name + ": the document it attaches to was not sent"); continue; }
       try {
         setProgress("Attaching " + d.name + "…");
@@ -1241,7 +1250,10 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
         {typeSection}
 
         {/* 01 — the batch */}
-        <Section n="01" title={"Documents (" + docs.length + "/" + maxDocs + ")"} desc="Each document becomes its own request with its own tracking.">
+        <Section n="01" title={"Documents (" + docs.length + "/" + maxDocs + ")"}
+          desc={attachmentsAllowed
+            ? "Each document being signed becomes its own request. Use the 📎 on a document that only needs reading — it is sent along with the signed one and needs no signature."
+            : "Each document becomes its own request with its own tracking."}>
           <div className="flex flex-wrap items-center gap-2">
             {docs.map((d, i) => (
               <div key={i}
@@ -1250,9 +1262,25 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
                 onClick={() => setActive(i)}>
                 {d.ext === "pdf" ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
                 <span className="text-sm truncate" style={{ maxWidth: 180 }}>{d.name}</span>
-                {docReady(d)
-                  ? <span className="text-[10px] font-mono" style={{ color: "var(--c-forest)" }}>✓ {d.markers.length}</span>
-                  : <span className="text-[10px] opacity-50 font-mono">{d.markers.length || "–"}</span>}
+                {isAttachment(d)
+                  ? <span className="text-[10px] font-mono" style={{ color: "var(--c-gold)" }}>support</span>
+                  : docReady(d)
+                    ? <span className="text-[10px] font-mono" style={{ color: "var(--c-forest)" }}>✓ {d.markers.length}</span>
+                    : <span className="text-[10px] opacity-50 font-mono">{d.markers.length || "–"}</span>}
+                {attachmentsAllowed && (
+                  <button className="btn-ghost !p-0.5"
+                    title={isAttachment(d)
+                      ? "This is a supporting document — click to require a signature on it instead"
+                      : "No signature needed on this one — send it as a supporting document"}
+                    onClick={e => {
+                      e.stopPropagation();
+                      patchDoc(i, isAttachment(d)
+                        ? { mode: "signature", attachTo: null }
+                        : { mode: "attachment", approver: null, markers: [] });
+                    }}>
+                    <Paperclip size={12} style={{ opacity: isAttachment(d) ? 1 : 0.4 }} />
+                  </button>
+                )}
                 <button className="btn-ghost !p-0.5" title="Remove this document"
                   onClick={e => { e.stopPropagation(); removeDoc(i); }}><X size={12} /></button>
               </div>
@@ -1310,7 +1338,7 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
                   It goes to the approver with the document you choose below, for them to read
                   before deciding. It is never signed and never added to the signed copy.
                 </div>
-                <select value={doc.attachTo || ""} onChange={e => patchDoc(active, { attachTo: e.target.value || null })}
+                <select value={parentOf(doc) || ""} onChange={e => patchDoc(active, { attachTo: e.target.value || null })}
                   className="w-full">
                   <option value="">Which document should it go with?</option>
                   {signedDocs.map(sd => <option key={sd.uid} value={sd.uid}>{sd.name}</option>)}
@@ -1357,8 +1385,16 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
               <div className="text-xs mb-3 px-3 py-2 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.10)", color: "#8B6914" }}>
                 {signedDocs.length === 0
                   ? "At least one document has to be signed — the rest can go as supporting documents."
-                  : notReadyCount + " document" + (notReadyCount === 1 ? " still needs" : "s still need") +
-                    " an approver and at least one signature box, or a document to be attached to."}
+                  : [
+                      needsSigning > 0
+                        ? needsSigning + " document" + (needsSigning === 1 ? "" : "s") + " still " +
+                          (needsSigning === 1 ? "needs" : "need") + " an approver and at least one signature box."
+                        : null,
+                      needsParent > 0
+                        ? needsParent + " supporting document" + (needsParent === 1 ? "" : "s") + " still " +
+                          (needsParent === 1 ? "needs" : "need") + " a document to go with."
+                        : null,
+                    ].filter(Boolean).join(" ")}
               </div>
             )}
             <div className="flex justify-end">
