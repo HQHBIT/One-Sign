@@ -3694,6 +3694,33 @@ function AdminTeams({ teams, saveTeams, users, saveUsers, back, notify, onViewDo
 //   TEAM CARD — editable approvers + department members
 // ============================================================
 function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, notify }) {
+  // ---- renaming ----
+  // Everything else references a team by id, so a rename only changes the label
+  // — members, approvers and past requests are untouched. The server refuses the
+  // HOD team, whose name the Shz Saab dashboard looks up.
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(team.name || "");
+  const [savingName, setSavingName] = useState(false);
+  const startRename = () => { setDraftName(team.name || ""); setRenaming(true); };
+  const cancelRename = () => { setRenaming(false); setDraftName(team.name || ""); };
+  const commitRename = async () => {
+    // onBlur fires again while the request is in flight, and once more after
+    // the input unmounts — guard both so one edit is one request.
+    if (savingName || !renaming) return;
+    const clean = draftName.trim();
+    if (!clean || clean === (team.name || "").trim()) { cancelRename(); return; }
+    setSavingName(true);
+    try {
+      await api.renameTeam(team.id, clean);
+      setRenaming(false);
+      notify(`Renamed to "${clean}"`, "success");
+      await onChanged();
+    } catch (e) {
+      notify(e.message || "Could not rename the team", "error");
+      cancelRename();
+    } finally { setSavingName(false); }
+  };
+
   const [addApproverOpen, setAddApproverOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [approverQuery, setApproverQuery] = useState("");
@@ -3765,9 +3792,22 @@ function TeamCard({ team, teams, users, onRemove, onChanged, onViewDocuments, no
     <div className="card p-5">
       {/* Header */}
       <div className="flex justify-between items-start gap-2">
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <Building2 size={18} className="shrink-0" />
-          <div className="font-display text-lg sm:text-xl truncate">{team.name}</div>
+          {renaming ? (
+            <input autoFocus value={draftName} disabled={savingName} maxLength={191}
+              onChange={e => setDraftName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") cancelRename(); }}
+              onBlur={commitRename}
+              className="font-display text-lg sm:text-xl flex-1 min-w-0"
+              aria-label="Team name" />
+          ) : (
+            <>
+              <div className="font-display text-lg sm:text-xl truncate">{team.name}</div>
+              <button onClick={startRename} className="opacity-40 hover:opacity-100 shrink-0"
+                title="Rename this team"><Pencil size={13} /></button>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {onViewDocuments && (
