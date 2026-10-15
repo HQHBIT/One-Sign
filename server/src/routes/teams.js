@@ -73,6 +73,41 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- PATCH /:id — rename ----------
+// A team's name is not only a label. The oneAccess department resolver matches
+// an SSO department string against it, so renaming changes which department
+// lands here; and the WAQF HOD dashboard finds its team by LOWER(name) = 'hod',
+// which is why that one team is refused rather than silently emptied.
+//
+// Renaming is otherwise safe: everything else references a team by id, so
+// members, approvers and past requests are untouched.
+router.patch("/:id", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    const name = (req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ error: "name required" });
+
+    const team = await queryOne("SELECT * FROM teams WHERE id = ?", [req.params.id]);
+    if (!team) return res.status(404).json({ error: "Unknown team" });
+
+    if (String(team.name || "").trim().toLowerCase() === "hod") {
+      return res.status(400).json({
+        error: "The HOD team cannot be renamed — the Shz Saab approvals dashboard finds it by that name.",
+      });
+    }
+
+    // Scoped to the organisation, matching the UNIQUE(org_id, name) key: the
+    // same team name may legitimately exist in the other organisation.
+    const org = team.org_id || deploymentOrg();
+    const clash = await queryOne(
+      "SELECT 1 AS ok FROM teams WHERE id <> ? AND org_id = ? AND LOWER(name) = LOWER(?)",
+      [team.id, org, name]);
+    if (clash) return res.status(409).json({ error: `"${name}" already exists` });
+
+    if (name !== team.name) await execute("UPDATE teams SET name = ? WHERE id = ?", [name, team.id]);
+    res.json({ team: { id: team.id, name } });
+  } catch (e) { next(e); }
+});
+
 router.delete("/:id", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     await execute("DELETE FROM teams WHERE id = ?", [req.params.id]);

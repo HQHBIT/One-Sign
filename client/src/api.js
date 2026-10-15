@@ -150,6 +150,10 @@ export const api = {
   // -------- teams --------
   listTeams() { return this.fetch("/api/teams").then(r => r.teams); },
   createTeam(name) { return this.fetch("/api/teams", { method: "POST", body: JSON.stringify({ name }) }); },
+  // Renaming is safe for everything that points at a team by id — members,
+  // approvers and past requests all do. The server refuses the HOD team, whose
+  // name the Shz Saab dashboard looks up.
+  renameTeam(id, name) { return this.fetch(`/api/teams/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }); },
   deleteTeam(id) { return this.fetch(`/api/teams/${id}`, { method: "DELETE" }); },
   grantAuthority(teamId, userId) { return this.fetch(`/api/teams/${teamId}/authority/${userId}`, { method: "PUT" }); },
   revokeAuthority(teamId, userId) { return this.fetch(`/api/teams/${teamId}/authority/${userId}`, { method: "DELETE" }); },
