@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { X, LogIn, PenTool, FilePlus2, Upload, GitBranch, MousePointerClick, Send, ListChecks, Inbox, LifeBuoy } from "lucide-react";
+import { PDF_MAX_MB, XLSX_MAX_MB } from "../lib/constants.js";
 
 // In-app requestor guide. Replaces the old "open GitHub" Help link with a
 // self-contained, screenshot-driven walkthrough of the whole request process.
@@ -23,7 +24,7 @@ const STEPS = [
   {
     icon: Upload, n: 4, title: "Upload your document",
     img: "/help/04-upload.png",
-    body: "Click the upload box and choose your file — a PDF or an Excel (.xlsx) file, up to 14 MB. Once it's selected you'll see its name; use “Remove” if you picked the wrong one.",
+    body: `Click the upload box and choose your file — a PDF (up to ${PDF_MAX_MB} MB) or an Excel (.xlsx) file (up to ${XLSX_MAX_MB} MB). Once it's selected you'll see its name; use “Remove” if you picked the wrong one.`,
   },
   {
     icon: GitBranch, n: 5, title: "Choose how it should be approved",
