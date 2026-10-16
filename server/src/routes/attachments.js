@@ -65,7 +65,29 @@ const shape = (r) => ({
   // Where it sits relative to the signed document, as the requestor arranged
   // them: negative renders before it, positive after.
   sortOrder: Number(r.sort_order ?? 1),
+  // "Recommend changes": a supporting document may need a signature, stamped by
+  // the approval that approves the main document.
+  needsSignature: !!Number(r.needs_signature),
+  boxes: (() => { try { const a = JSON.parse(r.boxes_json || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } })(),
+  signed: !!r.signed_at,
+  signedAt: r.signed_at ? Number(r.signed_at) : null,
 });
+
+// Attachments may change while the request is still undecided: awaiting
+// approval, or returned to the requestor for changes.
+const EDITABLE = ["pending", "changes_requested"];
+
+// Signature boxes for a needs-signature attachment, validated: page >= 1 and
+// every coordinate a percentage of the page. Returns null when unusable.
+export function parseBoxes(raw) {
+  let a;
+  try { a = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return null; }
+  if (!Array.isArray(a) || !a.length || a.length > 20) return null;
+  const ok = a.every(b => b && Number(b.page || 1) >= 1
+    && [b.x, b.y, b.w, b.h].every(v => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100)
+    && Number(b.w) > 0 && Number(b.h) > 0);
+  return ok ? a.map(b => ({ page: Number(b.page || 1), x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) })) : null;
+}
 
 // The parent request, or a response already sent. Everything here hangs off a
 // request, so this is the one place that decides whether the caller may see it.
@@ -87,7 +109,7 @@ router.post("/:id/attachments", ...gate, upload.single("file"), async (req, res,
     if (row.requestor_id !== req.user.id) {
       return res.status(403).json({ error: "Only the requestor can attach a document" });
     }
-    if (row.status !== "pending") {
+    if (!EDITABLE.includes(row.status)) {
       return res.status(400).json({ error: "Attachments can only be added while the request is awaiting approval" });
     }
 
@@ -98,6 +120,15 @@ router.post("/:id/attachments", ...gate, upload.single("file"), async (req, res,
 
     const fileType = typeFor(extOf(file.originalname));
     if (!fileType) return res.status(400).json({ error: "Attachments must be PDF or Excel (.pdf, .xlsx, .xls)" });
+
+    // A supporting document that needs a signature carries the requestor's boxes.
+    const needsSignature = req.body?.needsSignature === "true" || req.body?.needsSignature === true;
+    let boxes = null;
+    if (needsSignature) {
+      if (fileType !== "pdf") return res.status(400).json({ error: "Only a PDF supporting document can be signed" });
+      boxes = parseBoxes(req.body?.boxes);
+      if (!boxes) return res.status(400).json({ error: "Place at least one signature box on the supporting document" });
+    }
 
     const [{ n }] = await query(
       "SELECT COUNT(*) AS n FROM request_attachments WHERE request_id = ?", [row.id]);
@@ -124,9 +155,10 @@ router.post("/:id/attachments", ...gate, upload.single("file"), async (req, res,
 
     await execute(
       `INSERT INTO request_attachments
-         (id, request_id, file_name, file_path, file_type, file_size, confidential, uploaded_by, uploaded_at, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, row.id, file.originalname, storedName, fileType, file.buffer.length, confidential, req.user.id, Date.now(), sortOrder]
+         (id, request_id, file_name, file_path, file_type, file_size, confidential, uploaded_by, uploaded_at, sort_order, needs_signature, boxes_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, row.id, file.originalname, storedName, fileType, file.buffer.length, confidential, req.user.id, Date.now(), sortOrder,
+        needsSignature ? 1 : 0, boxes ? JSON.stringify(boxes) : null]
     );
 
     const saved = await queryOne("SELECT * FROM request_attachments WHERE id = ?", [id]);
@@ -174,6 +206,12 @@ router.get("/:id/attachments/:attId/file", ...gate, async (req, res, next) => {
       await logAccess(req, row.id, wantsDownload ? "download" : "view");
     }
 
+    // ?signed=1 serves the copy stamped by the approval, once there is one.
+    if (req.query?.signed === "1") {
+      if (!att.signed_file_path) return res.status(404).json({ error: "Not signed yet" });
+      res.type("application/pdf");
+      return res.send(await readStored("signed", att.signed_file_path));
+    }
     res.type(contentTypeFor(att.file_type));
     res.send(await readStored("documents", att.file_path));
   } catch (e) { next(e); }
@@ -189,7 +227,7 @@ router.delete("/:id/attachments/:attId", ...gate, async (req, res, next) => {
     if (row.requestor_id !== req.user.id) {
       return res.status(403).json({ error: "Only the requestor can remove an attachment" });
     }
-    if (row.status !== "pending") {
+    if (!EDITABLE.includes(row.status)) {
       return res.status(400).json({ error: "Attachments can only be removed while the request is awaiting approval" });
     }
 

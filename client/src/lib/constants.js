@@ -25,13 +25,15 @@ export const STATUS = Object.freeze({
   PENDING: "pending",
   APPROVED_PENDING: "approved_pending", // signed but within the cooling window
   APPROVED: "approved",
-  REJECTED: "rejected"
+  REJECTED: "rejected",
+  CHANGES_REQUESTED: "changes_requested" // HQHB: sent back to the requestor
 });
 export const STATUS_LABELS = Object.freeze({
   [STATUS.PENDING]: "Pending",
   [STATUS.APPROVED]: "Approved!",
   [STATUS.APPROVED_PENDING]: "Approved! · 1h window",
-  [STATUS.REJECTED]: "Rejected"
+  [STATUS.REJECTED]: "Rejected",
+  [STATUS.CHANGES_REQUESTED]: "Changes requested"
 });
 
 // ---------- Timing windows ----------
