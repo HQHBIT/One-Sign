@@ -27,6 +27,7 @@ import emailApproveRoutes from "./routes/email-approve.js";
 import eaFlowRoutes from "./routes/ea-flow.js";
 import shzRoutes from "./routes/shz.js";
 import attachmentsRoutes from "./routes/attachments.js";
+import recommendationsRoutes from "./routes/recommendations.js";
 // import expensesRoutes from "./routes/expenses.js"; // DISABLED: expense feature commented out
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -97,6 +98,7 @@ async function main() {
   // Mounted BEFORE requestsRoutes so /:id/attachments is matched here rather
   // than falling through to a /:id route. HQHB only — 404 elsewhere.
   app.use("/api/requests", attachmentsRoutes);
+  app.use("/api/requests", recommendationsRoutes); // "Recommend changes" — HQHB only
   app.use("/api/requests", requestsRoutes);
   // app.use("/api/expenses", expensesRoutes); // DISABLED: expense feature commented out
   app.use("/api/registrations", registrationsRoutes);

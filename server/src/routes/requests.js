@@ -194,7 +194,8 @@ function redactConfidential(hydrated, row, user) {
     || (!!row.target_team_id && (user.signingAuthorityTeams || []).includes(row.target_team_id))
     || (hydrated.workflow || []).some(st => (st.signers || []).some(s => s.userId === user.id));
   if (onRoute) return hydrated;
-  return { ...hydrated, fileName: "Confidential document", note: "", marker: null };
+  // The recommendation rounds describe the content too, so they go with it.
+  return { ...hydrated, fileName: "Confidential document", note: "", marker: null, recommendations: [] };
 }
 
 // null when the viewer may proceed; otherwise the JSON body to return with 403.
@@ -243,6 +244,35 @@ async function stampAndStore({ row, stamps }) {
     { contentType: isPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
+// HQHB "Recommend changes": supporting documents the requestor marked as needing
+// a signature are signed by the SAME approval that approves the main document.
+// Called inside every approval path's stamping try-block, so a failure here
+// fails the approval exactly as a main-document stamping failure does. Once
+// signed, an attachment is never re-stamped by a later signer.
+async function stampSignedAttachments({ row, user, sig, signedAt }) {
+  const atts = await query(
+    "SELECT * FROM request_attachments WHERE request_id = ? AND needs_signature = 1 AND signed_at IS NULL",
+    [row.id]
+  );
+  for (const att of atts) {
+    let boxes = [];
+    try { boxes = JSON.parse(att.boxes_json || "[]"); } catch { boxes = []; }
+    if (!Array.isArray(boxes) || !boxes.length || att.file_type !== "pdf") continue;
+    const srcBytes = await readStored("documents", att.file_path);
+    const out = Buffer.from(await stampPdfMultiBytes({
+      srcBytes,
+      stamps: boxes.map(b => ({ ...sig, page: b.page || 1, x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h), signerName: user.name, signedAt })),
+    }));
+    const conf = Number(att.confidential) ? 1 : 0;
+    const stored = await writeStored("signed", storedNameFor(`${att.id}.signed.pdf`, conf),
+      sealIfConfidential(out, conf), { contentType: "application/pdf" });
+    await execute(
+      "UPDATE request_attachments SET signed_file_path = ?, signed_at = ?, signed_by = ? WHERE id = ?",
+      [stored, signedAt, user.id, att.id]
+    );
+  }
+}
+
 // ============================================================
 //   list (role-scoped)
 // ============================================================
@@ -267,8 +297,11 @@ router.get("/", authRequired, async (req, res, next) => {
            OR (r.status = 'pending'
                AND r.target_team_id IS NOT NULL
                AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id))
+           -- An approver who sent a document back for changes keeps sight of it
+           -- while it is with the requestor (HQHB "Recommend changes").
+           OR EXISTS (SELECT 1 FROM request_recommendations rr WHERE rr.request_id = r.id AND rr.requested_by = ?)
         ORDER BY r.created_at DESC
-      `, [u.id, u.id, u.id, u.id]);
+      `, [u.id, u.id, u.id, u.id, u.id]);
     }
     const requests = await Promise.all(
       rows.map(async r => redactConfidential(await hydrateRequest(r), r, u))
@@ -788,7 +821,7 @@ async function notifyNextSigner(requestId, fileName, requestorName, previousSign
   }).catch(e => console.error("email fail", e));
 }
 
-async function getNextPendingSigner(requestId) {
+export async function getNextPendingSigner(requestId) {
   return await queryOne(`
     SELECT sg.* FROM request_step_signers sg
     JOIN request_steps st ON st.id = sg.step_id
@@ -799,7 +832,7 @@ async function getNextPendingSigner(requestId) {
 
 // May this person reject this request, in its current state? See the note
 // above the reject route for the rule.
-async function canReject(user, row) {
+export async function canReject(user, row) {
   if (row.status === "approved_pending") return row.approver_id === user.id;
   if (row.status !== "pending") return false;
   const next = await getNextPendingSigner(row.id);
@@ -838,6 +871,12 @@ export async function authoriseAccess(user, row) {
     );
     if (auth) return true;
   }
+  // The approver who recommended changes has already read it, and reviews the
+  // revision when it comes back.
+  const rec = await queryOne(
+    "SELECT 1 AS ok FROM request_recommendations WHERE request_id = ? AND requested_by = ? LIMIT 1",
+    [row.id, user.id]);
+  if (rec) return true;
   // The WAQF HOD may view any document forwarded to them for Shz Saab approval.
   // View-only: the existence of a shz_forwards row is what grants the sight.
   if (user.isHod) {
@@ -1129,6 +1168,7 @@ export async function approveRequestHandler(req, res, next) {
           ...dateStampsFor(row.signer_date_fields_json, signedAt)
         ]
       });
+      await stampSignedAttachments({ row, user: req.user, sig, signedAt });
     } catch (e) {
       console.error("[approve] stamp failed", e);
       return res.status(500).json({ error: "Failed to stamp signature" });
@@ -1226,6 +1266,8 @@ async function approveWorkflowStep({ req, res, row, signer }) {
       ];
     });
     signedPath = await stampAndStore({ row, stamps });
+    // Supporting documents marked "needs signature" are signed by this approval.
+    await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
     // Roll back the signer status so it can be retried
@@ -1343,6 +1385,7 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
                 ...dateStampsFor(row.signer_date_fields_json, signedAt)
               ]
             });
+            await stampSignedAttachments({ row, user: req.user, sig, signedAt });
           } catch (e) {
             results.failed.push({ id, error: "Stamp failed" });
             continue;
@@ -1403,6 +1446,8 @@ async function approveWorkflowStepInline({ req, row, signer }) {
       ];
     });
     signedPath = await stampAndStore({ row, stamps });
+    // Supporting documents marked "needs signature" are signed by this approval.
+    await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     return { error: "Stamp failed" };
@@ -1581,7 +1626,8 @@ router.post("/:id/cancel", authRequired, requireRole("requestor", "executive_ass
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
     if (row.requestor_id !== req.user.id) return res.status(403).json({ error: "Not your request" });
-    if (row.status !== "pending") return res.status(400).json({ error: "Only a pending request can be withdrawn" });
+    // A request returned for changes is the requestor's to withdraw too.
+    if (!["pending", "changes_requested"].includes(row.status)) return res.status(400).json({ error: "Only a pending request can be withdrawn" });
 
     await execute("UPDATE requests SET status = 'withdrawn', withdrawn_at = ? WHERE id = ?", [Date.now(), row.id]);
     // Close any open steps/signers so nothing lingers as actionable.

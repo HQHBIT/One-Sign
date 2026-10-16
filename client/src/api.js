@@ -18,7 +18,8 @@ export const api = {
   // -------- low-level fetch --------
   async fetch(path, opts = {}) {
     const headers = { ...(opts.headers || {}) };
-    if (_token) headers.Authorization = `Bearer ${_token}`;
+    const sentToken = _token;
+    if (sentToken) headers.Authorization = `Bearer ${sentToken}`;
     if (opts.body && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
       headers["Content-Type"] = "application/json";
     }
@@ -28,8 +29,13 @@ export const api = {
     // instead of treating it as session expiry.
     const isAuthRequest = path.startsWith("/api/auth/login");
     if (res.status === 401 && !isAuthRequest) {
-      _token = null; localStorage.removeItem(TOKEN_KEY);
-      _onLogout?.();
+      // Several requests fly at once on boot. Only the first 401 for the token
+      // still in use signs out and announces it — the rest, and any stragglers
+      // from a session already replaced by a fresh sign-in, stay quiet.
+      if (sentToken && _token === sentToken) {
+        _token = null; localStorage.removeItem(TOKEN_KEY);
+        _onLogout?.();
+      }
       throw Object.assign(new Error("Session expired"), { status: 401 });
     }
     if (!res.ok) {
@@ -273,10 +279,16 @@ export const api = {
   // to decide. The routes are absent (404) on any other organisation's box.
   // sortOrder is the position the requestor arranged, relative to the document
   // being signed: negative renders before it, positive after.
-  addAttachment(requestId, file, sortOrder = 1) {
+  // opts.needsSignature + opts.boxes: a supporting PDF the approver signs with
+  // the same approval (added while a request is returned for changes).
+  addAttachment(requestId, file, sortOrder = 1, opts = {}) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     fd.append("sortOrder", String(sortOrder));
+    if (opts.needsSignature) {
+      fd.append("needsSignature", "true");
+      fd.append("boxes", JSON.stringify(opts.boxes || []));
+    }
     return this.fetch(`/api/requests/${requestId}/attachments`, { method: "POST", body: fd });
   },
   attachments(requestId) {
@@ -287,9 +299,25 @@ export const api = {
   },
   // An object URL, not a plain href: the route needs the bearer token, which a
   // bare <a href> would not carry.
-  async attachmentBlob(requestId, attachmentId) {
-    const res = await this.fetch(`/api/requests/${requestId}/attachments/${attachmentId}/file`, { raw: true });
+  // signed: the copy stamped by the approval, once there is one.
+  async attachmentBlob(requestId, attachmentId, signed = false) {
+    const res = await this.fetch(`/api/requests/${requestId}/attachments/${attachmentId}/file${signed ? "?signed=1" : ""}`, { raw: true });
     return URL.createObjectURL(await res.blob());
+  },
+  // ---------- "Recommend changes" (HQHB only) ----------
+  // The approver whose turn it is sends the request back with what to change.
+  recommendChanges(id, recommendation) {
+    return this.fetch(`/api/requests/${id}/recommend`, { method: "POST", body: JSON.stringify({ recommendation }) });
+  },
+  // The requestor sends it back to the same approver: a reply, and optionally a
+  // revised main document (only while nobody has signed) with the approver's
+  // boxes placed on it.
+  resubmitRequest(id, { reply, file, boxes } = {}) {
+    const fd = new FormData();
+    if (reply) fd.append("reply", reply);
+    if (file) fd.append("file", file, file.name);
+    if (file && boxes?.length) fd.append("boxes", JSON.stringify(boxes));
+    return this.fetch(`/api/requests/${id}/resubmit`, { method: "POST", body: fd });
   },
   // After a deferred batch: one summary email per signer, every document named.
   notifyBatch(ids) {

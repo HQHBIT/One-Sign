@@ -317,7 +317,10 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests ADD COLUMN signer_date_fields_json TEXT NULL`);
 
   // Requestor can withdraw a still-pending request ('withdrawn' status + timestamp).
-  await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn') NOT NULL`);
+  // 'changes_requested' (HQHB): an approver sent it back with recommendations; it
+  // sits with the requestor until they resubmit. Appended last so existing rows
+  // keep their values.
+  await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn','changes_requested') NOT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
 
   // Optional voice note recorded by the approver when rejecting.
@@ -433,6 +436,32 @@ async function runSchema() {
   // Where a supporting document sits relative to the document being signed, as
   // the requestor arranged them: negative renders before it, positive after.
   await tryExec(`ALTER TABLE request_attachments ADD COLUMN sort_order INT NOT NULL DEFAULT 1`);
+
+  // ---------- Recommend changes (HQHB) ----------
+  // A supporting document may need a signature: the requestor places box(es) and
+  // the approval that approves the main document stamps it too.
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN needs_signature TINYINT(1) NOT NULL DEFAULT 0`);
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN boxes_json TEXT NULL`);
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN signed_file_path VARCHAR(255) NULL`);
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN signed_at BIGINT NULL`);
+  await tryExec(`ALTER TABLE request_attachments ADD COLUMN signed_by VARCHAR(64) NULL`);
+
+  // One row per round of "please change this": who asked, what, when, and how
+  // the requestor answered. The request's own status says where it sits now;
+  // this keeps the conversation.
+  await tryExec(`CREATE TABLE IF NOT EXISTS request_recommendations (
+    id                VARCHAR(64)  NOT NULL PRIMARY KEY,
+    request_id        VARCHAR(64)  NOT NULL,
+    round             INT          NOT NULL,
+    requested_by      VARCHAR(64)  NOT NULL,
+    requested_at      BIGINT       NOT NULL,
+    recommendation    TEXT         NOT NULL,
+    resubmitted_at    BIGINT       NULL,
+    reply             TEXT         NULL,
+    document_replaced TINYINT(1)   NOT NULL DEFAULT 0,
+    INDEX idx_rr_request (request_id),
+    CONSTRAINT fk_rr_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
@@ -926,6 +955,13 @@ function parseJsonArr(json) {
 
 export async function hydrateRequest(row) {
   if (!row) return null;
+  // Rounds of "please change this" (HQHB). Empty everywhere else.
+  const [recs] = await pool.execute(
+    `SELECT r.*, u.name AS requested_by_name FROM request_recommendations r
+       LEFT JOIN users u ON u.id = r.requested_by
+      WHERE r.request_id = ? ORDER BY r.round ASC`,
+    [row.id]
+  );
   const [rems] = await pool.execute(
     "SELECT sent_at FROM reminders WHERE request_id = ? ORDER BY sent_at ASC",
     [row.id]
@@ -1010,6 +1046,17 @@ export async function hydrateRequest(row) {
     confidential: !!row.confidential,
     instantApproval: !!row.instant_approval,
     currentStep: Number(row.current_step || 0),
-    workflow: stepsHydrated
+    workflow: stepsHydrated,
+    recommendations: recs.map(r => ({
+      id: r.id,
+      round: Number(r.round),
+      requestedBy: r.requested_by,
+      requestedByName: r.requested_by_name || null,
+      requestedAt: Number(r.requested_at),
+      recommendation: r.recommendation,
+      resubmittedAt: r.resubmitted_at ? Number(r.resubmitted_at) : null,
+      reply: r.reply || "",
+      documentReplaced: !!Number(r.document_replaced),
+    }))
   };
 }

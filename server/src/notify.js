@@ -36,6 +36,16 @@ function inAppText(template, ctx = {}) {
       return { title: `Rejected: ${f}`, body: ctx.reason ? `Reason: ${ctx.reason}` : `Rejected by ${ctx.approverName || "the approver"}.` };
     case "reminder":
       return { title: `Reminder: ${f}`, body: `Still awaiting your signature${ctx.requestorName ? ` — from ${ctx.requestorName}` : ""}.` };
+    // HQHB "Recommend changes". A confidential request never shows what to change.
+    case "changes_requested":
+      return {
+        title: `Changes requested: ${f}`,
+        body: ctx.confidential || !ctx.recommendation
+          ? `${ctx.approverName || "The approver"} asked for changes. Open it from "Returned for changes".`
+          : `${ctx.approverName || "The approver"}: ${ctx.recommendation}`,
+      };
+    case "resubmitted":
+      return { title: `Resubmitted: ${f}`, body: `${ctx.requestorName || "The requestor"} made the changes you asked for — it's back with you.` };
     default:
       return { title: f, body: null };
   }

@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -59,6 +59,9 @@ import { PasswordResetModal } from "./components/PasswordResetModal.jsx";
 
 // Forms — multi-step wizards and the big create flow
 import { NewRequest, teamSigners, ord } from "./forms/NewRequest.jsx";
+import { ReviseRequest } from "./forms/ReviseRequest.jsx";
+import { RecommendationHistory } from "./components/RecommendationHistory.jsx";
+import { setDeploymentOrg, isHqhbBox } from "./lib/deployment.js";
 import { OnboardUserWizard } from "./forms/OnboardUserWizard.jsx";
 
 // Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
@@ -127,8 +130,12 @@ export default function App() {
   const [emailApproveToken, setEmailApproveToken] = useState(EMAIL_APPROVE_TOKEN);
 
   const notify = useCallback((msg, kind = "info") => {
+    // An expired session is announced once, by onAuthExpired below; callers that
+    // catch the same 401 and pass its message on would otherwise stack copies.
+    if (msg === "Session expired") return;
     const id = uid("t");
-    setToasts(t => [...t, { msg, kind, id }]);
+    // The same message already on screen is not shown twice.
+    setToasts(t => (t.some(x => x.msg === msg && x.kind === kind) ? t : [...t, { msg, kind, id }]));
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3800);
   }, []);
 
@@ -290,7 +297,7 @@ export default function App() {
   useEffect(() => {
     let alive = true;
     api.authConfig()
-      .then(cfg => { if (alive) setOrgId(cfg?.org?.id || null); })
+      .then(cfg => { if (alive) { setDeploymentOrg(cfg?.org?.id); setOrgId(cfg?.org?.id || null); } })
       .catch(() => { if (alive) setOrgId(null); });
     return () => { alive = false; };
   }, []);
@@ -412,6 +419,12 @@ export default function App() {
     try { await api.rejectRequest(id, reason, voice); notify("Request rejected", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
   };
+  // HQHB: send the request back to the requestor with what to change. Resolves
+  // true on success so the drawer closes only then.
+  const recommendChanges = async (id, text) => {
+    try { await api.recommendChanges(id, text); notify("Sent back to the requestor for changes", "success"); await refresh(user); return true; }
+    catch (e) { notify(e.message, "error"); return false; }
+  };
   const undoApproval = async id => {
     try { await api.withdrawRequest(id); notify("Approval withdrawn", "success"); await refresh(user); }
     catch (e) { notify(e.message, "error"); }
@@ -481,7 +494,7 @@ export default function App() {
           addRequest={createRequest}
           sendReminder={sendReminder}
           cancelRequest={cancelRequest}
-          approveRequest={approveRequest} rejectRequest={rejectRequest}
+          approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges}
           undoApproval={undoApproval} forceFinalize={forceFinalize}
           notify={notify}
           refresh={() => refresh(user)}
@@ -489,9 +502,12 @@ export default function App() {
         />
       )}
       {user && deepLinkReq && (
-        canActOnRequest(deepLinkReq, user)
+        deepLinkReq.status === "changes_requested" && deepLinkReq.requestorId === user.id
+          ? <ReviseRequest req={deepLinkReq} users={users} markers={buildWorkflowMarkers(deepLinkReq, teams)}
+              onClose={() => setDeepLinkReq(null)} onDone={() => refresh(user)} notify={notify} />
+          : canActOnRequest(deepLinkReq, user)
           ? <ApproveDrawer req={deepLinkReq} user={user} users={users} teams={teams}
-              approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+              approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
               onClose={() => setDeepLinkReq(null)} notify={notify} />
           : <PreviewDrawer user={user} req={deepLinkReq} users={users} teams={teams} onClose={() => setDeepLinkReq(null)} />
       )}
@@ -1081,6 +1097,8 @@ function RequestorView(props) {
   const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
   const my = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
   const pending = my.filter(r => r.status === "pending");
+  // HQHB: sent back by an approver, waiting on me to revise and resubmit.
+  const returned = my.filter(r => r.status === "changes_requested");
   // Two separate lists: requests I RAISED that are approved, and documents I was
   // asked to sign and signed (someone else's request).
   const iSigned = r => iSignedInWorkflow(r, user.id);
@@ -1106,6 +1124,7 @@ function RequestorView(props) {
   if (tab === "approved") return <ApprovedList {...props} back={() => setTab("home")} items={myApproved} title="My approved requests" />;
   if (tab === "signed") return <ApprovedList {...props} back={() => setTab("home")} items={mySigned} title="My signed documents" />;
   if (tab === "rejected") return <RejectedList {...props} back={() => setTab("home")} items={my.filter(r => r.status === "rejected")} />;
+  if (tab === "returned") return <PendingList {...props} back={() => setTab("home")} items={returned} title="Returned for changes" />;
 
   const inWindow = my.filter(r => r.status === "approved_pending").length;
   const rejectedCount = my.filter(r => r.status === "rejected").length;
@@ -1114,6 +1133,7 @@ function RequestorView(props) {
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
     { key: "selfsign", icon: PenTool, title: "Sign your documents", desc: "Upload a PDF or Excel file, add your signature, download it — no approvals.", color: "var(--c-gold)" },
     { key: "awaiting-sig", icon: Stamp, title: "Awaiting your signature", desc: "Requests sent directly to you to sign.", badge: awaitingMySig.length },
+    ...(isHqhbBox() || returned.length ? [{ key: "returned", icon: RotateCcw, title: "Returned for changes", desc: "An approver asked for changes — revise and resubmit.", badge: returned.length, color: returned.length ? "#b45309" : undefined }] : []),
     { key: "pending", icon: Clock, title: "Pending requests", desc: "Track what's awaiting signature. Send reminders every 24 hours.", badge: pending.length + inWindow },
     { key: "approved", icon: CheckCircle, title: "My approved requests", desc: "Documents you raised that are signed and finalised.", badge: myApproved.length },
     { key: "signed", icon: PenTool, title: "My signed documents", desc: "Documents sent to you that you have signed.", badge: mySigned.length }
@@ -1124,6 +1144,8 @@ function RequestorView(props) {
       <Hero title={`Welcome back, ${greetName(user.name)}`}
         subtitle={awaitingMySig.length
           ? `${awaitingMySig.length} document${awaitingMySig.length === 1 ? "" : "s"} waiting for your signature.`
+          : returned.length
+            ? `${returned.length} request${returned.length === 1 ? " was" : "s were"} returned to you for changes.`
           : pending.length
             ? `${pending.length} of your request${pending.length === 1 ? " is" : "s are"} out for signature.`
             : "What would you like to do today?"} />
@@ -1131,10 +1153,13 @@ function RequestorView(props) {
       <StatStrip stats={[
         { label: "Awaiting me", value: awaitingMySig.length, onClick: () => setTab("awaiting-sig"), color: "var(--c-gold)" },
         { label: "Pending", value: pending.length, onClick: () => setTab("pending") },
+        ...(isHqhbBox() ? [{ label: "Returned", value: returned.length, onClick: () => setTab("returned"), color: "#b45309" }] : []),
         { label: "In 1h window", value: inWindow, onClick: () => setTab("pending"), color: "#8B4A14" },
         { label: "Approved", value: myApproved.length, onClick: () => setTab("approved"), color: "var(--c-forest)" },
         { label: "Rejected", value: rejectedCount, onClick: () => setTab("rejected"), color: "var(--c-rust)" },
       ]} />
+
+      <ReturnedBlock items={returned} teams={props.teams} users={props.users} onOpen={() => setTab("returned")} />
 
       {/* Action-first: documents waiting for MY signature come before everything */}
       {awaitingMySig.length > 0 && (
@@ -1219,8 +1244,38 @@ function RecentActivity({ my, teams }) {
 // ============================================================
 //   PENDING · APPROVED · REJECTED LISTS (Requestor)
 // ============================================================
-function PendingList({ items, teams, users, user, sendReminder, cancelRequest, back, notify, title = "Pending requests" }) {
+// Returned-for-changes requests, shown first on the home screen so the ask is
+// never buried under the tiles.
+function ReturnedBlock({ items, teams, users, onOpen }) {
+  if (!items.length) return null;
+  return (
+    <div className="mt-8">
+      <h3 className="font-display text-2xl mb-4">Returned for changes</h3>
+      <div className="card overflow-hidden" style={{ borderLeft: "3px solid #d97706" }}>
+        {items.slice(0, 3).map((r, i) => {
+          const last = [...(r.recommendations || [])].reverse().find(x => !x.resubmittedAt);
+          return (
+            <div key={r.id}>
+              <RequestRow r={r} teams={teams} users={users} i={i}
+                actions={<button className="btn-primary text-xs" onClick={onOpen}>Revise &amp; resubmit <ArrowRight size={12} /></button>} />
+              {last && (
+                <div className="px-5 pb-3 -mt-1 text-xs opacity-70 flex gap-1.5">
+                  <MessageSquare size={12} className="shrink-0 mt-0.5" />
+                  <span className="line-clamp-2">{last.requestedByName || "The approver"}: {last.recommendation}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PendingList({ items, teams, users, user, sendReminder, cancelRequest, refresh, back, notify, title = "Pending requests" }) {
   const [open, setOpen] = useState(null);
+  const [revisingId, setRevisingId] = useState(null);
+  const revising = items.find(r => r.id === revisingId);
   return (
     <div>
       <BackHeader back={back} title={title} step={`${items.length} total`} />
@@ -1230,6 +1285,11 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
+                  {r.status === "changes_requested" && r.requestorId === user?.id && (
+                    <button className="btn-primary text-xs" onClick={() => setRevisingId(r.id)}>
+                      <RotateCcw size={12} /> Revise &amp; resubmit
+                    </button>
+                  )}
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                   {r.status === "pending" && (
                     <button className="btn-gold text-xs" onClick={() => sendReminder(r.id)}>
@@ -1237,7 +1297,7 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
                     </button>
                   )}
                   {/* Requestor can withdraw their own request while it's still pending. */}
-                  {r.status === "pending" && cancelRequest && r.requestorId === user?.id && (
+                  {(r.status === "pending" || r.status === "changes_requested") && cancelRequest && r.requestorId === user?.id && (
                     <button className="btn-ghost text-xs" style={{ color: "var(--c-rust-deep, #7A1F1F)" }} onClick={() => cancelRequest(r.id)}>
                       <Undo2 size={12} /> Withdraw
                     </button>
@@ -1250,6 +1310,8 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, b
         </div>
       )}
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
+      {revising && <ReviseRequest req={revising} users={users} markers={buildWorkflowMarkers(revising, teams)}
+        onClose={() => setRevisingId(null)} onDone={refresh} notify={notify} />}
     </div>
   );
 }
@@ -1479,7 +1541,8 @@ function SupportingDocs({ requestId, place = "after", locked = false }) {
       const loaded = [];
       for (const a of mine) {
         try {
-          const url = await api.attachmentBlob(requestId, a.id);
+          // A supporting document signed by the approval shows its signed copy.
+          const url = await api.attachmentBlob(requestId, a.id, a.signed);
           urls.push(url);
           loaded.push({ ...a, file: { name: a.fileName, base64: url, ext: a.fileType === "pdf" ? "pdf" : "xlsx" } });
         } catch { /* one unreadable document must not hide the rest */ }
@@ -1499,10 +1562,15 @@ function SupportingDocs({ requestId, place = "after", locked = false }) {
       {items.map(a => (
         <div key={a.id} className="mb-4">
           <div className="text-xs tracking-wider uppercase opacity-50 mb-2 flex items-center gap-1.5">
-            <Paperclip size={12} /> {a.fileName} — sent for reading, not signed
+            <Paperclip size={12} /> {a.fileName} — {a.signed
+              ? "signed with this approval"
+              : a.needsSignature ? "signed with this approval when approved" : "sent for reading, not signed"}
           </div>
           <Suspense fallback={<ViewerFallback />}>
-            <DocPreview file={a.file} markers={[]} fill />
+            <DocPreview file={a.file} fill
+              markers={a.needsSignature && !a.signed
+                ? a.boxes.map((b, i) => ({ ...b, id: `att-${a.id}-${i}`, page: b.page || 1, label: a.boxes.length > 1 ? `SIGN HERE #${i + 1}` : "SIGN HERE" }))
+                : []} />
           </Suspense>
         </div>
       ))}
@@ -1583,6 +1651,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
         </div>
         <div className="p-4 sm:p-6">
           {req.workflow?.length > 0 && <WorkflowSummary req={req} teams={teams} />}
+          <RecommendationHistory recs={req.recommendations} requestorName={req.requestorName || users.find(u => u.id === req.requestorId)?.name} />
           {/* The requestor's remarks explain the ask, so they come BEFORE the
               document — the same order as the approver's review drawer. */}
           {req.note && (
@@ -1627,7 +1696,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
 //   APPROVER VIEW
 // ============================================================
 function ApproverView(props) {
-  const { user, requests, teams, users, notify, approveRequest, rejectRequest, undoApproval } = props;
+  const { user, requests, teams, users, notify, approveRequest, rejectRequest, recommendChanges, undoApproval } = props;
   const [tab, setTab] = useState("home");
   const [newType, setNewType] = useState(null);
   const [presetTpl, setPresetTpl] = useState(null); // saved workflow being used for a new request
@@ -1650,7 +1719,11 @@ function ApproverView(props) {
   });
   // Requests I raised myself, to track.
   const myRequests = requests.filter(r => r.requestorId === user.id && r.status !== "withdrawn");
-  const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length;
+  const myReturned = myRequests.filter(r => r.status === "changes_requested");
+  const myOpen = myRequests.filter(r => r.status === "pending" || r.status === "approved_pending").length + myReturned.length;
+  // HQHB: what I sent back for changes, now with the requestor.
+  const sentBack = requests.filter(r => r.status === "changes_requested" && r.requestorId !== user.id
+    && (r.recommendations || []).some(x => x.requestedBy === user.id && !x.resubmittedAt));
   // Only what I can act on NOW. Being on the route isn't enough — a request I've
   // already signed, or one sitting with an earlier signer, is not my pending work.
   const pending = mine.filter(r => isMyTurn(r, user.id, user.signingAuthorityTeams));
@@ -1666,7 +1739,7 @@ function ApproverView(props) {
     onUse={tpl => { setPresetTpl(tpl); setTab("new"); }} />;
   if (tab === "selfsign") return <SelfSignDoc user={user} notify={notify} back={() => setTab("home")} />;
   if (tab === "my-requests") return <PendingList {...props} back={() => setTab("home")} items={myRequests} title="My requests" />;
-  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} waiting={waitingOnOthers} back={() => setTab("home")} />;
+  if (tab === "pending") return <ApproverPending {...props} items={pending.concat(pendingApproved)} waiting={waitingOnOthers} returned={sentBack} back={() => setTab("home")} />;
   if (tab === "approved") return <ApproverApproved {...props} items={approved.concat(pendingApproved)} back={() => setTab("home")} />;
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
@@ -1699,6 +1772,8 @@ function ApproverView(props) {
         { label: "My requests", value: myOpen, onClick: () => setTab("my-requests") },
       ]} />
 
+      <ReturnedBlock items={myReturned} teams={teams} users={users} onOpen={() => setTab("my-requests")} />
+
       {/* Awaiting your approval — FIRST, so what needs action is never buried */}
       <div className="mt-8">
         <div className="flex items-baseline justify-between mb-4">
@@ -1726,7 +1801,7 @@ function ApproverView(props) {
       </div>
 
       {quickOpen && <ApproveDrawer req={quickOpen} user={user} users={users} teams={teams}
-        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
         onClose={() => setQuickOpenId(null)} notify={notify} />}
     </div>
   );
@@ -1734,7 +1809,7 @@ function ApproverView(props) {
 
 // Requestor-facing list of direct requests waiting for THIS user's signature.
 // Reuses the role-agnostic ApproveDrawer for the actual review + sign.
-function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, undoApproval, back, notify }) {
+function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, back, notify }) {
   const [openId, setOpenId] = useState(null);
   const open = items.find(r => r.id === openId);
   return (
@@ -1755,13 +1830,13 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
         </div>
       )}
       {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
-        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
         onClose={() => setOpenId(null)} notify={notify} />}
     </div>
   );
 }
 
-function ApproverPending({ items, waiting = [], user, users, teams, approveRequest, rejectRequest, undoApproval, refresh, back, notify }) {
+function ApproverPending({ items, waiting = [], returned = [], user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, refresh, back, notify }) {
   const [openId, setOpenId] = useState(null);
   const [filterType, setFilterType] = useState("all");
   const [selected, setSelected] = useState(() => new Set());
@@ -1871,6 +1946,22 @@ function ApproverPending({ items, waiting = [], user, users, teams, approveReque
         </div>
       )}
 
+      {/* HQHB: sent back for changes — with the requestor, returns here on resubmit. */}
+      {returned.length > 0 && (
+        <div className="mt-8">
+          <div className="text-xs tracking-widest uppercase opacity-50 mb-2">
+            Sent back for changes · with the requestor ({returned.length})
+          </div>
+          <div className="card overflow-hidden" style={{ opacity: 0.75 }}>
+            {returned.map((r, i) => (
+              <div key={r.id} className={i > 0 ? "border-t" : ""} style={{ borderColor: "var(--c-ink-08)" }}>
+                <RequestRow r={r} teams={teams} users={users} i={0} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Documents I've already signed that have moved on to the next signer.
           Kept visible so signing isn't a dead end — but out of the count above,
           since none of it is mine to act on. */}
@@ -1890,7 +1981,7 @@ function ApproverPending({ items, waiting = [], user, users, teams, approveReque
       )}
 
       {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
-        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
         onClose={() => setOpenId(null)} notify={notify} />}
     </div>
   );
@@ -2027,7 +2118,7 @@ function VoiceNote({ requestId }) {
   return <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" />;
 }
 
-function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, undoApproval, onClose, notify }) {
+function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, onClose, notify }) {
   const [file, setFile] = useState(null);
   // Same single-scroller rule as PreviewDrawer.
   useScrollLock();
@@ -2036,6 +2127,12 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const [reason, setReason] = useState("");
   const [voiceBlob, setVoiceBlob] = useState(null);
   const [rejBusy, setRejBusy] = useState(false);
+  // HQHB: Approve · Reject · Recommend changes. Approve signs and finalises at
+  // once — there is no 1-hour window on this box.
+  const hqhb = isHqhbBox();
+  const [recOpen, setRecOpen] = useState(false);
+  const [recText, setRecText] = useState("");
+  const [recBusy, setRecBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [sigUrl, setSigUrl] = useState(null);
   const bodyRef = useRef(null);
@@ -2210,6 +2307,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {/* ── Single scrollable body ── */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
           {isWorkflow && <WorkflowSummary req={req} teams={teams} />}
+          <RecommendationHistory recs={req.recommendations} requestorName={req.requestorName || users.find(u => u.id === req.requestorId)?.name} />
           {/* The requestor's note explains WHY they are asking, so it belongs
               before the document rather than after it — an approver should read
               the ask before they read the paperwork, not scroll past a document
@@ -2280,15 +2378,25 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
                 </div>
                 <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-ghost" onClick={() => setPreviewing(false)}><ArrowLeft size={14} /> <span className="hidden sm:inline">Go </span>back</button>
-                  <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId, addDate); onClose(); }}
-                    title="Sign and finalise the document immediately">
-                    <Zap size={14} /> Instant Approval
-                  </button>
-                  <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
-                    onClick={async () => { await approveRequest(req.id, false, sigId, addDate); onClose(); }}
-                    title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
-                    <Clock size={14} /> Enable 1hr Rejection Window
-                  </button>
+                  {hqhb ? (
+                    <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
+                      onClick={async () => { await approveRequest(req.id, true, sigId, addDate); onClose(); }}
+                      title="Sign and finalise the document now">
+                      <CheckCircle size={14} /> Approve
+                    </button>
+                  ) : (
+                    <>
+                      <button className="btn-primary" onClick={async () => { await approveRequest(req.id, true, sigId, addDate); onClose(); }}
+                        title="Sign and finalise the document immediately">
+                        <Zap size={14} /> Instant Approval
+                      </button>
+                      <button className="btn-primary" style={{ backgroundColor: "var(--c-forest)" }}
+                        onClick={async () => { await approveRequest(req.id, false, sigId, addDate); onClose(); }}
+                        title="Sign now — you keep 1 hour to withdraw or reject before it finalises">
+                        <Clock size={14} /> Enable 1hr Rejection Window
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             ) : (
@@ -2298,8 +2406,14 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
                     ? "Your signature will be stamped at the highlighted position."
                     : "Your signature will be stamped at the marked position."}
                 </div>
-                <div className="flex gap-2 sm:gap-3 shrink-0 justify-end">
+                <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
+                  {hqhb && recommendChanges && (
+                    <button className="btn-gold" onClick={() => setRecOpen(true)}
+                      title="Send it back to the requestor with what needs to change">
+                      <MessageSquare size={14} /> <span className="hidden sm:inline">Recommend changes</span><span className="sm:hidden">Changes</span>
+                    </button>
+                  )}
                   <button className="btn-primary" onClick={enterPreview}><Eye size={14} /> <span className="hidden sm:inline">Preview & </span>approve</button>
                 </div>
               </>
@@ -2354,6 +2468,31 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           </div>
         </div>
       )}
+      {recOpen && (
+        // Same stopPropagation rule as the reject modal above.
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(15,26,46,.6)" }}
+          onClick={e => e.stopPropagation()}>
+          <div className="card p-6 max-w-md w-full m-4" style={{ backgroundColor: "var(--c-cream)" }} onClick={e => e.stopPropagation()}>
+            <div className="font-display text-2xl mb-2">Recommend changes</div>
+            <div className="text-sm opacity-60 mb-4">
+              It goes back to {req.requestorName || users.find(u => u.id === req.requestorId)?.name || "the requestor"} to revise. They can reply, add supporting documents{(req.workflow || []).some(st => st.signers.some(s => s.status === "signed")) ? "" : " or replace the document"}, and it returns to you.
+            </div>
+            <textarea rows={5} value={recText} onChange={e => setRecText(e.target.value)} className="w-full mb-4" maxLength={4000}
+              placeholder="What needs to change?" autoFocus />
+            <div className="flex justify-end gap-3">
+              <button className="btn-ghost" onClick={() => setRecOpen(false)} disabled={recBusy}>Cancel</button>
+              <button className="btn-primary" disabled={recBusy || !recText.trim()}
+                onClick={async () => {
+                  setRecBusy(true);
+                  try { if (await recommendChanges(req.id, recText.trim())) { setRecOpen(false); onClose(); } }
+                  finally { setRecBusy(false); }
+                }}>
+                <Send size={14} /> {recBusy ? "Sending…" : "Send back"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {locked && (
         <UnlockModal requestId={req.id}
           onUnlocked={() => setLocked(false)}
@@ -2363,7 +2502,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   );
 }
 
-function ApproverApproved({ items, back, users, teams, user, approveRequest, rejectRequest, undoApproval, notify }) {
+function ApproverApproved({ items, back, users, teams, user, approveRequest, rejectRequest, recommendChanges, undoApproval, notify }) {
   const [open, setOpen] = useState(null);
   // Items still inside MY 1-hour rejection window open the action drawer (with
   // Reject / Withdraw) — not the read-only preview — so the option is never lost.
@@ -2394,7 +2533,7 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
         )} />
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
       {act && <ApproveDrawer req={act} user={user} users={users} teams={teams}
-        approveRequest={approveRequest} rejectRequest={rejectRequest} undoApproval={undoApproval}
+        approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
         onClose={() => setActId(null)} notify={notify} />}
     </>
   );

@@ -291,6 +291,60 @@ const templates = {
     ].join("\n"),
   }),
 
+  // HQHB "Recommend changes": the approver sent the document back to the
+  // requestor with what needs to change.
+  changes_requested: (c) => ({
+    subject: `Changes requested: ${c.fileName}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `${c.approverName} asked for changes to "${c.fileName}"`,
+      pillHtml: pill("Changes requested", "pending"),
+      heading: "Changes requested on your document",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`<strong>${esc(c.approverName)}</strong> reviewed your document and asked for some changes before signing.`) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Requested by", value: c.approverName },
+          { label: "What to change", value: c.recommendation || "" },
+        ]) +
+        p(`Open it from <strong>Returned for changes</strong>, make the changes, add any supporting documents, and resubmit. It goes straight back to ${esc(c.approverName)}.`) +
+        button("Revise & resubmit", requestUrl(c), "gold"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `${c.approverName} asked for changes to "${c.fileName}" before signing.`,
+      `What to change: ${c.recommendation || ""}`, ``,
+      `Open it from "Returned for changes", make the changes and resubmit: ${requestUrl(c)}`, ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  // The requestor resubmitted after making the changes; back with the approver.
+  resubmitted: (c) => ({
+    subject: `Resubmitted with changes: ${c.fileName}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `${c.requestorName} resubmitted "${c.fileName}"`,
+      pillHtml: pill("Resubmitted", "pending"),
+      heading: "A document is back with you",
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.requestorName)}</strong> made the changes you asked for and resubmitted the document.`) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Their reply", value: c.reply || "(no reply)" },
+          { label: "Document replaced", value: c.documentReplaced ? "Yes — a revised version" : "No" },
+        ]) +
+        button("Review document", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.requestorName} resubmitted "${c.fileName}" with the changes you asked for.`,
+      c.reply ? `Their reply: ${c.reply}` : `No reply was added.`,
+      c.documentReplaced ? `The document was replaced with a revised version.` : ``, ``,
+      `Review it: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   reminder: (c) => ({
     subject: `Reminder: "${c.fileName}" awaiting approval`,
     html: layout({ appUrl: c.appUrl,
@@ -524,6 +578,45 @@ const templates = {
     ].join("\n"),
   }),
 
+  // Confidential variants name neither the document nor what to change.
+  confidential_changes_requested: (c) => ({
+    subject: `Changes requested on your confidential document`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: "Changes were requested on your confidential document",
+      pillHtml: pill("Confidential", "pending"),
+      heading: "Changes requested on your confidential document",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`<strong>${esc(c.approverName || "The approver")}</strong> asked for changes to your confidential document.`) +
+        p(`What to change is not included in this email. Open ${esc(BRAND.fromName)} to read it.`) +
+        button("Open SignFlow", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `${c.approverName || "The approver"} asked for changes to your confidential document.`,
+      `What to change is deliberately not included in this email.`, ``,
+      requestUrl(c), ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
+  confidential_resubmitted: (c) => ({
+    subject: `A confidential document was resubmitted`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: "A confidential document is back with you",
+      pillHtml: pill("Confidential", "pending"),
+      heading: "A confidential document is back with you",
+      contentHtml:
+        greet(c.approverName) +
+        p(`<strong>${esc(c.requestorName || "The requestor")}</strong> resubmitted a confidential document with the changes you asked for.`) +
+        button("Open SignFlow", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.approverName}`, ``,
+      `${c.requestorName || "The requestor"} resubmitted a confidential document with the changes you asked for.`, ``,
+      requestUrl(c), ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   confidential_rejected: (c) => ({
     subject: `Your confidential document was rejected`,
     html: layout({ appUrl: c.appUrl,
@@ -589,6 +682,8 @@ export function confidentialTemplate(template) {
     your_turn: "confidential_your_turn",
     approved: "confidential_approved",
     rejected: "confidential_rejected",
+    changes_requested: "confidential_changes_requested",
+    resubmitted: "confidential_resubmitted",
   };
   return map[template] || template;
 }
