@@ -11,7 +11,8 @@ import { api } from "./api.js";
 import {
   ROLES, ROLE_LABELS, STATUS, STATUS_LABELS,
   APPROVAL_WINDOW_MS, REMINDER_COOLDOWN_MS,
-  COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor
+  COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor,
+  fileTooLarge, UPLOAD_LIMIT_TEXT
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
@@ -763,7 +764,8 @@ function SelfSignDoc({ user, notify, back }) {
     const f = e.target.files?.[0]; if (!f) return;
     const ext = (f.name.split(".").pop() || "").toLowerCase();
     if (!["pdf", "xlsx", "xls"].includes(ext)) { notify("Only PDF or Excel files supported", "error"); return; }
-    if (f.size > 14 * 1024 * 1024) { notify("File must be under 14 MB", "error"); return; }
+    const tooBig = fileTooLarge(f);
+    if (tooBig) { notify(tooBig, "error"); return; }
     const kind = ext === "pdf" ? "pdf" : "xlsx";
     const reader = new FileReader();
     reader.onload = () => {
@@ -823,7 +825,7 @@ function SelfSignDoc({ user, notify, back }) {
         <label className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
           <Upload size={22} className="opacity-50" />
           <div className="text-sm font-medium">Click to upload a PDF or Excel file</div>
-          <div className="text-xs opacity-50">PDF · XLSX — up to 14 MB</div>
+          <div className="text-xs opacity-50">{UPLOAD_LIMIT_TEXT}</div>
           <input type="file" accept=".pdf,.xlsx,.xls" className="hidden" onChange={handleFile} />
         </label>
       ) : (

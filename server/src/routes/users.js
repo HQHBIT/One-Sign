@@ -46,6 +46,18 @@ const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toStr
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
+// Names the account that already holds an email, so an admin sees at once
+// whether it is the same person under a second account (merge or deactivate
+// it) or a genuine mix-up. Matching stays EXACT — only letter case is ignored —
+// so a near miss such as a doubled letter is a different address and never
+// clashes. Admin-only routes call this; an admin can already see every user.
+export function emailClashMessage(holder) {
+  const who = holder?.name || "another account";
+  const its = holder?.its_id ? `, ITS ${holder.its_id}` : "";
+  const off = Number(holder?.active) === 0 ? ", deactivated" : "";
+  return `That exact email is already used by ${who} (${holder?.email}${its}${off}). Change or merge that account first.`;
+}
+
 // Reads native pixel dimensions from a PNG or JPEG buffer. Returns null if the
 // format isn't recognised — callers should treat that as "aspect unknown".
 // Exported: the assist route stores an executive's signature the same way.
@@ -111,8 +123,8 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
     if (!email || !password || !name || !role) return res.status(400).json({ error: "email, password, name, role are required" });
     if (!ASSIGNABLE_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role" });
 
-    const existing = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", [email]);
-    if (existing) return res.status(409).json({ error: "Email already exists" });
+    const existing = await queryOne("SELECT id, name, email, its_id, active FROM users WHERE LOWER(email) = LOWER(?)", [email]);
+    if (existing) return res.status(409).json({ error: emailClashMessage(existing) });
 
     const id = uid("u");
     const hash = bcrypt.hashSync(password, 10);
@@ -925,15 +937,16 @@ router.put("/:id/its-id", authRequired, requireRole("admin"), async (req, res, n
 // ---------- admin: change a user's email ----------
 // PUT /api/users/:id/email  body: { email }
 // Updates the account's primary email (used for sign-in + all notifications).
-// Rejects an email already in use by another account.
+// Rejects an email already in use by another account — matched EXACTLY (only
+// letter case is ignored), and the refusal names the account that holds it.
 router.put("/:id/email", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
     const target = await queryOne("SELECT id FROM users WHERE id = ?", [req.params.id]);
     if (!target) return res.status(404).json({ error: "User not found" });
-    const clash = await queryOne("SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?", [email, req.params.id]);
-    if (clash) return res.status(409).json({ error: "That email is already used by another account." });
+    const clash = await queryOne("SELECT id, name, email, its_id, active FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?", [email, req.params.id]);
+    if (clash) return res.status(409).json({ error: emailClashMessage(clash) });
     await execute("UPDATE users SET email = ? WHERE id = ?", [email, req.params.id]);
     const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
     res.json({ user: await hydrateUser(row) });

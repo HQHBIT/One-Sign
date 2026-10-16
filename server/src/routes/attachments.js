@@ -19,6 +19,7 @@ import { query, queryOne, execute } from "../db.js";
 import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { sealIfConfidential, storedNameFor } from "../confidential.js";
 import { authoriseAccess, requireUnlocked, logAccess } from "./requests.js";
+import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ const gate = [hqhbOnly, authRequired];
 // get a larger file past the uploader.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: UPLOAD_CEILING_BYTES },
 });
 
 // Large enough for a covering letter and a quotation, small enough that an
@@ -92,6 +93,8 @@ router.post("/:id/attachments", ...gate, upload.single("file"), async (req, res,
 
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
+    const tooBig = uploadSizeError(file);
+    if (tooBig) return res.status(413).json({ error: tooBig });
 
     const fileType = typeFor(extOf(file.originalname));
     if (!fileType) return res.status(400).json({ error: "Attachments must be PDF or Excel (.pdf, .xlsx, .xls)" });

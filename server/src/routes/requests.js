@@ -17,6 +17,7 @@ import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
 import { deploymentOrg } from "../org.js";
+import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOC_DIR = path.join(__dirname, "..", "..", "uploads", "documents");
@@ -46,9 +47,10 @@ const uid = (p = "req") => `${p}_${Date.now().toString(36)}_${Math.random().toSt
 const APPROVAL_WINDOW_MS = parseInt(process.env.APPROVAL_WINDOW_MS || "3600000", 10);
 const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+// Ceiling above the per-type limits; uploadSizeError() is the real rule.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }
+  limits: { fileSize: UPLOAD_CEILING_BYTES }
 });
 
 function parseOrientation(raw) {
@@ -283,6 +285,8 @@ router.post("/self-sign", authRequired, upload.single("file"), async (req, res, 
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
+    const tooBig = uploadSizeError(file);
+    if (tooBig) return res.status(413).json({ error: tooBig });
     const ext = (file.originalname.split(".").pop() || "").toLowerCase();
     if (!["pdf", "xlsx", "xls"].includes(ext)) return res.status(400).json({ error: "Only PDF or Excel accepted" });
     const isPdf = ext === "pdf";
@@ -347,6 +351,8 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
 
     const file = req.file;
     if (!file) return res.status(400).json({ error: "file is required" });
+    const tooBig = uploadSizeError(file);
+    if (tooBig) return res.status(413).json({ error: tooBig });
 
     const ext = (file.originalname.split(".").pop() || "").toLowerCase();
     if (!["pdf", "xlsx", "xls"].includes(ext)) return res.status(400).json({ error: "Only PDF or Excel accepted" });

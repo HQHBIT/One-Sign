@@ -25,9 +25,10 @@ import { authRequired, requireRole } from "../auth.js";
 import { deploymentOrg } from "../org.js";
 import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { raiseDirectRequest, DirectRequestError } from "./requests.js";
+import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: UPLOAD_CEILING_BYTES } });
 const uid = (p) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 const MAX_NAME = 60, MAX_TITLE = 120;
 const tidy = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -251,6 +252,8 @@ router.post("/boards/:id/documents", upload.single("file"), async (req, res, nex
     if (!first) return res.status(400).json({ error: "Add a stage to the board first" });
     const file = req.file;
     if (!file) return res.status(400).json({ error: "file is required" });
+    const tooBig = uploadSizeError(file);
+    if (tooBig) return res.status(413).json({ error: tooBig });
     const ext = (file.originalname.split(".").pop() || "").toLowerCase();
     if (!["pdf", "xlsx", "xls"].includes(ext)) return res.status(400).json({ error: "Only PDF or Excel accepted" });
     const fileType = ext === "pdf" ? "pdf" : "xlsx";

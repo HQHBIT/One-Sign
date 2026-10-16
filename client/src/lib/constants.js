@@ -38,6 +38,20 @@ export const STATUS_LABELS = Object.freeze({
 export const APPROVAL_WINDOW_MS = 60 * 60 * 1000;        // 1 hour cooling-off
 export const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000; // once per day
 
+// ---------- Upload size ----------
+// Mirrors server/src/uploadLimits.js — change BOTH together. The screen promise
+// and the check behind it read from here, so they cannot disagree.
+export const PDF_MAX_MB = 30;
+export const XLSX_MAX_MB = 14;
+export const UPLOAD_LIMIT_TEXT = `PDF up to ${PDF_MAX_MB} MB, Excel (.xlsx) up to ${XLSX_MAX_MB} MB`;
+/** null when the file fits its limit, else a message naming the file. */
+export function fileTooLarge(f) {
+  if (!f) return null;
+  const xlsx = /\.xlsx?$/i.test(f.name || "");
+  const max = xlsx ? XLSX_MAX_MB : PDF_MAX_MB;
+  return f.size > max * 1024 * 1024 ? `${f.name}: over ${max} MB (${xlsx ? "Excel" : "PDF"} limit)` : null;
+}
+
 // ---------- Design tokens ----------
 // Brand palette — keep in sync with index.css and StyleTag.
 export const COLORS = Object.freeze({

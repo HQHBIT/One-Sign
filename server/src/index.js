@@ -6,6 +6,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { initDb } from "./db.js";
 import { startScheduler } from "./scheduler.js";
+import { TOO_LARGE_MESSAGE } from "./uploadLimits.js";
 
 import authRoutes from "./routes/auth.js";
 import webauthnRoutes from "./routes/webauthn.js";
@@ -123,6 +124,11 @@ async function main() {
   }
 
   app.use((err, req, res, next) => {
+    // multer stopped an upload at the ceiling: a person's mistake, not a crash.
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      if (res.headersSent) return next(err);
+      return res.status(413).json({ error: TOO_LARGE_MESSAGE });
+    }
     console.error("[error]", err);          // full detail stays server-side
     if (res.headersSent) return next(err);
     const status = err.status || 500;
