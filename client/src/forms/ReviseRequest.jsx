@@ -22,6 +22,7 @@ import { useBackHandler, useEscapeKey, useScrollLock } from "../lib/useBackHandl
 import { UnlockModal, ConfidentialBadge } from "../components/UnlockGate.jsx";
 import { StatusPill } from "../components/StatusPill.jsx";
 import { RecommendationHistory } from "../components/RecommendationHistory.jsx";
+import { FileDrop } from "../components/FileDrop.jsx";
 
 const ViewerModule = () => import("../viewer.jsx");
 const DocPreview = lazy(() => ViewerModule().then(m => ({ default: m.DocPreview })));
@@ -237,11 +238,12 @@ export function ReviseRequest({ req, users, markers = [], onClose, onDone, notif
                 Someone has already signed this document, so it can't be replaced. Add what's needed as a supporting document below.
               </div>
             ) : (
-              <label className="btn-ghost text-xs mb-6 inline-flex cursor-pointer">
+              <FileDrop multiple={false} onFiles={fs => pickReplacement(fs[0])} title="Choose the revised file, or drag it here"
+                className="btn-ghost text-xs mb-6 inline-flex cursor-pointer">
                 <Upload size={13} /> Replace with a revised {req.fileType === "pdf" ? "PDF" : "Excel file"}
                 <input type="file" className="hidden" accept={req.fileType === "pdf" ? ".pdf" : ".xlsx,.xls"}
                   onChange={e => { pickReplacement(e.target.files?.[0]); e.target.value = ""; }} />
-              </label>
+              </FileDrop>
             )
           )}
 
@@ -293,11 +295,12 @@ export function ReviseRequest({ req, users, markers = [], onClose, onDone, notif
               </div>
             </div>
           ) : atts.length < MAX_ATTACHMENTS ? (
-            <label className="btn-ghost text-xs mb-6 inline-flex cursor-pointer" title={UPLOAD_LIMIT_TEXT}>
+            <FileDrop multiple={false} onFiles={fs => pickSupporting(fs[0])} title={`${UPLOAD_LIMIT_TEXT} — or drag it here`}
+              className="btn-ghost text-xs mb-6 inline-flex cursor-pointer">
               <Paperclip size={13} /> Add a supporting document
               <input type="file" className="hidden" accept=".pdf,.xlsx,.xls"
                 onChange={e => { pickSupporting(e.target.files?.[0]); e.target.value = ""; }} />
-            </label>
+            </FileDrop>
           ) : <div className="text-xs opacity-60 mb-6">Up to {MAX_ATTACHMENTS} supporting documents per request.</div>}
 
           {/* ---- 3. reply ---- */}
