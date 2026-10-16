@@ -11,6 +11,7 @@ import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, D
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
 import { api } from "../api.js";
+import { FileDrop, asInputEvent } from "../components/FileDrop.jsx";
 
 // Who a requestor may pick as a signer for a team: the designated approvers,
 // or — when the team has none yet — its own members. Falls back gracefully if
@@ -648,12 +649,13 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           {/* 1. upload (every request type, including leave, uploads its own document) */}
           <Section n="01" title="Upload documents" desc={`${UPLOAD_LIMIT_TEXT} each. Pick several files to send a batch.`}>
             {!file ? (
-              <label className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
+              <FileDrop onFiles={fs => handleFile(asInputEvent(fs))}
+                className="card p-10 flex flex-col items-center justify-center text-center cursor-pointer" style={{ borderStyle: "dashed" }}>
                 <Upload size={24} className="opacity-50 mb-3" />
-                <div className="font-medium">Click to select one or more files</div>
+                <div className="font-medium">Click to select one or more files — or drag them here</div>
                 <div className="text-xs opacity-60 mt-1">PDF · XLSX — up to {MAX_DOCS} at once</div>
                 <input type="file" multiple className="hidden" accept=".pdf,.xlsx,.xls" onChange={handleFile} />
-              </label>
+              </FileDrop>
             ) : (
               <div className="card p-5 flex items-center gap-4">
                 {file.ext === "pdf" ? <FileText size={22} /> : <FileSpreadsheet size={22} />}
@@ -1291,10 +1293,11 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
               </div>
             ))}
             {docs.length < maxDocs && (
-              <label className="card px-3 py-2 flex items-center gap-2 cursor-pointer tile-hover" style={{ borderStyle: "dashed" }}>
+              <FileDrop onFiles={fs => onAddFiles(asInputEvent(fs))} title="Add more — or drag files here"
+                className="card px-3 py-2 flex items-center gap-2 cursor-pointer tile-hover" style={{ borderStyle: "dashed" }}>
                 <Plus size={14} className="opacity-60" /><span className="text-sm opacity-70">Add more</span>
                 <input type="file" multiple className="hidden" accept=".pdf,.xlsx,.xls" onChange={onAddFiles} />
-              </label>
+              </FileDrop>
             )}
             <button className="btn-ghost text-xs" onClick={onStartOver}>Start over</button>
           </div>
