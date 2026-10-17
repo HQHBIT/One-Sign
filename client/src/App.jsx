@@ -63,6 +63,7 @@ import { ReviseRequest } from "./forms/ReviseRequest.jsx";
 import { RecommendationHistory } from "./components/RecommendationHistory.jsx";
 import { setDeploymentOrg, isHqhbBox } from "./lib/deployment.js";
 import { FileDrop, asInputEvent, guardWindowFileDrops } from "./components/FileDrop.jsx";
+import { WhatsNewOnSignIn, WhatsNewLibrary } from "./components/WhatsNew.jsx";
 
 // A file dropped outside an upload area must not replace the app with the PDF.
 guardWindowFileDrops();
@@ -660,6 +661,9 @@ function Shell(props) {
   const [changingPwd, setChangingPwd] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // What's new: the library (profile menu), and whether sign-in videos are playing.
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewPlaying, setWhatsNewPlaying] = useState(false);
   const [delegationOpen, setDelegationOpen] = useState(false);
   // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
   // so tapping install opens a short instructions sheet instead.
@@ -715,7 +719,8 @@ function Shell(props) {
         onDelegation={(user.role === "executive" || user.role === "admin") ? () => setDelegationOpen(true) : null}
         onHome={() => setHomeKey(k => k + 1)}
         onInstall={install.supported ? handleInstall : null}
-        onHelp={() => setHelpOpen(true)} />
+        onHelp={() => setHelpOpen(true)}
+        onWhatsNew={() => setWhatsNewOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
@@ -751,8 +756,12 @@ function Shell(props) {
       )}
       {bioOpen && <BiometricModal user={user} notify={notify} onClose={() => setBioOpen(false)} />}
       {delegationOpen && <DelegationSettings user={user} notify={notify} onClose={() => setDelegationOpen(false)} />}
-      <BiometricPrompt notify={notify} hold={needsSig} />
+      {/* Sign-in order: the mandatory signature first, then any new-feature
+          videos, then the Face ID offer. */}
+      <WhatsNewOnSignIn user={user} hold={needsSig} onActive={setWhatsNewPlaying} />
+      <BiometricPrompt notify={notify} hold={needsSig || whatsNewPlaying} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
+      {whatsNewOpen && <WhatsNewLibrary user={user} onClose={() => setWhatsNewOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>
   );
