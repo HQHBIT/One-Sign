@@ -62,6 +62,11 @@ import { NewRequest, teamSigners, ord } from "./forms/NewRequest.jsx";
 import { ReviseRequest } from "./forms/ReviseRequest.jsx";
 import { RecommendationHistory } from "./components/RecommendationHistory.jsx";
 import { setDeploymentOrg, isHqhbBox } from "./lib/deployment.js";
+import { FileDrop, asInputEvent, guardWindowFileDrops } from "./components/FileDrop.jsx";
+import { WhatsNewOnSignIn, WhatsNewLibrary } from "./components/WhatsNew.jsx";
+
+// A file dropped outside an upload area must not replace the app with the PDF.
+guardWindowFileDrops();
 import { OnboardUserWizard } from "./forms/OnboardUserWizard.jsx";
 
 // Lazy-loaded viewer module — pulls in pdfjs-dist (~600 kB) + xlsx (~250 kB)
@@ -656,6 +661,9 @@ function Shell(props) {
   const [changingPwd, setChangingPwd] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // What's new: the library (profile menu), and whether sign-in videos are playing.
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewPlaying, setWhatsNewPlaying] = useState(false);
   const [delegationOpen, setDelegationOpen] = useState(false);
   // PWA install ("Add to Home Screen"). On iOS there's no programmatic prompt,
   // so tapping install opens a short instructions sheet instead.
@@ -711,7 +719,8 @@ function Shell(props) {
         onDelegation={(user.role === "executive" || user.role === "admin") ? () => setDelegationOpen(true) : null}
         onHome={() => setHomeKey(k => k + 1)}
         onInstall={install.supported ? handleInstall : null}
-        onHelp={() => setHelpOpen(true)} />
+        onHelp={() => setHelpOpen(true)}
+        onWhatsNew={() => setWhatsNewOpen(true)} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 md:px-10 py-6 sm:py-8">
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
@@ -747,8 +756,12 @@ function Shell(props) {
       )}
       {bioOpen && <BiometricModal user={user} notify={notify} onClose={() => setBioOpen(false)} />}
       {delegationOpen && <DelegationSettings user={user} notify={notify} onClose={() => setDelegationOpen(false)} />}
-      <BiometricPrompt notify={notify} hold={needsSig} />
+      {/* Sign-in order: the mandatory signature first, then any new-feature
+          videos, then the Face ID offer. */}
+      <WhatsNewOnSignIn user={user} hold={needsSig} onActive={setWhatsNewPlaying} />
+      <BiometricPrompt notify={notify} hold={needsSig || whatsNewPlaying} />
       {helpOpen && <HelpGuide onClose={() => setHelpOpen(false)} />}
+      {whatsNewOpen && <WhatsNewLibrary user={user} onClose={() => setWhatsNewOpen(false)} />}
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>
   );
@@ -838,12 +851,13 @@ function SelfSignDoc({ user, notify, back }) {
       </p>
 
       {!file ? (
-        <label className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
+        <FileDrop multiple={false} onFiles={fs => handleFile(asInputEvent(fs))}
+          className="card mt-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer tile-hover" style={{ border: "2px dashed var(--c-ink-18)" }}>
           <Upload size={22} className="opacity-50" />
-          <div className="text-sm font-medium">Click to upload a PDF or Excel file</div>
+          <div className="text-sm font-medium">Click to upload a PDF or Excel file — or drag it here</div>
           <div className="text-xs opacity-50">{UPLOAD_LIMIT_TEXT}</div>
           <input type="file" accept=".pdf,.xlsx,.xls" className="hidden" onChange={handleFile} />
-        </label>
+        </FileDrop>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-2 mt-5 mb-3 text-xs">
@@ -3114,10 +3128,11 @@ function OnboardTeam({ teams, users, saveTeams, saveUsers, refresh, notify, back
               Required columns: <span className="font-mono text-xs">name</span>, <span className="font-mono text-xs">email</span>. Optional: <span className="font-mono text-xs">role</span> (<span className="font-mono text-xs">requestor</span> / <span className="font-mono text-xs">approver</span>) — defaults to requestor.
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <label className="btn-primary cursor-pointer">
+              <FileDrop multiple={false} onFiles={fs => handleFile(asInputEvent(fs))} className="btn-primary cursor-pointer"
+                title="Choose a file, or drag it onto this button">
                 <Upload size={13} /> Choose file
                 <input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={handleFile} />
-              </label>
+              </FileDrop>
               <button className="btn-ghost" onClick={() => downloadTemplate("xlsx")}
                 title="Pre-filled Excel template with example rows">
                 <Download size={13} /> Download template
@@ -3757,7 +3772,10 @@ function BulkUserModal({ teams, onClose, onImport }) {
     <ModalShell title="Bulk upload users" onClose={onClose}>
       <div className="text-sm opacity-70 mb-3">Paste CSV text or upload a .csv file. Columns: <span className="font-mono text-xs">name,email,password,role,team,teams</span> (<code>teams</code> uses <code>|</code> to separate multiple team IDs; only for approvers).</div>
       <div className="text-xs opacity-60 mb-3 font-mono">Team IDs: {teams.map(t => `${t.id} = ${t.name}`).join(" · ")}</div>
-      <input type="file" accept=".csv,text/csv" onChange={importFile} className="mb-3 text-xs" />
+      <FileDrop as="div" multiple={false} onFiles={fs => importFile(asInputEvent(fs))} className="mb-3 p-2 rounded-md">
+        <input type="file" accept=".csv,text/csv" onChange={importFile} className="text-xs" />
+        <span className="text-xs opacity-50 ml-2">or drag the .csv here</span>
+      </FileDrop>
       <textarea rows={8} className="w-full font-mono text-xs" value={text} onChange={e => setText(e.target.value)} />
       <div className="mt-3 text-xs opacity-60">{parsed.length} row{parsed.length === 1 ? "" : "s"} ready to import.</div>
       <div className="flex justify-end gap-2 mt-5">
@@ -4152,7 +4170,10 @@ function BulkSignatureModal({ users, onClose, onDone }) {
   return (
     <ModalShell title="Bulk upload signatures" onClose={onClose}>
       <div className="text-sm opacity-70 mb-3">Name each image file as the user's email, e.g. <span className="font-mono text-xs">mufaddal.safdari@hqhb.in.png</span>. Supports PNG / JPG.</div>
-      <input type="file" accept="image/png,image/jpeg" multiple onChange={onFiles} className="text-xs mb-3" />
+      <FileDrop as="div" onFiles={fs => onFiles(asInputEvent(fs))} className="mb-3 p-2 rounded-md">
+        <input type="file" accept="image/png,image/jpeg" multiple onChange={onFiles} className="text-xs" />
+        <span className="text-xs opacity-50 ml-2">or drag the images here</span>
+      </FileDrop>
       <div className="max-h-72 overflow-auto">
         {pairs.map((p, i) => (
           <div key={i} className="flex items-center gap-3 py-2 border-b text-sm" style={{ borderColor: "rgba(15,26,46,.06)" }}>

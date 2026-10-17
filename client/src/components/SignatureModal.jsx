@@ -12,6 +12,7 @@ import { RefreshCw, LogOut, Check, X, Star, Trash2, Upload } from "lucide-react"
 import { api } from "../api.js";
 import { useEscapeKey } from "../lib/useBackHandler.js";
 import { useFocusTrap } from "../lib/useFocusTrap.js";
+import { FileDrop, asInputEvent } from "./FileDrop.jsx";
 
 // ------------------------------------------------------------
 // The user's saved signatures: thumbnail, name tag, default star, delete.
@@ -351,12 +352,13 @@ export function SignatureModal({ title, subtitle, onCancel, onSave, onLogout, cu
         ) : (
           <div>
             {/* A styled link instead of the browser's bare "Choose File" control. */}
-            <label className="inline-flex items-center gap-1.5 cursor-pointer text-sm font-medium underline underline-offset-2"
+            <FileDrop multiple={false} onFiles={fs => handleUpload(asInputEvent(fs))}
+              className="inline-flex items-center gap-1.5 cursor-pointer text-sm font-medium underline underline-offset-2 rounded-md"
               style={{ color: "#8B6914" }}>
               <Upload size={14} /> {uploaded ? "Choose a different image…" : "Choose an image from this device…"}
               <input type="file" accept="image/png,image/jpeg" onChange={handleUpload} className="hidden" />
-            </label>
-            <div className="text-xs opacity-50 mt-1">PNG or JPEG — it will be auto-cropped to the signature.</div>
+            </FileDrop>
+            <div className="text-xs opacity-50 mt-1">PNG or JPEG — or drag one onto the link. It will be auto-cropped to the signature.</div>
 
             {uploaded && (
               <div className="mt-4 card p-4" style={{ backgroundColor: "var(--c-paper)" }}>

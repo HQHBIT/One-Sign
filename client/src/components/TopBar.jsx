@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon, Flag } from "lucide-react";
+import { PenTool, LogOut, KeyRound, HelpCircle, Home, ChevronDown, Download, ScanFace, UserCog, Bell, Mail, CheckCircle, XCircle, Clock, FileText, Moon, Flag, Sparkles } from "lucide-react";
 import { ReportIssueButton, reportIssueHref } from "./ReportIssue.jsx";
 
 // Relative "2h ago"-style stamp for the notification list.
@@ -12,7 +12,7 @@ function ago(ts) {
 }
 const NOTIF_ICONS = { new_request: FileText, approved: CheckCircle, rejected: XCircle, reminder: Clock };
 
-export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onSetDisplayMode, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onInstall }) {
+export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNotifsRead, onToggleEmailNotifs, onSetDisplayMode, onEditSignature, onChangePassword, onBiometric, onDelegation, onHome, onHelp, onWhatsNew, onInstall }) {
   const roleLabel = { admin: "Administrator", requestor: "Requestor", approver: "Approver", executive: "Executive", executive_assistant: "Executive Assistant" }[user.role];
   // Initials from the first letter/digit of each word (skips punctuation like the
   // "(" in "Taha (Admin)"), capped at two.
@@ -234,6 +234,12 @@ export function TopBar({ user, logout, notifs, onOpenNotification, onMarkAllNoti
                       })}
                     </div>
                   </div>
+                )}
+                {onWhatsNew && (
+                  <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}
+                    onClick={() => { setMenuOpen(false); onWhatsNew(); }}>
+                    <Sparkles size={15} className="opacity-70 shrink-0" style={{ color: "var(--c-gold)" }} /> What's new
+                  </button>
                 )}
                 {onHelp && (
                   <button role="menuitem" className={itemClass} style={itemStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}

@@ -304,6 +304,9 @@ export const api = {
     const res = await this.fetch(`/api/requests/${requestId}/attachments/${attachmentId}/file${signed ? "?signed=1" : ""}`, { raw: true });
     return URL.createObjectURL(await res.blob());
   },
+  // ---------- What's new: which feature videos this user has been shown ----------
+  whatsNew() { return this.fetch("/api/whats-new"); },                       // { seen: [id], joinedAt }
+  markFeatureSeen(id) { return this.fetch("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ id }) }); },
   // ---------- "Recommend changes" (HQHB only) ----------
   // The approver whose turn it is sends the request back with what to change.
   recommendChanges(id, recommendation) {

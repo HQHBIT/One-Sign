@@ -12,6 +12,7 @@ import authRoutes from "./routes/auth.js";
 import webauthnRoutes from "./routes/webauthn.js";
 import notificationsRoutes from "./routes/notifications.js";
 import issuesRoutes from "./routes/issues.js";
+import whatsNewRoutes from "./routes/whats-new.js";
 import foldersRoutes from "./routes/folders.js";
 import eventsRoutes from "./events.js";
 import workflowTemplatesRoutes from "./routes/workflow-templates.js";
@@ -90,6 +91,7 @@ async function main() {
   app.use("/api/webauthn", webauthnRoutes);
   app.use("/api/notifications", notificationsRoutes);
   app.use("/api/issues", issuesRoutes);
+  app.use("/api/whats-new", whatsNewRoutes);
   app.use("/api/folders", foldersRoutes);
   app.use("/api/events", eventsRoutes);
   app.use("/api/workflow-templates", workflowTemplatesRoutes);

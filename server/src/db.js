@@ -463,6 +463,16 @@ async function runSchema() {
     CONSTRAINT fk_rr_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // "What's new": which feature videos each user has already been shown, so a
+  // video plays once per user however many devices they sign in from. The
+  // feature catalogue itself ships with the client; only the ids live here.
+  await tryExec(`CREATE TABLE IF NOT EXISTS feature_views (
+    user_id    VARCHAR(64) NOT NULL,
+    feature_id VARCHAR(64) NOT NULL,
+    seen_at    BIGINT      NOT NULL,
+    PRIMARY KEY (user_id, feature_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Saved workflow templates: a requestor's reusable routing (steps + signers).
   // Box placements are per-document, so only the ROUTE is stored; the requestor
   // attaches a document and places boxes each time they use it.
