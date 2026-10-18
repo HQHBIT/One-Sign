@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { initDb } from "./db.js";
 import { startScheduler } from "./scheduler.js";
 import { startRetention } from "./retention.js";
+import { startDiskCachePruning } from "./diskCache.js";
 import { TOO_LARGE_MESSAGE } from "./uploadLimits.js";
 
 import authRoutes from "./routes/auth.js";
@@ -163,6 +164,7 @@ async function main() {
     console.log(banner.join("\n"));
     startScheduler();
     startRetention(); // HQHB storage periods by request type (retention.js)
+    startDiskCachePruning(); // remove disk copies the bucket verifiably holds (diskCache.js)
   });
 }
 
