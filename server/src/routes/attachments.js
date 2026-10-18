@@ -20,6 +20,7 @@ import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { sealIfConfidential, storedNameFor } from "../confidential.js";
 import { authoriseAccess, requireUnlocked, logAccess } from "./requests.js";
 import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
+import { removedBody } from "../retention.js";
 
 const router = express.Router();
 
@@ -193,6 +194,7 @@ router.get("/:id/attachments/:attId/file", ...gate, async (req, res, next) => {
       "SELECT * FROM request_attachments WHERE id = ? AND request_id = ?",
       [req.params.attId, row.id]);
     if (!att) return res.status(404).end();
+    if (row.files_purged_at) return res.status(410).json(removedBody(row));
 
     // A confidential parent gates its attachments exactly as it gates its own
     // document — same unlock, same access log, same download restriction.

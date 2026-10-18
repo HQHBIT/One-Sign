@@ -5,14 +5,14 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare, Hourglass
 } from "lucide-react";
 import { api } from "./api.js";
 import {
   ROLES, ROLE_LABELS, STATUS, STATUS_LABELS,
   APPROVAL_WINDOW_MS, REMINDER_COOLDOWN_MS,
   COLORS, STEP_COLORS, REQUEST_TYPES, requestTypeLabel, requestTypeColor,
-  fileTooLarge, UPLOAD_LIMIT_TEXT
+  fileTooLarge, UPLOAD_LIMIT_TEXT, retentionLabel
 } from "./lib/constants.js";
 import { uid, fmt, fmtShort, greetName } from "./lib/format.js";
 import { isMyTurn, iSignedInWorkflow, nextPendingSigner } from "./lib/turn.js";
@@ -1592,6 +1592,20 @@ function SupportingDocs({ requestId, place = "after", locked = false }) {
   );
 }
 
+// A request whose storage period has ended: the record stays, the files do not.
+function RemovedDocument({ req }) {
+  return (
+    <div className="card p-8 text-center">
+      <Hourglass size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
+      <div className="text-sm font-medium">This document was removed on {fmtShort(req.filesPurgedAt)}</div>
+      <div className="text-xs opacity-60 mt-1 max-w-md mx-auto">
+        {requestTypeLabel(req.requestType)} documents are kept for {retentionLabel(req.retentionDays)} once decided.
+        The requestor was emailed their copy before it was removed; the record of who signed and when remains here.
+      </div>
+    </div>
+  );
+}
+
 function PreviewDrawer({ req, onClose, users, teams, user }) {
   const [file, setFile] = useState(null);
   // One scroller only: the drawer. The website scrollbar disappears while the
@@ -1610,6 +1624,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
   useEscapeKey(true, onClose);
   useEffect(() => {
     if (locked) { setFile(null); return; }
+    if (req.filesPurgedAt) return; // its storage period ended — nothing to load
     let url = null;
     (async () => {
       try {
@@ -1649,6 +1664,11 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
                 Completed {fmt(req.finalizedAt)} IST
               </div>
             )}
+            {req.expiresAt && !req.filesPurgedAt && (
+              <div className="text-[10px] sm:text-xs mt-0.5 opacity-70">
+                Stored until {fmtShort(req.expiresAt)} — {req.requestorId === user?.id ? "download your copy before then" : "then removed from SignFlow"}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0">
             {req.confidential && <ConfidentialBadge />}
@@ -1657,8 +1677,8 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
                 hunt for the row in a list. The buttons carry their own rules
                 (greyed inside the 1-hour window; confidential = requestor only,
                 once fully signed, and only while unlocked). */}
-            {!locked && <DownloadBtn req={req} user={user} />}
-            {!locked && <PrintBtn req={req} />}
+            {!locked && !req.filesPurgedAt && <DownloadBtn req={req} user={user} />}
+            {!locked && !req.filesPurgedAt && <PrintBtn req={req} />}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
@@ -1674,8 +1694,8 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
-          <SupportingDocs requestId={req.id} place="before" locked={locked} />
-          {locked ? (
+          <SupportingDocs requestId={req.id} place="before" locked={locked || !!req.filesPurgedAt} />
+          {req.filesPurgedAt ? <RemovedDocument req={req} /> : locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
               <div className="text-sm font-medium">This document is locked</div>
@@ -1686,7 +1706,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading file…</div>}
-          <SupportingDocs requestId={req.id} place="after" locked={locked} />
+          <SupportingDocs requestId={req.id} place="after" locked={locked || !!req.filesPurgedAt} />
           {req.status === "rejected" && (req.rejectReason || req.hasRejectVoice) && (
             <div className="mt-4 card p-4 text-sm" style={{ borderLeft: "3px solid var(--c-rust)" }}>
               <div className="text-xs tracking-wider uppercase opacity-50 mb-2">Rejection</div>
@@ -2163,6 +2183,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   useEscapeKey(true, onClose);
   useEffect(() => {
     if (locked) { setFile(null); return; }
+    if (req.filesPurgedAt) return; // its storage period ended — nothing to load
     let url = null;
     (async () => {
       try {
@@ -2306,7 +2327,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
                 request unless you raised it and it is fully signed — and the
                 server refuses the same download independently, so this is a
                 convenience, never the control. */}
-            {!locked && <DownloadBtn req={req} user={user} />}
+            {!locked && !req.filesPurgedAt && <DownloadBtn req={req} user={user} />}
             {canApprove && !locked && markers.length > 0 && (
               <button onClick={jumpToSig} className="btn-primary text-xs px-2 sm:px-3" title="Jump to signature zone"
                 style={{ backgroundColor: "#B8894A" }}>
@@ -2332,8 +2353,8 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <div style={{ whiteSpace: "pre-wrap" }}>{req.note}</div>
             </div>
           )}
-          <SupportingDocs requestId={req.id} place="before" locked={locked} />
-          {locked ? (
+          <SupportingDocs requestId={req.id} place="before" locked={locked || !!req.filesPurgedAt} />
+          {req.filesPurgedAt ? <RemovedDocument req={req} /> : locked ? (
             <div className="card p-8 text-center">
               <Lock size={20} className="mx-auto mb-2" style={{ color: "var(--c-gold)" }} />
               <div className="text-sm font-medium">This document is locked</div>
@@ -2344,7 +2365,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
               <DocPreview file={file} markers={markers} styleMap={leaveStyles} fill />
             </Suspense>
           ) : <div className="text-sm opacity-50">Loading…</div>}
-          <SupportingDocs requestId={req.id} place="after" locked={locked} />
+          <SupportingDocs requestId={req.id} place="after" locked={locked || !!req.filesPurgedAt} />
         </div>
 
         {/* ── Pinned action bar(s) ── */}

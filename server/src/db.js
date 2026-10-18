@@ -322,6 +322,12 @@ async function runSchema() {
   // keep their values.
   await tryExec(`ALTER TABLE requests MODIFY COLUMN status ENUM('pending','approved_pending','approved','rejected','withdrawn','changes_requested') NOT NULL`);
   await tryExec(`ALTER TABLE requests ADD COLUMN withdrawn_at BIGINT DEFAULT NULL`);
+  // Retention by request type (HQHB, retention.js): the period stamped at
+  // creation (NULL = kept indefinitely), when the requestor was sent their copy,
+  // and when the files were removed. The row itself is never deleted.
+  await tryExec(`ALTER TABLE requests ADD COLUMN retention_days INT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN retention_notified_at BIGINT NULL`);
+  await tryExec(`ALTER TABLE requests ADD COLUMN files_purged_at BIGINT NULL`);
 
   // Optional voice note recorded by the approver when rejecting.
   await tryExec(`ALTER TABLE requests ADD COLUMN reject_voice_path VARCHAR(255) DEFAULT NULL`);
@@ -1053,6 +1059,14 @@ export async function hydrateRequest(row) {
     hasSignedFile: !!row.signed_file_path && !/\.json$/i.test(row.signed_file_path),
     reminders: rems.map(r => Number(r.sent_at)),
     requestType: row.request_type || "general",
+    // Retention (HQHB): when the files go, and whether they already have.
+    retentionDays: row.retention_days ? Number(row.retention_days) : null,
+    expiresAt: (() => {
+      const decided = Number(row.finalized_at || row.rejected_at || row.withdrawn_at || 0);
+      return row.retention_days && decided && ["approved", "rejected", "withdrawn"].includes(row.status)
+        ? decided + Number(row.retention_days) * 86400000 : null;
+    })(),
+    filesPurgedAt: row.files_purged_at ? Number(row.files_purged_at) : null,
     confidential: !!row.confidential,
     instantApproval: !!row.instant_approval,
     currentStep: Number(row.current_step || 0),

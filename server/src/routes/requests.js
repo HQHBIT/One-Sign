@@ -17,6 +17,13 @@ import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
 import { deploymentOrg } from "../org.js";
+import { allowedTypesFor, retentionDaysFor, removedBody } from "../retention.js";
+
+// The storage period stamped on a new request (HQHB; NULL = kept indefinitely).
+// Written by the INSERT itself: two of the three inserts run inside a
+// transaction, and a separate UPDATE on another connection would wait on the
+// uncommitted row until the lock timed out.
+const retentionFor = (requestType) => retentionDaysFor(deploymentOrg(), requestType);
 import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -397,13 +404,15 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
     // Confidential: the stored file is encrypted and the IT Admin is locked out.
     // Fail CLOSED — without a configured key we refuse rather than quietly
     // storing something the requestor believes is protected.
-    const confidential = req.body?.confidential === "true" || req.body?.confidential === true ? 1 : 0;
+    const allowedTypes = allowedTypesFor(deploymentOrg());
+    const rawType = (req.body?.requestType || "general").toString().toLowerCase();
+    const requestType = allowedTypes.includes(rawType) ? rawType : "general";
+    // The "Confidential Documents" type (HQHB) is always confidential.
+    const confidential = requestType === "confidential"
+      || req.body?.confidential === "true" || req.body?.confidential === true ? 1 : 0;
     if (confidential && !confidentialEnabled()) {
       return res.status(503).json({ error: "Confidential documents are not configured on this server" });
     }
-    const allowedTypes = ["leave", "document", "expense", "invoice", "general"];
-    const rawType = (req.body?.requestType || "general").toString().toLowerCase();
-    const requestType = allowedTypes.includes(rawType) ? rawType : "general";
 
     // ---------- the requestor's rotate-control choice (0/90/180/270 CW) ----------
     // Applied losslessly up front via native /Rotate, so the stored file stays crisp
@@ -521,9 +530,9 @@ router.post("/", authRequired, requireRole("requestor", "executive_assistant", .
       { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
     await execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json, confidential)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null, confidential]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, signer_date_fields_json, confidential, retention_days)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, targetTeamId, JSON.stringify(bakedMarker), note, Date.now(), instantApproval, requestType, signerDateFields.length ? JSON.stringify(signerDateFields) : null, confidential, retentionFor(requestType)]);
 
     for (const a of approvers) {
       notifyUser({
@@ -640,9 +649,9 @@ async function createWorkflowRequest({ req, res, file, ext, fileType, note, inst
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?, ?)
-    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType, confidential]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential, retention_days)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', ?, ?, 1, ?, ?, ?)
+    `, [id, req.user.id, file.originalname, storedName, fileType, workflow[0].teamId, note, Date.now(), instantApproval, requestType, confidential, retentionFor(requestType)]);
 
     for (let i = 0; i < workflow.length; i++) {
       const step = workflow[i];
@@ -707,7 +716,9 @@ export class DirectRequestError extends Error {
 // and gets the new requests row back. POST /api/requests (direct) is one caller;
 // the executive-assistant document flow is another, sending a card's current
 // bytes to the executive its stage names. Refusals are DirectRequestError.
-export async function raiseDirectRequest({ user, file, ext, fileType, note = "", instantApproval = 0, signers, requestType = "general", confidential = 0, orientation = null, deferNotify = false }) {
+// retain: false for the executive-assistant board, whose cards keep reading a
+// request's signed copy for as long as the card exists.
+export async function raiseDirectRequest({ user, file, ext, fileType, note = "", instantApproval = 0, signers, requestType = "general", confidential = 0, orientation = null, deferNotify = false, retain = true }) {
   // PDF and Excel both supported — the signing path stamps each accordingly.
   if (!Array.isArray(signers) || signers.length === 0) throw new DirectRequestError(400, "Add at least one recipient");
   for (const [i, s] of signers.entries()) {
@@ -758,9 +769,9 @@ export async function raiseDirectRequest({ user, file, ext, fileType, note = "",
   try {
     await conn.beginTransaction();
     await conn.execute(`
-      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential)
-      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?, ?)
-    `, [id, user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential]);
+      INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, target_team_id, marker_json, note, status, created_at, instant_approval, current_step, request_type, confidential, retention_days)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?, 1, ?, ?, ?)
+    `, [id, user.id, file.originalname, storedName, fileType, note, Date.now(), instantApproval, requestType, confidential, retain ? retentionFor(requestType) : null]);
 
     const stepId = uid("st");
     await conn.execute(
@@ -894,6 +905,7 @@ router.get("/:id/file", authRequired, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+    if (row.files_purged_at) return res.status(410).json(removedBody(row));
     if (row.confidential) {
       const gate = await requireUnlocked(req, row);
       if (gate) return res.status(403).json(gate);
@@ -912,6 +924,7 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
+    if (row.files_purged_at) return res.status(410).json(removedBody(row));
     if (!row.signed_file_path) return res.status(404).json({ error: "Signed version not available" });
     // Excel requests approved before real .xlsx stamping existed recorded a
     // ".signed.json" manifest rather than a document — serve the original for those.
@@ -1556,6 +1569,7 @@ router.get("/:id/reject-voice", authRequired, async (req, res, next) => {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row?.reject_voice_path) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(404).end();
+    if (row.files_purged_at) return res.status(410).json(removedBody(row));
     const type = row.reject_voice_path.endsWith(".m4a") ? "audio/mp4"
       : row.reject_voice_path.endsWith(".ogg") ? "audio/ogg" : "audio/webm";
     let bytes;
