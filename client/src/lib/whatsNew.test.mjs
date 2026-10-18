@@ -21,7 +21,7 @@ ck(FEATURES.every(f => /^[a-z0-9][a-z0-9-]{0,63}$/.test(f.id)), "feature ids mat
 ck(FEATURES.every(f => f.video && f.slides?.length >= 2 && f.slides.every(s => s.src && s.caption)), "every feature has a video and captioned snapshots");
 
 // ---- audience ----
-ck(ids(libraryFor(hqApprover)) === "drag-drop-upload,recommend-changes,approver-date,supporting-documents", "HQHB approver: all four, newest first");
+ck(ids(libraryFor(hqApprover)) === "request-types,drag-drop-upload,recommend-changes,approver-date,supporting-documents", "HQHB approver: all five, newest first");
 ck(!libraryFor(hqRequestor).some(f => f.id === "approver-date"), "HQHB requestor: no approver-only video");
 ck(ids(libraryFor(waqfApprover)) === "drag-drop-upload", "WAQF: only the feature that applies to WAQF");
 ck(ids(libraryFor(hqAdmin)) === "drag-drop-upload", "IT Admin: only what applies to admins");
@@ -31,17 +31,17 @@ ck(libraryFor(hqApprover, many).length === LIBRARY_SIZE && libraryFor(hqApprover
 
 // ---- sign-in ----
 const veteran = { joinedAt: day("2026-08-01") };
-ck(ids(toShowOnSignIn(hqApprover, veteran)) === "supporting-documents,approver-date,recommend-changes,drag-drop-upload",
+ck(ids(toShowOnSignIn(hqApprover, veteran)) === "supporting-documents,approver-date,recommend-changes,drag-drop-upload,request-types",
   "existing user: every unseen feature since they joined, oldest first");
-ck(ids(toShowOnSignIn(hqApprover, { ...veteran, seen: ["approver-date", "supporting-documents"] })) === "recommend-changes,drag-drop-upload",
+ck(ids(toShowOnSignIn(hqApprover, { ...veteran, seen: ["approver-date", "supporting-documents"] })) === "recommend-changes,drag-drop-upload,request-types",
   "a feature already shown is not shown again");
 ck(toShowOnSignIn(hqApprover, { ...veteran, seen: FEATURES.map(f => f.id) }).length === 0, "nothing left to show → nothing plays");
-ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-15") })) === "approver-date,recommend-changes,drag-drop-upload",
+ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-15") })) === "approver-date,recommend-changes,drag-drop-upload,request-types",
   "joined mid-way: only what shipped after they joined");
-ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20") })) === "drag-drop-upload", "brand-new account: only the newest video");
-ck(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20"), seen: ["drag-drop-upload"] }).length === 0, "brand-new account that has seen it: nothing");
+ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20") })) === "request-types", "brand-new account: only the newest video");
+ck(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20"), seen: ["request-types"] }).length === 0, "brand-new account that has seen it: nothing");
 ck(ids(toShowOnSignIn(waqfApprover, veteran)) === "drag-drop-upload", "WAQF user is never shown an HQHB-only video");
-ck(toShowOnSignIn(hqApprover, { seen: [] }).length === 4, "unknown join date: treated as an existing user");
+ck(toShowOnSignIn(hqApprover, { seen: [] }).length === 5, "unknown join date: treated as an existing user");
 
 if (failed) { console.log(`\n${failed} FAILED`); process.exit(1); }
 console.log("\nALL WHAT'S-NEW RULES PASSED");

@@ -69,6 +69,10 @@ export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId 
             <span className="font-medium" style={{ color: "var(--c-forest)" }}>· Completed {fmt(r.finalizedAt)} IST</span>
           )}
           {r.status === "approved_pending" && r.approvedAt && !r.instantApproval && <span>· <Countdown until={r.approvedAt + APPROVAL_WINDOW_MS} /></span>}
+          {/* Retention (HQHB): when the files go, or that they have. */}
+          {r.filesPurgedAt
+            ? <span className="font-medium" style={{ color: "var(--c-rust)" }}>· Document removed {fmtShort(r.filesPurgedAt)}</span>
+            : r.expiresAt ? <span title="Removed from SignFlow after this date — you'll be emailed your copy two days before">· Stored until {fmtShort(r.expiresAt)}</span> : null}
         </div>
         {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}
         {subtitle && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>{subtitle}</div>}

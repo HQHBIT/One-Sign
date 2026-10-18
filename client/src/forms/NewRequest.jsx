@@ -6,12 +6,13 @@ import {
   Upload, X, FileText, FileSpreadsheet, Stamp, GitBranch, Zap,
   Building2, Trash2, Plus, Send, Calendar, Save, ChevronUp, ChevronDown, Lock, Paperclip
 } from "lucide-react";
-import { STEP_COLORS, REQUEST_TYPES, fileTooLarge, UPLOAD_LIMIT_TEXT } from "../lib/constants.js";
+import { STEP_COLORS, fileTooLarge, UPLOAD_LIMIT_TEXT } from "../lib/constants.js";
 import { SIGNATURE_HEIGHTS_MM, SIGNATURE_PRESETS, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset, setPreset } from "../lib/boxSize.js";
 import { BackHeader } from "../components/BackHeader.jsx";
 import { Section } from "../components/Section.jsx";
 import { api } from "../api.js";
 import { FileDrop, asInputEvent } from "../components/FileDrop.jsx";
+import { TypePicker, ChosenType } from "../components/TypePicker.jsx";
 
 // Who a requestor may pick as a signer for a team: the designated approvers,
 // or — when the team has none yet — its own members. Falls back gracefully if
@@ -36,6 +37,16 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   // Confidential: encrypted at rest, IT Admin locked out, and every view
   // needs a fresh emailed code. Hidden unless the server has a key configured.
   const [confidential, setConfidential] = useState(defaultConfidential);
+  // The type is chosen first, from an animated list, unless the caller already
+  // knows it (a quick action or a saved workflow).
+  const [typePicked, setTypePicked] = useState(!!defaultType || !!presetWorkflow);
+  const pickType = (key) => {
+    // The Confidential type is always confidential; leaving it drops that again.
+    if (key === "confidential") setConfidential(true);
+    else if (requestType === "confidential") setConfidential(defaultConfidential);
+    setRequestType(key);
+    setTypePicked(true);
+  };
   const [confAvailable, setConfAvailable] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -579,24 +590,20 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
   // Shared by the single-document form and the batch flow.
   const typeSection = (
           <Section n="00" title="Request type" desc="Classifying the request lets approvers batch-process documents of the same kind.">
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {REQUEST_TYPES.map(t => {
-                const active = requestType === t.key;
-                return (
-                  <button key={t.key} onClick={() => setRequestType(t.key)}
-                    className={`card p-3 text-left tile-hover ${active ? "ring-2" : ""}`}
-                    style={{ borderLeft: `4px solid ${t.color}`, backgroundColor: active ? "rgba(184,137,74,.08)" : undefined }}>
-                    <div className="text-sm font-medium">{t.label}</div>
-                    <div className="text-xs opacity-60 mt-0.5">{t.desc}</div>
-                  </button>
-                );
-              })}
-            </div>
+            <ChosenType org={orgId} typeKey={requestType} onChange={() => setTypePicked(false)} />
 
             {/* Confidential — encrypted at rest, admin locked out, code needed to
                 view. Hidden entirely when the server holds no key, so we never
                 promise protection the backend cannot deliver. */}
-            {confAvailable && (
+            {confAvailable && requestType === "confidential" && (
+              <div className="card p-4 mt-3 flex items-start gap-3" style={{ borderLeft: "4px solid var(--c-gold)", backgroundColor: "rgba(184,137,74,.08)" }}>
+                <Lock size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-gold)" }} />
+                <div className="text-xs opacity-80">
+                  Confidential documents are always encrypted. Only you and the signers can open them, with a one-time code emailed to the viewer — IT support cannot view or recover them.
+                </div>
+              </div>
+            )}
+            {confAvailable && requestType !== "confidential" && (
               <label className="card p-4 mt-3 flex items-start gap-3 cursor-pointer tile-hover"
                 style={{ borderLeft: "4px solid var(--c-gold)", backgroundColor: confidential ? "rgba(184,137,74,.08)" : undefined }}>
                 <input type="checkbox" className="mt-1" checked={confidential}
@@ -615,6 +622,16 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
             )}
           </Section>
   );
+
+  // ---------- STEP 1: what kind of request ----------
+  if (!typePicked) {
+    return (
+      <div>
+        <BackHeader back={onDone} title="Make a new request" />
+        <TypePicker org={orgId} onPick={pickType} />
+      </div>
+    );
+  }
 
   // ---------- BATCH: several documents in one go ----------
   if (docs.length > 0) {

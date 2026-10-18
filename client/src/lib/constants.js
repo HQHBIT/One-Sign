@@ -74,14 +74,26 @@ export const COLORS = Object.freeze({
 export const STEP_COLORS = ["#B8894A", "#2D5F2F", "#7A4E8C", "#1B5A7A", "#9B6A2C", "#5A2D5F"];
 
 // ---------- Request-type taxonomy ----------
-// Shared by Quick Actions, NewRequest type picker, and the approver's
-// pending-list filter. Keys must match the allowedTypes list on the server.
+// Shared by Quick Actions, the NewRequest type picker, and the approver's
+// pending-list filter. Keys must match allowedTypesFor() in
+// server/src/retention.js, and retentionDays its RETENTION_DAYS (HQHB keeps a
+// document that many days after the request is decided; a test checks the two
+// agree). `hqhbOnly` types are not offered on the WAQF box, which also keeps
+// documents indefinitely. Listed in the order the picker shows them.
 export const REQUEST_TYPES = [
-  { key: "leave",    label: "Leave Approval",    desc: "Time-off, leave forms, attendance approvals.", color: "#2D5F2F" },
-  { key: "document", label: "Document Approval", desc: "Policies, memos, contracts, letters.",         color: "#1B5A7A" },
-  { key: "expense",  label: "Expense Approval",  desc: "Reimbursements, advances, vouchers.",          color: "#9B6A2C" },
-  { key: "invoice",  label: "Invoice / PO",      desc: "Purchase orders, vendor invoices.",            color: "#7A4E8C" },
-  { key: "general",  label: "Other",             desc: "Anything else needing a signature.",           color: "#0F1A2E" }
+  { key: "document",     label: "Document Approval",     desc: "Policies, memos, contracts, letters.",              color: "#1B5A7A", retentionDays: 7 },
+  { key: "leave",        label: "Leave Approval",        desc: "Time-off, leave forms, attendance approvals.",      color: "#2D5F2F", retentionDays: 3 },
+  { key: "expense",      label: "Expense Approval",      desc: "Reimbursements, advances, vouchers.",               color: "#9B6A2C", retentionDays: 15 },
+  { key: "invoice",      label: "Invoices / PO",         desc: "Purchase orders, vendor invoices.",                 color: "#7A4E8C", retentionDays: 15 },
+  { key: "project",      label: "Project Approvals",     desc: "Proposals, budgets, milestones and sign-offs.",     color: "#2E6E6A", retentionDays: 30, hqhbOnly: true },
+  { key: "workdone",     label: "Work Done",             desc: "Completion certificates and work-done reports.",    color: "#8A5A2B", retentionDays: 7,  hqhbOnly: true },
+  { key: "confidential", label: "Confidential Documents", desc: "Encrypted; only you and the signers can open it.", color: "#B8894A", retentionDays: 60, hqhbOnly: true },
+  { key: "general",      label: "Others",                desc: "Anything else needing a signature.",                color: "#0F1A2E", retentionDays: 15 },
 ];
-export const requestTypeLabel = (key) => REQUEST_TYPES.find(t => t.key === key)?.label || "Other";
+export const requestTypeLabel = (key) => REQUEST_TYPES.find(t => t.key === key)?.label || "Others";
 export const requestTypeColor = (key) => REQUEST_TYPES.find(t => t.key === key)?.color || "#0F1A2E";
+// The types a deployment offers. Retention periods apply on HQHB only.
+export const requestTypesFor = (org) => REQUEST_TYPES.filter(t => org === "hqhb" || !t.hqhbOnly);
+// "3 days", "1 month", "2 months".
+export const retentionLabel = (days) =>
+  !days ? "" : days % 30 === 0 ? `${days / 30} month${days === 30 ? "" : "s"}` : `${days} day${days === 1 ? "" : "s"}`;

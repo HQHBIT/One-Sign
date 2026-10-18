@@ -352,6 +352,7 @@ router.post("/documents/:id/move", async (req, res, next) => {
           ext, fileType: d.file_type, note: d.note || "",
           signers: [{ userId: signer.id, boxes: boxes.map((b) => ({ page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h })), dateFields: [] }],
           requestType: "document",
+          retain: false, // the card keeps reading this request's signed copy
         });
       } catch (e) {
         if (e instanceof DirectRequestError) return res.status(e.status).json({ error: e.message });

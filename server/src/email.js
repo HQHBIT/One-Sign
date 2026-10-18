@@ -76,6 +76,9 @@ const baseUrl = (c) => String((c && c.appUrl) || BRAND.appUrl).replace(/\/+$/, "
 // Deep link to a specific request in the app. Falls back to the app root when no
 // requestId is in the context, so the button is always a valid link.
 const requestUrl = (c) => (c && c.requestId ? `${baseUrl(c)}/?request=${encodeURIComponent(c.requestId)}` : baseUrl(c));
+// Retention notice: the removal date in IST, and the outcome in words.
+const removeDate = (c) => (c?.removeOn ? new Date(Number(c.removeOn)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" }) : "soon");
+const OUTCOME = { approved: "Approved and signed", rejected: "Rejected", withdrawn: "Withdrawn" };
 
 // A label/value detail box. Rows with an empty value are dropped.
 function details(rows, { mono = false, accent = false } = {}) {
@@ -293,6 +296,34 @@ const templates = {
 
   // HQHB "Recommend changes": the approver sent the document back to the
   // requestor with what needs to change.
+  // Retention (HQHB): the requestor's copy, two days before the files go.
+  retention_notice: (c) => ({
+    subject: `Your copy of ${c.fileName} — stored until ${removeDate(c)}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `"${c.fileName}" will be removed from SignFlow on ${removeDate(c)}`,
+      pillHtml: pill("Storage ending", "pending"),
+      heading: "Keep your copy of this document",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`The storage period for this document ends on <strong>${esc(removeDate(c))}</strong>, after which it will be removed from SignFlow.`) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Outcome", value: OUTCOME[c.outcome] || c.outcome || "" },
+          { label: "Removed on", value: removeDate(c) },
+        ]) +
+        p(c.attached
+          ? `Your ${c.outcome === "approved" ? "signed " : ""}copy is attached to this email — please save it.`
+          : `Download your copy from SignFlow before ${esc(removeDate(c))}.`) +
+        button("Open in SignFlow", requestUrl(c), "gold"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `The storage period for "${c.fileName}" ends on ${removeDate(c)}, after which it will be removed from SignFlow.`,
+      c.attached ? `Your copy is attached to this email — please save it.` : `Download your copy from SignFlow before ${removeDate(c)}: ${requestUrl(c)}`,
+      ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   changes_requested: (c) => ({
     subject: `Changes requested: ${c.fileName}`,
     html: layout({ appUrl: c.appUrl,
@@ -578,6 +609,28 @@ const templates = {
     ].join("\n"),
   }),
 
+  // Never attached and never named: the copy is fetched in SignFlow, behind
+  // the same sign-in and emailed code as ever.
+  confidential_retention_notice: (c) => ({
+    subject: `A confidential document's storage ends on ${removeDate(c)}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `Download your confidential document before ${removeDate(c)}`,
+      pillHtml: pill("Confidential", "pending"),
+      heading: "Download your confidential document",
+      contentHtml:
+        greet(c.requestorName) +
+        p(`The storage period for one of your confidential documents ends on <strong>${esc(removeDate(c))}</strong>, after which it will be removed from SignFlow.`) +
+        p(`For its protection it is not attached. Open SignFlow to download your copy before then.`) +
+        button("Open SignFlow", requestUrl(c), "navy"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.requestorName}`, ``,
+      `The storage period for one of your confidential documents ends on ${removeDate(c)}.`,
+      `It is not attached, for its protection. Download your copy in SignFlow before then: ${requestUrl(c)}`,
+      ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   // Confidential variants name neither the document nor what to change.
   confidential_changes_requested: (c) => ({
     subject: `Changes requested on your confidential document`,
@@ -684,6 +737,7 @@ export function confidentialTemplate(template) {
     rejected: "confidential_rejected",
     changes_requested: "confidential_changes_requested",
     resubmitted: "confidential_resubmitted",
+    retention_notice: "confidential_retention_notice",
   };
   return map[template] || template;
 }
@@ -713,7 +767,9 @@ async function appUrlFor(email) {
   } catch { return null; }
 }
 
-export async function sendEmail({ to, template, ctx, _isAssistantCopy }) {
+// attachments: [{ bytes, filename, type }] — the primary recipient only; an
+// assistant's copy never carries the document.
+export async function sendEmail({ to, template, ctx, attachments, _isAssistantCopy }) {
   if (!to) return;
   // Assistants with the "receive notifications" right get a copy of every email
   // their executive receives (the executive still gets theirs — both receive).
@@ -751,7 +807,12 @@ export async function sendEmail({ to, template, ctx, _isAssistantCopy }) {
   }
 
   try {
-    await sgMail.send({ to, from: { email: fromEmail, name: fromName }, subject, text, html });
+    await sgMail.send({
+      to, from: { email: fromEmail, name: fromName }, subject, text, html,
+      ...(attachments?.length ? { attachments: attachments.map(a => ({
+        content: Buffer.from(a.bytes).toString("base64"), filename: a.filename, type: a.type, disposition: "attachment",
+      })) } : {}),
+    });
     await execute(
       "INSERT INTO emails (to_email, subject, body, template, sent_at, delivered, error) VALUES (?, ?, ?, ?, ?, 1, NULL)",
       [to, subject, logBody, template, sentAt]

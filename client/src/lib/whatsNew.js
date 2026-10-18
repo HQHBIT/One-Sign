@@ -14,6 +14,20 @@ const SIGNERS = ["requestor", "approver", "executive"];
 
 export const FEATURES = [
   {
+    id: "request-types",
+    released: "2026-10-18",
+    title: "Choose the request type first",
+    summary: "Eight request types, each with its own storage period — you're emailed your copy two days before a document is removed.",
+    orgs: ["hqhb"],
+    roles: SIGNERS,
+    video: "/whats-new/request-types.webm",
+    slides: [
+      { src: "/whats-new/request-types-1.jpg", caption: "Make a new request now starts with the type of request" },
+      { src: "/whats-new/request-types-2.jpg", caption: "Each type shows how long its documents are kept once decided" },
+      { src: "/whats-new/request-types-3.jpg", caption: "Requests show “Stored until” — you're emailed your copy two days before" },
+    ],
+  },
+  {
     id: "drag-drop-upload",
     released: "2026-10-18",
     title: "Drag files straight in",

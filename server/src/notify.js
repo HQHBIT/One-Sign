@@ -44,6 +44,10 @@ function inAppText(template, ctx = {}) {
           ? `${ctx.approverName || "The approver"} asked for changes. Open it from "Returned for changes".`
           : `${ctx.approverName || "The approver"}: ${ctx.recommendation}`,
       };
+    case "retention_notice": {
+      const on = ctx.removeOn ? new Date(Number(ctx.removeOn)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }) : "soon";
+      return { title: `Stored until ${on}: ${f}`, body: `Save your copy before ${on} — it will then be removed from SignFlow.${ctx.attached ? " We've emailed it to you." : ""}` };
+    }
     case "resubmitted":
       return { title: `Resubmitted: ${f}`, body: `${ctx.requestorName || "The requestor"} made the changes you asked for — it's back with you.` };
     default:
@@ -52,7 +56,7 @@ function inAppText(template, ctx = {}) {
 }
 
 // user: a users-table ROW (preferred) or a user id.
-export async function notifyUser({ user, template, ctx = {}, requestId = null }) {
+export async function notifyUser({ user, template, ctx = {}, requestId = null, attachments }) {
   const row = typeof user === "string" ? await queryOne("SELECT * FROM users WHERE id = ?", [user]) : user;
   if (!row?.id) return { delivered: false, error: "no recipient" };
 
@@ -75,5 +79,6 @@ export async function notifyUser({ user, template, ctx = {}, requestId = null })
   // Confidential requests swap to the redacted template, which carries neither
   // the file name nor the note.
   const tpl = ctx.confidential ? confidentialTemplate(template) : template;
-  return sendEmail({ to: row.email, template: tpl, ctx });
+  // A confidential email never carries the document, whatever the caller passed.
+  return sendEmail({ to: row.email, template: tpl, ctx, attachments: ctx.confidential ? undefined : attachments });
 }
