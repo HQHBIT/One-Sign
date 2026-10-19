@@ -658,7 +658,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
           <li className="flex gap-2"><span className="font-mono opacity-50">04</span> Submit. Each signer is notified in turn.</li>
         </ol>
       </div>
-      <div className="space-y-6 mt-6 min-w-0">
+      {/* sf-form-in: the sections rise in, in turn, after the type is chosen (TypePicker.jsx). */}
+      <div className="sf-form-in space-y-6 mt-6 min-w-0">
 
           {/* 0. type */}
           {typeSection}
@@ -1270,7 +1271,8 @@ function MultiDocFlow({ docs, setDocs, typeSection, addRequest, notify, onDone, 
   return (
     <div>
       <BackHeader back={onDone} title="Make a new request" step={docs.length + " document" + (docs.length === 1 ? "" : "s")} />
-      <div className="space-y-6 mt-6 min-w-0">
+      {/* sf-form-in: the sections rise in, in turn, after the type is chosen (TypePicker.jsx). */}
+      <div className="sf-form-in space-y-6 mt-6 min-w-0">
         {typeSection}
 
         {/* 01 — the batch */}
