@@ -1,90 +1,84 @@
 import { useState } from "react";
+import { flushSync } from "react-dom";
 import { FileText, CalendarDays, Wallet, Receipt, FolderKanban, ClipboardCheck, Lock, Files, ChevronRight, Hourglass, Check } from "lucide-react";
 import { requestTypesFor, retentionLabel } from "../lib/constants.js";
 
 // ============================================================
 //   TYPE PICKER — the first step of "Make a new request"
 //   ------------------------------------------------------------
-//   Arriving: the rows come in as a wave — each rises with a soft overshoot,
-//   staggered down the list — and a fine gold ribbon draws itself under the
-//   heading, then keeps gently flowing.
-//   Choosing: the row presses in, a gold ripple spreads from the exact point
-//   clicked, liquid gold flows across it behind a moving wave edge, its icon
-//   fills gold, a tick replaces the arrow and a gold ribbon draws beneath it;
-//   a wave runs outward through the other rows as they fall away; the chosen
-//   row glides to the top and the form rises in with it. "Change" brings the
-//   list back.
+//   Smooth rather than showy: every movement eases out (no bounces), and
+//   nothing jumps.
+//   Arriving: the rows rise into place one after another.
+//   Choosing: the row eases in, a soft gold glow spreads from the point
+//   clicked and gold flows across it behind a feathered edge; its icon fills
+//   gold and a tick appears while the other rows fade away. Then the chosen
+//   row MORPHS into the "Request type" bar at the top of the form (the View
+//   Transitions API — Chrome, Edge, the installed app); where that is not
+//   available it glides to the top instead. "Change" morphs back.
 //   With "reduce motion" set on the device, every step is immediate.
 // ============================================================
 const ICONS = {
   document: FileText, leave: CalendarDays, expense: Wallet, invoice: Receipt,
   project: FolderKanban, workdone: ClipboardCheck, confidential: Lock, general: Files,
 };
-const STAGGER_MS = 70;
-const PICK_MS = 760;
+const STAGGER_MS = 60;
+const PICK_MS = 480;                         // the row's own moment, before the form
 const GOLD = "184,137,74";
-// The moving edge of the liquid fill: a vertical sine wave, tiled.
-const WAVE_EDGE = encodeURIComponent(
-  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 160' preserveAspectRatio='none'><path d='M0 0 H12 C24 10 24 30 12 40 C0 50 0 70 12 80 C24 90 24 110 12 120 C0 130 0 150 12 160 H0 Z' fill='rgba(${GOLD},.2)'/></svg>`);
-const EASE = "cubic-bezier(.2,.7,.2,1)";
+const OUT = "cubic-bezier(.22,1,.36,1)";    // ease-out-quint: fast start, long soft landing
+const IN_OUT = "cubic-bezier(.4,0,.2,1)";
 
 const CSS = `
-@keyframes sf-type-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-/* The wave: rows rise with a soft overshoot; leaving, each bobs up then falls away. */
-@keyframes sf-wave-in { from { opacity: 0; transform: translateY(26px) scale(.98); } to { opacity: 1; transform: none; } }
-@keyframes sf-wave-out { 0% { transform: none; } 35% { transform: translateY(-7px); opacity: 1; } 100% { transform: translateY(14px); opacity: 0; } }
-@keyframes sf-liquid { to { width: 100%; } }
-@keyframes sf-liquid-edge { from { transform: translateY(-50%); } to { transform: translateY(0); } }
-@keyframes sf-ribbon-draw { to { stroke-dashoffset: 0; } }
-@keyframes sf-ribbon-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-/* The chosen row presses, lifts, then glides up to the top of the list — where the form will show it. */
-@keyframes sf-type-lift { 0% { transform: scale(.985); } 30% { transform: translateX(6px) scale(1.01); } 100% { transform: translate(6px, var(--lift-y, 0px)) scale(1); } }
-@keyframes sf-ripple { from { transform: translate(-50%,-50%) scale(0); opacity: .38; } to { transform: translate(-50%,-50%) scale(1); opacity: 0; } }
-@keyframes sf-pop { 0% { transform: scale(.3); opacity: 0; } 60% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
-@keyframes sf-chip-in { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes sf-rise-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes sf-soft-out { to { opacity: 0; transform: translateY(6px) scale(.99); filter: blur(2px); } }
+@keyframes sf-settle { from { transform: scale(.99); } to { transform: translateX(4px); } }
+@keyframes sf-glide { from { transform: scale(.99); } to { transform: translate(4px, var(--lift-y, 0px)); } }
+@keyframes sf-glow { from { transform: translate(-50%,-50%) scale(0); opacity: .3; } to { transform: translate(-50%,-50%) scale(1); opacity: 0; } }
+@keyframes sf-flow { to { width: 100%; } }
+@keyframes sf-tick-in { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+@keyframes sf-rule-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes sf-form-rise { from { opacity: 0; transform: translateY(10px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
 
-.sf-type-row { position: relative; overflow: hidden; animation: sf-wave-in .75s cubic-bezier(.34,1.56,.64,1) both;
-  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .3s ease; }
+.sf-type-row { position: relative; overflow: hidden; animation: sf-rise-in .6s ${OUT} both;
+  transition: transform .2s ${OUT}, box-shadow .25s ease, border-color .25s ease; }
 .sf-type-row > * { position: relative; z-index: 1; }
-/* Liquid gold: fills the chosen row from the left behind a flowing wave edge. */
-.sf-liquid { position: absolute !important; left: 0; top: 0; bottom: 0; width: 0; z-index: 0 !important; pointer-events: none;
-  background: linear-gradient(90deg, rgba(${GOLD},.30), rgba(${GOLD},.2)); animation: sf-liquid .75s cubic-bezier(.3,.7,.25,1) forwards; }
-.sf-liquid::after { content: ""; position: absolute; top: 0; right: -23px; width: 24px; height: 200%;
-  background: url("data:image/svg+xml,${WAVE_EDGE}") 0 0 / 24px 50% repeat-y; animation: sf-liquid-edge .8s linear infinite; }
-/* Gold ribbon: a fine sine line that draws itself, then drifts. */
-.sf-ribbon { position: relative; height: 12px; overflow: hidden; pointer-events: none; }
-.sf-ribbon svg { position: absolute; left: 0; top: 0; width: 200%; height: 12px; overflow: visible; animation: sf-ribbon-drift 3.2s linear infinite; }
-.sf-ribbon path { fill: none; stroke: rgb(${GOLD}); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1;
-  animation: sf-ribbon-draw 1.1s cubic-bezier(.3,.7,.25,1) forwards; }
-.sf-type-row .sf-ribbon { position: absolute !important; left: 0; right: 0; bottom: 2px; z-index: 1; }
-.sf-type-row .sf-ribbon path { animation-delay: .25s; stroke-width: 1.4; }
 .sf-type-row:hover, .sf-type-row:focus-visible { transform: translateX(3px); border-color: var(--c-gold) !important; box-shadow: 0 6px 18px rgba(15,26,46,.08); outline: none; }
-.sf-type-row:active { transform: scale(.985); }
+.sf-type-row:active { transform: scale(.99); transition-duration: .12s; }
 .sf-type-row:hover .sf-type-chev, .sf-type-row:focus-visible .sf-type-chev { transform: translateX(3px); opacity: .9; }
-.sf-type-chev { transition: transform .18s ease, opacity .18s ease; opacity: .35; }
-.sf-type-icon { transition: background-color .3s ease, color .3s ease, transform .3s ${EASE}; }
+.sf-type-chev { transition: transform .2s ${OUT}, opacity .2s ease; opacity: .35; }
+.sf-type-icon { transition: background-color .35s ease, color .35s ease, transform .35s ${OUT}; }
 
-.sf-type-row.is-picked { animation: sf-type-lift .6s ${EASE} forwards; border-color: var(--c-gold) !important;
-  box-shadow: 0 10px 26px rgba(184,137,74,.22); }
-.sf-type-row.is-picked .sf-type-icon { background-color: var(--c-gold) !important; color: #fff !important; transform: scale(1.06); }
-.sf-type-row.is-dimmed { animation: sf-wave-out .6s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; }
-.sf-type-tick { animation: sf-pop .42s ${EASE} .08s both; }
-.sf-ripple { position: absolute; z-index: 0; width: 220%; aspect-ratio: 1; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, rgba(184,137,74,.55) 0%, rgba(184,137,74,.18) 45%, rgba(184,137,74,0) 70%);
-  animation: sf-ripple .65s ease-out forwards; }
+.sf-type-row.is-picked { animation: sf-settle .45s ${OUT} forwards; border-color: var(--c-gold) !important;
+  box-shadow: 0 10px 28px rgba(${GOLD},.2); }
+.sf-type-row.is-picked.glide { animation: sf-glide .6s ${OUT} forwards; }
+.sf-type-row.is-picked .sf-type-icon { background-color: var(--c-gold) !important; color: #fff !important; }
+.sf-type-row.is-dimmed { animation: sf-soft-out .38s ${IN_OUT} forwards; pointer-events: none; }
+.sf-type-tick { animation: sf-tick-in .35s ${OUT} .1s both; }
+/* Gold flowing across the chosen row, its leading edge feathered. */
+.sf-flow { position: absolute !important; left: 0; top: 0; bottom: 0; width: 0; z-index: 0 !important; pointer-events: none;
+  background: linear-gradient(90deg, rgba(${GOLD},.24), rgba(${GOLD},.14)); animation: sf-flow .7s ${OUT} forwards; }
+.sf-flow::after { content: ""; position: absolute; top: 0; bottom: 0; right: -48px; width: 48px;
+  background: linear-gradient(90deg, rgba(${GOLD},.14), rgba(${GOLD},0)); }
+.sf-glow { position: absolute; z-index: 0; width: 220%; aspect-ratio: 1; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(${GOLD},.4) 0%, rgba(${GOLD},.12) 45%, rgba(${GOLD},0) 70%);
+  animation: sf-glow .8s ${OUT} forwards; }
+.sf-type-rule { transform-origin: left; animation: sf-rule-in .8s ${OUT} both; }
 
-/* The form that follows: the chosen type drops in, then each section rises in turn. */
-.sf-chosen-in { animation: sf-chip-in .42s ${EASE} both; }
-.sf-form-in > * { animation: sf-type-in .46s ${EASE} both; }
-.sf-form-in > *:nth-child(2) { animation-delay: 70ms; }
-.sf-form-in > *:nth-child(3) { animation-delay: 140ms; }
-.sf-form-in > *:nth-child(4) { animation-delay: 210ms; }
-.sf-form-in > *:nth-child(n+5) { animation-delay: 280ms; }
+/* The form that follows: each section rises and comes into focus in turn. */
+.sf-chosen-in { animation: sf-form-rise .5s ${OUT} both; }
+.sf-form-in > * { animation: sf-form-rise .55s ${OUT} both; }
+.sf-form-in > *:nth-child(2) { animation-delay: 60ms; }
+.sf-form-in > *:nth-child(3) { animation-delay: 120ms; }
+.sf-form-in > *:nth-child(4) { animation-delay: 180ms; }
+.sf-form-in > *:nth-child(n+5) { animation-delay: 240ms; }
+
+/* The morph from list row to "Request type" bar (and back). */
+::view-transition-group(sf-chosen) { animation-duration: .55s; animation-timing-function: ${OUT}; }
+::view-transition-old(sf-chosen), ::view-transition-new(sf-chosen) { animation-duration: .4s; height: 100%; object-fit: cover; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .35s; animation-timing-function: ${IN_OUT}; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sf-type-row, .sf-type-row.is-picked, .sf-type-row.is-dimmed, .sf-type-tick, .sf-ripple, .sf-liquid,
-  .sf-liquid::after, .sf-ribbon svg, .sf-chosen-in, .sf-form-in > * { animation: none !important; }
-  .sf-ribbon path { animation: none !important; stroke-dashoffset: 0; }
+  .sf-type-row, .sf-type-row.is-picked, .sf-type-row.is-dimmed, .sf-type-tick, .sf-glow, .sf-flow,
+  .sf-type-rule, .sf-chosen-in, .sf-form-in > * { animation: none !important; }
   .sf-type-row:hover, .sf-type-row:active { transform: none; }
 }
 `;
@@ -98,70 +92,60 @@ if (typeof document !== "undefined" && !document.getElementById("sf-type-picker-
   document.head.appendChild(s);
 }
 
-// A gold sine line, twice the width it shows so it can drift seamlessly.
-const RIBBON_PATH = (() => {
-  const period = 40, total = 2600;
-  let d = "M0 6";
-  for (let x = 0; x < total; x += period) d += ` Q ${x + period / 4} 0 ${x + period / 2} 6 T ${x + period} 6`;
-  return d;
-})();
-function WaveRibbon({ className = "" }) {
-  return (
-    <div className={`sf-ribbon ${className}`} aria-hidden="true">
-      <svg viewBox="0 0 2600 12" preserveAspectRatio="xMinYMid slice"><path d={RIBBON_PATH} pathLength="1" /></svg>
-    </div>
-  );
-}
-
 const reducedMotion = () => {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
 };
+const canMorph = () => typeof document !== "undefined" && typeof document.startViewTransition === "function";
+
+// Run a state change as a smooth morph where the browser supports it.
+function morph(update) {
+  if (reducedMotion() || !canMorph()) { update(); return; }
+  document.startViewTransition(() => flushSync(update));
+}
 
 export function TypePicker({ org, onPick }) {
   const types = requestTypesFor(org);
   const showRetention = org === "hqhb";
   const [picked, setPicked] = useState(null);
-  const [ripple, setRipple] = useState(null); // { key, x, y }
-  const [liftY, setLiftY] = useState(0);        // how far the chosen row glides up
+  const [glow, setGlow] = useState(null);   // { key, x, y }
+  const [liftY, setLiftY] = useState(0);    // the glide, where the morph is unavailable
 
   const choose = (key, e) => {
     if (picked) return; // one choice per visit; ignore a double click
     if (reducedMotion()) { onPick(key); return; }
     const r = e.currentTarget.getBoundingClientRect();
-    // A keyboard press has no pointer position — ripple from the centre.
-    const x = e.clientX ? e.clientX - r.left : r.width / 2;
-    const y = e.clientY ? e.clientY - r.top : r.height / 2;
-    setRipple({ key, x, y });
-    setLiftY(e.currentTarget.parentElement.getBoundingClientRect().top - r.top);
+    // A keyboard press has no pointer position — glow from the centre.
+    setGlow({ key, x: e.clientX ? e.clientX - r.left : r.width / 2, y: e.clientY ? e.clientY - r.top : r.height / 2 });
+    if (!canMorph()) setLiftY(e.currentTarget.parentElement.getBoundingClientRect().top - r.top);
     setPicked(key);
-    setTimeout(() => onPick(key), PICK_MS);
+    setTimeout(() => morph(() => onPick(key)), PICK_MS);
   };
 
+  const pickedIndex = types.findIndex(x => x.key === picked);
   return (
     <div className="mt-6 sm:mt-8">
       <div className="font-display text-2xl sm:text-3xl">What are you sending?</div>
       <div className="text-sm opacity-60 mt-1">
         Choose the type of request.{showRetention && " Each type's documents are kept for a set time once the request is decided — you'll be emailed your copy before it goes."}
       </div>
-      <WaveRibbon className="mt-3 mb-4" />
+      <div className="sf-type-rule h-px mt-4 mb-5" style={{ backgroundColor: "var(--c-gold)", opacity: 0.5 }} />
 
       <div className="space-y-2.5" role="list">
         {types.map((t, i) => {
           const Icon = ICONS[t.key] || Files;
           const isPicked = picked === t.key;
-          const state = !picked ? "" : isPicked ? " is-picked" : " is-dimmed";
+          const state = !picked ? "" : isPicked ? ` is-picked${canMorph() ? "" : " glide"}` : " is-dimmed";
           return (
             <button key={t.key} type="button" role="listitem" onClick={(e) => choose(t.key, e)}
               aria-pressed={isPicked}
               className={`sf-type-row card w-full text-left px-4 py-3.5 flex items-center gap-4${state}`}
               style={{
-                animationDelay: picked ? (isPicked ? "0ms" : `${Math.abs(i - types.findIndex(x => x.key === picked)) * 45}ms`) : `${i * STAGGER_MS}ms`,
+                animationDelay: picked ? (isPicked ? "0ms" : `${Math.abs(i - pickedIndex) * 35}ms`) : `${i * STAGGER_MS}ms`,
                 borderLeft: `4px solid ${t.color}`,
-                ...(isPicked ? { "--lift-y": `${liftY}px` } : {}),
+                ...(isPicked ? { "--lift-y": `${liftY}px`, viewTransitionName: "sf-chosen" } : {}),
               }}>
-              {isPicked && <span className="sf-liquid" aria-hidden="true" />}
-              {ripple?.key === t.key && <span className="sf-ripple" style={{ left: ripple.x, top: ripple.y }} aria-hidden="true" />}
-              {isPicked && <WaveRibbon />}
+              {isPicked && <span className="sf-flow" aria-hidden="true" />}
+              {glow?.key === t.key && <span className="sf-glow" style={{ left: glow.x, top: glow.y }} aria-hidden="true" />}
               <span className="sf-type-icon w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
                 style={{ backgroundColor: `${t.color}1A`, color: t.color }}>
                 <Icon size={18} />
@@ -193,12 +177,15 @@ export function TypePicker({ org, onPick }) {
   );
 }
 
-// The chosen type, compact, at the top of the form — with a way back.
+// The chosen type, compact, at the top of the form — with a way back. Shares
+// its view-transition name with the chosen row, so the browser morphs one into
+// the other.
 export function ChosenType({ org, typeKey, onChange }) {
   const t = requestTypesFor(org).find(x => x.key === typeKey) || requestTypesFor(org).at(-1);
   const Icon = ICONS[t.key] || Files;
   return (
-    <div className="sf-chosen-in card px-4 py-3 flex items-center gap-3" style={{ borderLeft: `4px solid ${t.color}` }}>
+    <div className={`${canMorph() && !reducedMotion() ? "" : "sf-chosen-in "}card px-4 py-3 flex items-center gap-3`}
+      style={{ borderLeft: `4px solid ${t.color}`, viewTransitionName: "sf-chosen" }}>
       <span className="w-8 h-8 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `${t.color}1A`, color: t.color }}>
         <Icon size={15} />
       </span>
@@ -211,7 +198,7 @@ export function ChosenType({ org, typeKey, onChange }) {
           <Hourglass size={11} style={{ color: "var(--c-gold)" }} /> Kept {retentionLabel(t.retentionDays)} after it's decided
         </span>
       )}
-      <button type="button" className="btn-ghost text-xs shrink-0" onClick={onChange}>Change</button>
+      <button type="button" className="btn-ghost text-xs shrink-0" onClick={() => morph(onChange)}>Change</button>
     </div>
   );
 }
