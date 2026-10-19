@@ -20,11 +20,11 @@ export const FEATURES = [
     summary: "Eight request types, each with its own storage period — you're emailed your copy two days before a document is removed.",
     orgs: ["hqhb"],
     roles: SIGNERS,
-    video: "/whats-new/request-types.webm",
+    video: "/whats-new/request-types-v2.webm",
     slides: [
-      { src: "/whats-new/request-types-1.jpg", caption: "Make a new request now starts with the type of request" },
-      { src: "/whats-new/request-types-2.jpg", caption: "Each type shows how long its documents are kept once decided" },
-      { src: "/whats-new/request-types-3.jpg", caption: "Requests show “Stored until” — you're emailed your copy two days before" },
+      { src: "/whats-new/request-types-v2-1.jpg", caption: "Make a new request now starts with the type of request" },
+      { src: "/whats-new/request-types-v2-2.jpg", caption: "Each type shows how long its documents are kept once decided" },
+      { src: "/whats-new/request-types-v2-3.jpg", caption: "Requests show “Stored until” — you're emailed your copy two days before" },
     ],
   },
   {
