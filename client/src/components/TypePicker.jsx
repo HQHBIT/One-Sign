@@ -5,12 +5,15 @@ import { requestTypesFor, retentionLabel } from "../lib/constants.js";
 // ============================================================
 //   TYPE PICKER — the first step of "Make a new request"
 //   ------------------------------------------------------------
-//   Arriving: the rows come in turn — a short fade and rise, staggered so the
-//   list reads top to bottom.
-//   Choosing: the row presses in, a soft gold ripple spreads from the exact
-//   point clicked, a gold wash sweeps across it, its icon fills gold and a tick
-//   replaces the arrow while the other rows step back; then the form rises in
-//   with the chosen type at the top. "Change" brings the list back.
+//   Arriving: the rows come in as a wave — each rises with a soft overshoot,
+//   staggered down the list — and a fine gold ribbon draws itself under the
+//   heading, then keeps gently flowing.
+//   Choosing: the row presses in, a gold ripple spreads from the exact point
+//   clicked, liquid gold flows across it behind a moving wave edge, its icon
+//   fills gold, a tick replaces the arrow and a gold ribbon draws beneath it;
+//   a wave runs outward through the other rows as they fall away; the chosen
+//   row glides to the top and the form rises in with it. "Change" brings the
+//   list back.
 //   With "reduce motion" set on the device, every step is immediate.
 // ============================================================
 const ICONS = {
@@ -18,25 +21,43 @@ const ICONS = {
   project: FolderKanban, workdone: ClipboardCheck, confidential: Lock, general: Files,
 };
 const STAGGER_MS = 70;
-const PICK_MS = 640;
+const PICK_MS = 760;
+const GOLD = "184,137,74";
+// The moving edge of the liquid fill: a vertical sine wave, tiled.
+const WAVE_EDGE = encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 160' preserveAspectRatio='none'><path d='M0 0 H12 C24 10 24 30 12 40 C0 50 0 70 12 80 C24 90 24 110 12 120 C0 130 0 150 12 160 H0 Z' fill='rgba(${GOLD},.2)'/></svg>`);
 const EASE = "cubic-bezier(.2,.7,.2,1)";
 
 const CSS = `
 @keyframes sf-type-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-@keyframes sf-rule-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes sf-type-out { to { opacity: 0; transform: translateX(-14px); filter: blur(1px); } }
+/* The wave: rows rise with a soft overshoot; leaving, each bobs up then falls away. */
+@keyframes sf-wave-in { from { opacity: 0; transform: translateY(26px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes sf-wave-out { 0% { transform: none; } 35% { transform: translateY(-7px); opacity: 1; } 100% { transform: translateY(14px); opacity: 0; } }
+@keyframes sf-liquid { to { width: 100%; } }
+@keyframes sf-liquid-edge { from { transform: translateY(-50%); } to { transform: translateY(0); } }
+@keyframes sf-ribbon-draw { to { stroke-dashoffset: 0; } }
+@keyframes sf-ribbon-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 /* The chosen row presses, lifts, then glides up to the top of the list — where the form will show it. */
 @keyframes sf-type-lift { 0% { transform: scale(.985); } 30% { transform: translateX(6px) scale(1.01); } 100% { transform: translate(6px, var(--lift-y, 0px)) scale(1); } }
 @keyframes sf-ripple { from { transform: translate(-50%,-50%) scale(0); opacity: .38; } to { transform: translate(-50%,-50%) scale(1); opacity: 0; } }
 @keyframes sf-pop { 0% { transform: scale(.3); opacity: 0; } 60% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 @keyframes sf-chip-in { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: none; } }
 
-.sf-type-row { position: relative; overflow: hidden; animation: sf-type-in .46s ${EASE} both;
+.sf-type-row { position: relative; overflow: hidden; animation: sf-wave-in .75s cubic-bezier(.34,1.56,.64,1) both;
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .3s ease; }
 .sf-type-row > * { position: relative; z-index: 1; }
-.sf-type-row::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background: linear-gradient(90deg, rgba(184,137,74,.20), rgba(184,137,74,.05));
-  transform: scaleX(0); transform-origin: left; transition: transform .48s ${EASE}; }
+/* Liquid gold: fills the chosen row from the left behind a flowing wave edge. */
+.sf-liquid { position: absolute !important; left: 0; top: 0; bottom: 0; width: 0; z-index: 0 !important; pointer-events: none;
+  background: linear-gradient(90deg, rgba(${GOLD},.30), rgba(${GOLD},.2)); animation: sf-liquid .75s cubic-bezier(.3,.7,.25,1) forwards; }
+.sf-liquid::after { content: ""; position: absolute; top: 0; right: -23px; width: 24px; height: 200%;
+  background: url("data:image/svg+xml,${WAVE_EDGE}") 0 0 / 24px 50% repeat-y; animation: sf-liquid-edge .8s linear infinite; }
+/* Gold ribbon: a fine sine line that draws itself, then drifts. */
+.sf-ribbon { position: relative; height: 12px; overflow: hidden; pointer-events: none; }
+.sf-ribbon svg { position: absolute; left: 0; top: 0; width: 200%; height: 12px; overflow: visible; animation: sf-ribbon-drift 3.2s linear infinite; }
+.sf-ribbon path { fill: none; stroke: rgb(${GOLD}); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: sf-ribbon-draw 1.1s cubic-bezier(.3,.7,.25,1) forwards; }
+.sf-type-row .sf-ribbon { position: absolute !important; left: 0; right: 0; bottom: 2px; z-index: 1; }
+.sf-type-row .sf-ribbon path { animation-delay: .25s; stroke-width: 1.4; }
 .sf-type-row:hover, .sf-type-row:focus-visible { transform: translateX(3px); border-color: var(--c-gold) !important; box-shadow: 0 6px 18px rgba(15,26,46,.08); outline: none; }
 .sf-type-row:active { transform: scale(.985); }
 .sf-type-row:hover .sf-type-chev, .sf-type-row:focus-visible .sf-type-chev { transform: translateX(3px); opacity: .9; }
@@ -45,14 +66,12 @@ const CSS = `
 
 .sf-type-row.is-picked { animation: sf-type-lift .6s ${EASE} forwards; border-color: var(--c-gold) !important;
   box-shadow: 0 10px 26px rgba(184,137,74,.22); }
-.sf-type-row.is-picked::before { transform: scaleX(1); }
 .sf-type-row.is-picked .sf-type-icon { background-color: var(--c-gold) !important; color: #fff !important; transform: scale(1.06); }
-.sf-type-row.is-dimmed { animation: sf-type-out .3s ease forwards; pointer-events: none; }
+.sf-type-row.is-dimmed { animation: sf-wave-out .6s cubic-bezier(.4,0,.2,1) forwards; pointer-events: none; }
 .sf-type-tick { animation: sf-pop .42s ${EASE} .08s both; }
 .sf-ripple { position: absolute; z-index: 0; width: 220%; aspect-ratio: 1; border-radius: 50%; pointer-events: none;
   background: radial-gradient(circle, rgba(184,137,74,.55) 0%, rgba(184,137,74,.18) 45%, rgba(184,137,74,0) 70%);
   animation: sf-ripple .65s ease-out forwards; }
-.sf-type-rule { transform-origin: left; animation: sf-rule-in .7s ${EASE} both; }
 
 /* The form that follows: the chosen type drops in, then each section rises in turn. */
 .sf-chosen-in { animation: sf-chip-in .42s ${EASE} both; }
@@ -63,10 +82,10 @@ const CSS = `
 .sf-form-in > *:nth-child(n+5) { animation-delay: 280ms; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sf-type-row, .sf-type-rule, .sf-type-row.is-picked, .sf-type-row.is-dimmed, .sf-type-tick,
-  .sf-ripple, .sf-chosen-in, .sf-form-in > * { animation: none !important; }
+  .sf-type-row, .sf-type-row.is-picked, .sf-type-row.is-dimmed, .sf-type-tick, .sf-ripple, .sf-liquid,
+  .sf-liquid::after, .sf-ribbon svg, .sf-chosen-in, .sf-form-in > * { animation: none !important; }
+  .sf-ribbon path { animation: none !important; stroke-dashoffset: 0; }
   .sf-type-row:hover, .sf-type-row:active { transform: none; }
-  .sf-type-row::before { transition: none; }
 }
 `;
 
@@ -77,6 +96,21 @@ if (typeof document !== "undefined" && !document.getElementById("sf-type-picker-
   s.id = "sf-type-picker-css";
   s.textContent = CSS;
   document.head.appendChild(s);
+}
+
+// A gold sine line, twice the width it shows so it can drift seamlessly.
+const RIBBON_PATH = (() => {
+  const period = 40, total = 2600;
+  let d = "M0 6";
+  for (let x = 0; x < total; x += period) d += ` Q ${x + period / 4} 0 ${x + period / 2} 6 T ${x + period} 6`;
+  return d;
+})();
+function WaveRibbon({ className = "" }) {
+  return (
+    <div className={`sf-ribbon ${className}`} aria-hidden="true">
+      <svg viewBox="0 0 2600 12" preserveAspectRatio="xMinYMid slice"><path d={RIBBON_PATH} pathLength="1" /></svg>
+    </div>
+  );
 }
 
 const reducedMotion = () => {
@@ -109,7 +143,7 @@ export function TypePicker({ org, onPick }) {
       <div className="text-sm opacity-60 mt-1">
         Choose the type of request.{showRetention && " Each type's documents are kept for a set time once the request is decided — you'll be emailed your copy before it goes."}
       </div>
-      <div className="sf-type-rule h-px mt-4 mb-5" style={{ backgroundColor: "var(--c-gold)", opacity: 0.5 }} />
+      <WaveRibbon className="mt-3 mb-4" />
 
       <div className="space-y-2.5" role="list">
         {types.map((t, i) => {
@@ -121,11 +155,13 @@ export function TypePicker({ org, onPick }) {
               aria-pressed={isPicked}
               className={`sf-type-row card w-full text-left px-4 py-3.5 flex items-center gap-4${state}`}
               style={{
-                animationDelay: picked ? (isPicked ? "0ms" : `${Math.abs(i - types.findIndex(x => x.key === picked)) * 25}ms`) : `${i * STAGGER_MS}ms`,
+                animationDelay: picked ? (isPicked ? "0ms" : `${Math.abs(i - types.findIndex(x => x.key === picked)) * 45}ms`) : `${i * STAGGER_MS}ms`,
                 borderLeft: `4px solid ${t.color}`,
                 ...(isPicked ? { "--lift-y": `${liftY}px` } : {}),
               }}>
+              {isPicked && <span className="sf-liquid" aria-hidden="true" />}
               {ripple?.key === t.key && <span className="sf-ripple" style={{ left: ripple.x, top: ripple.y }} aria-hidden="true" />}
+              {isPicked && <WaveRibbon />}
               <span className="sf-type-icon w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
                 style={{ backgroundColor: `${t.color}1A`, color: t.color }}>
                 <Icon size={18} />
