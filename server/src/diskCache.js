@@ -30,6 +30,7 @@ const COLUMNS = [
   ["users", ["signature_path"]],
   ["user_signatures", ["file_path", "original_path"]],
   ["ea_documents", ["file_path"]],
+  ["shz_forwards", ["manzuri_file_path"]],
 ];
 const MIN_AGE_MS = 60 * 60_000;
 

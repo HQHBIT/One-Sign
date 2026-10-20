@@ -14,6 +14,20 @@ const SIGNERS = ["requestor", "approver", "executive"];
 
 export const FEATURES = [
   {
+    id: "waqf-manzuri",
+    released: "2026-10-20",
+    title: "Manzuri received",
+    summary: "After sending a document for Shz Saab approval, record the Manzuri on the same document and upload it — the HOD sees it with the time.",
+    orgs: ["waqf"],
+    roles: SIGNERS,
+    video: "/whats-new/waqf-manzuri.webm",
+    slides: [
+      { src: "/whats-new/waqf-manzuri-1.jpg", caption: "Sent for Shz Saab? Click Manzuri Received on the same document" },
+      { src: "/whats-new/waqf-manzuri-2.jpg", caption: "Upload the Manzuri (PDF or photo) — the time is recorded" },
+      { src: "/whats-new/waqf-manzuri-3.jpg", caption: "The HOD sees it, with the time, and can open the Manzuri" },
+    ],
+  },
+  {
     id: "request-types",
     released: "2026-10-18",
     title: "Choose the request type first",
