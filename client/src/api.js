@@ -478,6 +478,21 @@ export const api = {
   shzForwards() { return this.fetch("/api/shz/forwards").then(r => r.forwards); },
   // Which of my documents have already been sent (requestId -> forwardedAt ms).
   shzSent() { return this.fetch("/api/shz/sent").then(r => r.sent).catch(() => ({})); },
+  // { sent: {requestId: at}, manzuri: {requestId: {receivedAt, note, fileName, uploadedAt}} }
+  shzSentAll() { return this.fetch("/api/shz/sent").then(r => ({ sent: r.sent || {}, manzuri: r.manzuri || {} })).catch(() => ({ sent: {}, manzuri: {} })); },
+  // The Manzuri (Shz Saab's approval) is back: mark it received, optionally
+  // with the uploaded copy and a note. A later call can add/replace the file.
+  recordManzuri(requestId, { file, note } = {}) {
+    const fd = new FormData();
+    fd.append("received", "true");
+    if (file) fd.append("file", file, file.name);
+    if (note) fd.append("note", note);
+    return this.fetch(`/api/shz/manzuri/${requestId}`, { method: "POST", body: fd }).then(r => r.manzuri);
+  },
+  async manzuriBlob(requestId) {
+    const res = await this.fetch(`/api/shz/manzuri/${requestId}/file`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
 
   // -------- confidential documents --------
   // Email a fresh unlock code, then exchange it for a 60-second viewing window.

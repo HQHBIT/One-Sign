@@ -1393,6 +1393,84 @@ function ShzForwardButton({ req, user, sentAt, onSent, notify }) {
   );
 }
 
+// WAQF: the Manzuri (Shz Saab's approval) coming back. On the same document
+// that was sent, the requestor marks it received — the time is recorded — and
+// can upload the Manzuri itself (PDF or a photo/scan), now or later.
+async function openManzuri(requestId, notify) {
+  try { window.open(await api.manzuriBlob(requestId), "_blank"); }
+  catch (e) { notify?.(e.message || "Could not open the Manzuri", "error"); }
+}
+
+function ManzuriControl({ req, manzuri, onSaved, notify }) {
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const pick = (f) => {
+    if (!f) return;
+    if (!/\.(pdf|jpe?g|png)$/i.test(f.name)) { notify?.("The Manzuri must be a PDF, JPG or PNG", "error"); return; }
+    setFile(f);
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      const m = await api.recordManzuri(req.id, { file, note: note.trim() });
+      onSaved?.(req.id, m);
+      notify?.(manzuri ? "Manzuri uploaded" : "Manzuri received — recorded", "success");
+      setOpen(false); setFile(null); setNote("");
+    } catch (e) { notify?.(e.message || "Could not save", "error"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <>
+      {!manzuri ? (
+        <button className="btn-gold text-xs" onClick={() => setOpen(true)} title="Shz Saab's approval is back — record it and upload the Manzuri">
+          <CheckCircle size={12} /> Manzuri Received
+        </button>
+      ) : (
+        <>
+          <span className="text-xs px-2 py-1 rounded inline-flex items-center gap-1"
+            style={{ backgroundColor: "rgba(184,137,74,.14)", color: "#8B6914" }}
+            title={`Manzuri received on ${fmtIST(manzuri.receivedAt)}${manzuri.uploadedAt ? ` · uploaded ${fmtIST(manzuri.uploadedAt)}` : ""}`}>
+            <CheckCircle size={12} /> Manzuri received · {fmtIST(manzuri.receivedAt)}
+          </span>
+          {manzuri.fileName
+            ? <button className="btn-ghost text-xs" onClick={() => openManzuri(req.id, notify)}><Eye size={12} /> View Manzuri</button>
+            : <button className="btn-ghost text-xs" onClick={() => setOpen(true)}><Upload size={12} /> Upload Manzuri</button>}
+        </>
+      )}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(15,26,46,.45)" }} onClick={() => !busy && setOpen(false)}>
+          <div className="card p-6 w-full max-w-md anim-in" onClick={e => e.stopPropagation()}>
+            <div className="font-display text-xl mb-1">{manzuri ? "Upload the Manzuri" : "Manzuri received"}</div>
+            <div className="text-sm opacity-60 mb-4 truncate">{req.fileName}</div>
+            <FileDrop multiple={false} onFiles={fs => pick(fs[0])}
+              className="card p-5 mb-3 flex flex-col items-center justify-center text-center cursor-pointer tile-hover" style={{ borderStyle: "dashed" }}>
+              <Upload size={18} className="opacity-50 mb-1.5" />
+              <div className="text-sm font-medium">{file ? file.name : "Upload the Manzuri — or drag it here"}</div>
+              <div className="text-xs opacity-50 mt-0.5">{file ? "Click to choose a different file" : "PDF, or a photo/scan (JPG, PNG)"}{!manzuri && " · optional — you can add it later"}</div>
+              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={e => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+            </FileDrop>
+            {!manzuri && (
+              <>
+                <label className="block text-xs tracking-wider uppercase opacity-70 mb-2">Note (optional)</label>
+                <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} className="w-full mb-3" placeholder="e.g. received by hand from the office" disabled={busy} />
+              </>
+            )}
+            <div className="text-xs opacity-60 mb-4 inline-flex items-center gap-1"><Clock size={11} /> {manzuri ? `Received ${fmtIST(manzuri.receivedAt)} — this time stays as it is.` : "The time is recorded now and shown to the HOD."}</div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+              <button className="btn-primary" onClick={save} disabled={busy || (manzuri && !file)}>
+                <CheckCircle size={14} /> {busy ? "Saving…" : manzuri ? "Upload" : "Mark received"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // The HOD tracking board (WAQF), shown to anyone on the HOD team. View-only:
 // every document sent for Shz Saab approval, with requestor, optional comment,
 // and the IST timestamp — plus a link to open the signed document.
@@ -1419,9 +1497,24 @@ function HodDashboard({ user, notify, back }) {
                 <div className="text-xs opacity-60 mt-0.5">From {f.requestorName}</div>
                 {f.comment && <div className="text-sm mt-1.5 px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.08)" }}>{f.comment}</div>}
                 <div className="text-xs mt-1.5 inline-flex items-center gap-1 opacity-70"><Clock size={11} /> Sent {fmtIST(f.forwardedAt)}</div>
+                {f.manzuri ? (
+                  <div className="text-xs mt-1.5 px-3 py-2 rounded" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "#6E5310" }}>
+                    <div className="font-medium inline-flex items-center gap-1"><CheckCircle size={12} /> Manzuri received · {fmtIST(f.manzuri.receivedAt)}</div>
+                    {f.manzuri.uploadedAt && f.manzuri.uploadedAt !== f.manzuri.receivedAt && (
+                      <div className="opacity-80 mt-0.5">Manzuri uploaded {fmtIST(f.manzuri.uploadedAt)}</div>
+                    )}
+                    {!f.manzuri.fileName && <div className="opacity-80 mt-0.5">Not uploaded yet</div>}
+                    {f.manzuri.note && <div className="mt-1 opacity-90">{f.manzuri.note}</div>}
+                  </div>
+                ) : (
+                  <div className="text-xs mt-1.5 opacity-60 inline-flex items-center gap-1 ml-3"><Clock size={11} /> Awaiting Manzuri</div>
+                )}
               </div>
-              <div className="shrink-0">
+              <div className="shrink-0 flex flex-wrap gap-2">
                 <button className="btn-ghost text-xs" onClick={() => viewSigned(f.requestId)}><Eye size={12} /> View document</button>
+                {f.manzuri?.fileName && (
+                  <button className="btn-gold text-xs" onClick={() => openManzuri(f.requestId, notify)}><Eye size={12} /> View Manzuri</button>
+                )}
               </div>
             </div>
           ))}
@@ -1433,9 +1526,14 @@ function HodDashboard({ user, notify, back }) {
 
 function ApprovedList({ items, teams, users, user, back, notify, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
-  // WAQF only: which of my documents have already been sent for Shz Saab approval.
+  // WAQF only: which of my documents have been sent for Shz Saab approval, and
+  // which of those have their Manzuri back.
   const [sentMap, setSentMap] = useState({});
-  useEffect(() => { if (user?.orgId === "waqf") api.shzSent().then(setSentMap).catch(() => {}); }, [user?.orgId]);
+  const [manzuriMap, setManzuriMap] = useState({});
+  useEffect(() => {
+    if (user?.orgId !== "waqf") return;
+    api.shzSentAll().then(({ sent, manzuri }) => { setSentMap(sent); setManzuriMap(manzuri); }).catch(() => {});
+  }, [user?.orgId]);
   return (
     <>
       <FolderedList items={items} title={title} back={back} notify={notify}
@@ -1447,11 +1545,19 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
                 <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 <DownloadBtn req={r} user={user} />
                 <PrintBtn req={r} />
-                <ShzForwardButton req={r} user={user} sentAt={sentMap[r.id]} notify={notify}
-                  onSent={(id, at) => setSentMap(m => ({ ...m, [id]: at }))} />
                 {moveMenu}
               </div>
-            )} />
+            )}
+            footer={user?.orgId === "waqf" && r.requestorId === user?.id && r.status === "approved" ? (
+              <>
+                <ShzForwardButton req={r} user={user} sentAt={sentMap[r.id]} notify={notify}
+                  onSent={(id, at) => setSentMap(m => ({ ...m, [id]: at }))} />
+                {sentMap[r.id] && (
+                  <ManzuriControl req={r} manzuri={manzuriMap[r.id]} notify={notify}
+                    onSaved={(id, m) => setManzuriMap(x => ({ ...x, [id]: m }))} />
+                )}
+              </>
+            ) : null} />
         )} />
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </>

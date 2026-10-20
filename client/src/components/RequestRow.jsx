@@ -12,7 +12,7 @@ import { activeStep, nextPendingSigner } from "../lib/turn.js";
 // `selectable`: the list is in selection mode — a checkbox takes the grip's
 // place, the row cannot be dragged, and `selected`/`onToggle` say whether it
 // is ticked and what ticking does.
-export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId = null, selectable = false, selected = false, onToggle }) {
+export function RequestRow({ r, teams, users, i, actions, subtitle, footer, draggableId = null, selectable = false, selected = false, onToggle }) {
   const canDrag = !!draggableId && !selectable;
   const requestorName = r.requestorName || users.find(u => u.id === r.requestorId)?.name || "—";
   const approverName = r.approverName || users.find(u => u.id === r.approverId)?.name;
@@ -76,6 +76,9 @@ export function RequestRow({ r, teams, users, i, actions, subtitle, draggableId 
         </div>
         {workflowLine && <div className="text-xs mt-0.5 opacity-70 truncate">{workflowLine}</div>}
         {subtitle && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>{subtitle}</div>}
+        {/* A follow-up line under the details (e.g. WAQF Shz Saab / Manzuri), so
+            extra controls never crowd the row's own buttons. */}
+        {footer && <div className="mt-2 flex flex-wrap items-center gap-2">{footer}</div>}
         {/* On mobile, actions move below content. On desktop they're inline.
             flex-wrap so the status pill + action buttons wrap onto a new line
             instead of being clipped off the right edge. (The action groups are

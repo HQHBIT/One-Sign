@@ -416,6 +416,14 @@ async function runSchema() {
     CONSTRAINT fk_shz_request FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
     CONSTRAINT fk_shz_requestor FOREIGN KEY (requestor_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // The Manzuri (Shz Saab's approval) coming back: when the requestor marked it
+  // received, and the copy they uploaded — optional, and may come later.
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_received_at BIGINT NULL`);
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_note TEXT NULL`);
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_file_path VARCHAR(255) NULL`);
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_file_name VARCHAR(255) NULL`);
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_file_type VARCHAR(16) NULL`);
+  await tryExec(`ALTER TABLE shz_forwards ADD COLUMN manzuri_uploaded_at BIGINT NULL`);
 
   // Supporting documents that ride along with a request but are never signed.
   // A batch where only one document needs a signature sends the rest as these:

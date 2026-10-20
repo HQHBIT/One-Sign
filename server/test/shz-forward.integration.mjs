@@ -40,7 +40,7 @@ async function waitFor(base, child) {
 const pass = [], fail = [];
 const ck = (ok, label) => (ok ? pass : fail).push(label);
 const T = Date.now().toString(36), now = Date.now();
-const TEAM = `t_hod_${T}`;
+let TEAM = `t_hod_${T}`, createdTeam = false;
 const HOD = `u_hod_${T}`, REQ = `u_req_${T}`, OTHER = `u_oth_${T}`;
 const RID = `req_shz_${T}`, RID2 = `req_shz2_${T}`;
 const hdr = (id) => ({ Authorization: "Bearer " + signToken(id), "Content-Type": "application/json" });
@@ -51,14 +51,18 @@ const cleanup = async () => {
   await execute("DELETE FROM requests WHERE id IN (?, ?)", [RID, RID2]).catch(() => {});
   await execute("DELETE FROM signing_authority WHERE user_id IN (?, ?, ?)", [HOD, REQ, OTHER]).catch(() => {});
   await execute("DELETE FROM users WHERE id IN (?, ?, ?)", [HOD, REQ, OTHER]).catch(() => {});
-  await execute("DELETE FROM teams WHERE id = ?", [TEAM]).catch(() => {});
+  if (createdTeam) await execute("DELETE FROM teams WHERE id = ?", [TEAM]).catch(() => {});
 };
 
 let waqf = null, hqhb = null;
 try {
   await cleanup();
   // A WAQF "HOD" team; Mukarram is its approver (so he is the HOD).
-  await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, 'HOD', ?, 'waqf')", [TEAM, now]);
+  // Reuse this database's WAQF "HOD" team if it has one (names are unique per
+  // organisation, and the app treats the first as THE HOD team).
+  const existingHod = (await query("SELECT id FROM teams WHERE org_id = 'waqf' AND LOWER(name) = 'hod' LIMIT 1"))[0];
+  if (existingHod) TEAM = existingHod.id;
+  else { createdTeam = true; await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, 'HOD', ?, 'waqf')", [TEAM, now]); }
   await execute("INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, active, org_id) VALUES (?,?,?,?,?,?,?,1,'waqf')",
     [HOD, `hod.${T}@waqf.test`, bcrypt.hashSync("x", 4), "Mukarram (HOD)", "approver", null, now]);
   await execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [HOD, TEAM]);

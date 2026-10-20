@@ -23,7 +23,8 @@ ck(FEATURES.every(f => f.video && f.slides?.length >= 2 && f.slides.every(s => s
 // ---- audience ----
 ck(ids(libraryFor(hqApprover)) === "request-types,drag-drop-upload,recommend-changes,approver-date,supporting-documents", "HQHB approver: all five, newest first");
 ck(!libraryFor(hqRequestor).some(f => f.id === "approver-date"), "HQHB requestor: no approver-only video");
-ck(ids(libraryFor(waqfApprover)) === "drag-drop-upload", "WAQF: only the feature that applies to WAQF");
+ck(ids(libraryFor(waqfApprover)) === "waqf-manzuri,drag-drop-upload", "WAQF: only the features that apply to WAQF");
+ck(!libraryFor(hqApprover).some(f => f.id === "waqf-manzuri"), "HQHB never sees the WAQF-only Manzuri video");
 ck(ids(libraryFor(hqAdmin)) === "drag-drop-upload", "IT Admin: only what applies to admins");
 
 const many = Array.from({ length: 8 }, (_, i) => ({ id: `f${8 - i}`, released: `2026-11-${String(18 - i).padStart(2, "0")}`, orgs: null, roles: null }));
@@ -40,7 +41,7 @@ ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-15") })) === "approve
   "joined mid-way: only what shipped after they joined");
 ck(ids(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20") })) === "request-types", "brand-new account: only the newest video");
 ck(toShowOnSignIn(hqApprover, { joinedAt: day("2026-10-20"), seen: ["request-types"] }).length === 0, "brand-new account that has seen it: nothing");
-ck(ids(toShowOnSignIn(waqfApprover, veteran)) === "drag-drop-upload", "WAQF user is never shown an HQHB-only video");
+ck(ids(toShowOnSignIn(waqfApprover, veteran)) === "drag-drop-upload,waqf-manzuri", "WAQF user: their two, never an HQHB-only video");
 ck(toShowOnSignIn(hqApprover, { seen: [] }).length === 5, "unknown join date: treated as an existing user");
 
 if (failed) { console.log(`\n${failed} FAILED`); process.exit(1); }
