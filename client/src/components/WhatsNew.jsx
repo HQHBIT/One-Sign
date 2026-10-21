@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, X, Play, SkipForward } from "lucide-react";
+import { Sparkles, X, Play, SkipForward, ArrowRight } from "lucide-react";
 import { api } from "../api.js";
 import { deploymentOrg } from "../lib/deployment.js";
 import { libraryFor, toShowOnSignIn } from "../lib/whatsNew.js";
@@ -8,10 +8,12 @@ import { useEscapeKey, useScrollLock } from "../lib/useBackHandler.js";
 // ============================================================
 //   WHAT'S NEW — feature videos on sign-in, and a library of the last five
 //   ------------------------------------------------------------
-//   On sign-in each unseen feature that applies to the user plays once
-//   (≤30 s, muted, captions burned in). Skip unlocks after 5 seconds;
-//   finishing or skipping marks it seen on the server, so it does not repeat
-//   on another device. Where WebM will not play (older iPhones) the same
+//   On sign-in, when there are features the user has not been shown, a small
+//   invitation asks whether they would like to explore them — nothing plays
+//   unless they say yes. "Yes" plays the videos (≤30 s each, muted, captions
+//   burned in), skippable at any time; "Skip" closes it. Either way those
+//   features are marked seen on the server, so the invitation does not come
+//   back for them on any device — they stay in the What's new library. Where WebM will not play (older iPhones) the same
 //   feature is shown as captioned snapshots instead.
 // ============================================================
 const SKIP_AFTER_S = 5;
@@ -100,8 +102,8 @@ function FeaturePlayer({ items, gated, onSeen, onClose }) {
         <div className="px-4 sm:px-5 py-3 flex items-center gap-3">
           <div className="text-xs opacity-70 flex-1">{f.summary}</div>
           {(!gated || canSkip) && (
-            <button className="btn-primary text-xs shrink-0" onClick={gated ? next : onClose}>
-              {gated && i + 1 < items.length ? "Next" : "Done"}
+            <button className="btn-primary text-xs shrink-0" onClick={i + 1 < items.length || gated ? next : onClose}>
+              {i + 1 < items.length ? "Next" : "Done"}
             </button>
           )}
         </div>
@@ -115,6 +117,7 @@ function FeaturePlayer({ items, gated, onSeen, onClose }) {
 // lower-priority prompts can wait their turn.
 export function WhatsNewOnSignIn({ user, hold = false, onActive }) {
   const [queue, setQueue] = useState(null);
+  const [watching, setWatching] = useState(false);
 
   useEffect(() => {
     if (hold || queue) return;
@@ -131,10 +134,49 @@ export function WhatsNewOnSignIn({ user, hold = false, onActive }) {
   const active = !hold && !!queue?.length;
   useEffect(() => { onActive?.(active); }, [active]);
   if (!active) return null;
+
+  const seen = (f) => api.markFeatureSeen(f.id).catch(() => {});
+  if (watching) return <FeaturePlayer items={queue} gated={false} onSeen={seen} onClose={() => { queue.forEach(seen); setQueue([]); }} />;
   return (
-    <FeaturePlayer items={queue} gated
-      onSeen={(f) => api.markFeatureSeen(f.id).catch(() => {})}
-      onClose={() => setQueue([])} />
+    <WhatsNewInvite items={queue} onYes={() => setWatching(true)} onSkip={() => { queue.forEach(seen); setQueue([]); }} />
+  );
+}
+
+// The invitation: what is new, and a choice. Nothing plays until "Yes".
+function WhatsNewInvite({ items, onYes, onSkip }) {
+  useScrollLock();
+  useEscapeKey(true, onSkip);
+  const n = items.length;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backgroundColor: "rgba(10,16,30,.55)" }}
+      role="dialog" aria-modal="true" aria-label="New on SignFlow">
+      <div className="w-full max-w-md rounded-xl overflow-hidden shadow-2xl anim-in" style={{ backgroundColor: "var(--c-cream)" }}>
+        <div className="px-6 pt-6 pb-4">
+          <div className="w-11 h-11 rounded-full flex items-center justify-center mb-3" style={{ backgroundColor: "rgba(184,137,74,.15)" }}>
+            <Sparkles size={20} style={{ color: "var(--c-gold)" }} />
+          </div>
+          <div className="font-display text-2xl">New on SignFlow</div>
+          <div className="text-sm opacity-70 mt-1">
+            {n === 1 ? "There's a new feature" : `There are ${n} new features`} — would you like a quick look? Each is a short video.
+          </div>
+          <ul className="mt-4 space-y-2">
+            {items.slice().reverse().map(f => (
+              <li key={f.id} className="flex items-start gap-2.5 text-sm">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: "var(--c-gold)" }} />
+                <span><span className="font-medium">{f.title}</span><span className="opacity-60"> — {f.summary}</span></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="px-6 py-4 flex items-center justify-between gap-3 border-t" style={{ borderColor: "var(--c-ink-10)" }}>
+          <div className="text-[11px] opacity-50 leading-snug">Always available later under<br />What's new in your profile menu</div>
+          <div className="flex gap-2 shrink-0">
+            <button className="btn-ghost text-sm" onClick={onSkip}>Skip</button>
+            <button className="btn-primary text-sm" onClick={onYes} autoFocus>Yes, show me <ArrowRight size={14} /></button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
