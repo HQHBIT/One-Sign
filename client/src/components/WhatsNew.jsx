@@ -16,7 +16,8 @@ import { useEscapeKey, useScrollLock } from "../lib/useBackHandler.js";
 //   back for them on any device — they stay in the What's new library. Where WebM will not play (older iPhones) the same
 //   feature is shown as captioned snapshots instead.
 // ============================================================
-const SKIP_AFTER_S = 5;
+// Skip works from the first second — no waiting (owner, 2026-10-22).
+const SKIP_AFTER_S = 0;
 const SLIDE_MS = 6000;
 
 const canPlayWebm = (() => {
@@ -76,7 +77,7 @@ function FeaturePlayer({ items, gated, onSeen, onClose }) {
           {gated ? (
             <button className="btn-ghost text-xs shrink-0" disabled={!canSkip} onClick={next}
               title={canSkip ? "Skip this video" : "You can skip in a moment"}>
-              <SkipForward size={13} /> {canSkip ? "Skip" : `Skip in ${Math.max(1, Math.ceil(SKIP_AFTER_S - elapsed))}s`}
+              <SkipForward size={13} /> {canSkip ? "Skip" : "Skip"}
             </button>
           ) : (
             <button className="btn-ghost text-xs shrink-0" onClick={onClose} aria-label="Close"><X size={14} /></button>
