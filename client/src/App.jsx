@@ -302,7 +302,14 @@ export default function App() {
   useEffect(() => {
     let alive = true;
     api.authConfig()
-      .then(cfg => { if (alive) { setDeploymentOrg(cfg?.org?.id); setOrgId(cfg?.org?.id || null); } })
+      .then(cfg => {
+        if (!alive) return;
+        setDeploymentOrg(cfg?.org?.id);
+        setOrgId(cfg?.org?.id || null);
+        // The browser tab names this site's organisation — "HQHB · SignFlow" or
+        // "WAQF · SignFlow" — rather than a fixed label (it used to say "UAT").
+        if (cfg?.org?.id) document.title = `${String(cfg.org.id).toUpperCase()} · SignFlow`;
+      })
       .catch(() => { if (alive) setOrgId(null); });
     return () => { alive = false; };
   }, []);
