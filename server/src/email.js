@@ -712,6 +712,10 @@ const templates = {
           { label: "Screen", value: c.page },
           { label: "When", value: c.at },
         ]) +
+        (Array.isArray(c.attachments) && c.attachments.length
+          ? p(`<strong>Attached:</strong> ${c.attachments.map((a) => esc(a)).join(", ")}` +
+              (c.attachmentsUrl ? `<br><span style="font-size:13px;">Open them in ${esc(c.attachmentsUrl)}.</span>` : ""))
+          : "") +
         caption(`Browser: ${esc(c.userAgent || "not reported")}`),
     }),
     text: [
@@ -721,6 +725,9 @@ const templates = {
       `Organisation: ${c.org}`,
       `Screen: ${c.page}`,
       `When: ${c.at}`,
+      ...(Array.isArray(c.attachments) && c.attachments.length
+        ? [`Attached: ${c.attachments.join(", ")}`, c.attachmentsUrl ? `Open them in ${c.attachmentsUrl}.` : null].filter(Boolean)
+        : []),
       `Browser: ${c.userAgent || "not reported"}`, ``,
       `— ${BRAND.fromName}`,
     ].join("\n"),

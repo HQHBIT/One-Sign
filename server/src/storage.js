@@ -85,7 +85,7 @@ function client() {
 }
 
 // Areas map to the existing upload directories, so a key says what it holds.
-export const AREAS = ["documents", "signed", "signatures", "voicenotes"];
+export const AREAS = ["documents", "signed", "signatures", "voicenotes", "issues"];
 
 /**
  * A storage key: `area/yyyy/mm/uuid.ext`.

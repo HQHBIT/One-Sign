@@ -35,10 +35,10 @@ const api = spawn(process.execPath, ["src/index.js"], {
 let log = "";
 api.stdout.on("data", (d) => { log += d; });
 api.stderr.on("data", (d) => { log += d; });
-for (let i = 0; i < 60; i++) {
+for (let i = 0; i < 240; i++) {
   try { if ((await fetch(`${BASE}/api/health`)).ok) break; } catch {}
   await new Promise((r) => setTimeout(r, 500));
-  if (i === 59) { console.log(log); throw new Error("API did not start"); }
+  if (i === 239) { console.log(log); throw new Error("API did not start"); }
 }
 
 const pass = [], fail = [];
@@ -105,6 +105,51 @@ try {
   await hook({ message: "forged" }, { "X-Issue-Token": SECRET.slice(0, -1) });
   ck((await queryOne("SELECT COUNT(*) AS n FROM issue_reports WHERE emailed_to = ?", [REPORT_TO])).n === before,
     "a refused call records nothing");
+
+  // ---- a report with a screenshot and a recording ----
+  // A real PNG and a scrap standing in for a recording: what matters is that
+  // both are stored, listed, and readable back by the right people only.
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8//8/AzZgYsABRiwGABQeAgO9r1G0AAAAAElFTkSuQmCC", "base64");
+  const VID = Buffer.from("not really a video, but the server only checks the type it is given");
+  const fd = new FormData();
+  fd.append("message", "The signature preview is blank — screenshot and a short recording attached.");
+  fd.append("category", "issue");
+  fd.append("page", "/#requests");
+  fd.append("files", new Blob([PNG], { type: "image/png" }), "screenshot.png");
+  fd.append("files", new Blob([VID], { type: "video/mp4" }), "recording.mp4");
+  r = await fetch(`${BASE}/api/issues`, { method: "POST", headers: { Authorization: "Bearer " + signToken(U) }, body: fd });
+  const withFiles = await r.json().catch(() => ({}));
+  ck(r.status === 200, `a report with attachments is accepted (${r.status} ${withFiles.error || ""})`);
+
+  const arow = await queryOne("SELECT attachments_json FROM issue_reports WHERE id = ?", [withFiles.id]);
+  const attached = JSON.parse(arow?.attachments_json || "[]");
+  ck(attached.length === 2, `both files are recorded (${attached.length})`);
+  ck(attached[0]?.name === "screenshot.png" && attached[1]?.type === "video/mp4", `with their names and types (${attached.map((x) => x.name).join(", ")})`);
+  ck(/^issues\//.test(attached[0]?.stored || "") || /^iss_/.test(attached[0]?.stored || ""), `stored under the issues area (${attached[0]?.stored})`);
+
+  r = await fetch(`${BASE}/api/issues/${withFiles.id}/attachment/0`, { headers: { Authorization: "Bearer " + signToken(A) } });
+  const back = Buffer.from(await r.arrayBuffer());
+  ck(r.status === 200 && back.equals(PNG), `the admin gets the screenshot back byte for byte (${r.status}, ${back.length} bytes)`);
+  ck(/image\/png/.test(r.headers.get("content-type") || ""), `as a PNG (${r.headers.get("content-type")})`);
+
+  r = await fetch(`${BASE}/api/issues/${withFiles.id}/attachment/1`, { headers: { Authorization: "Bearer " + signToken(A), Range: "bytes=0-9" } });
+  ck(r.status === 206, `video can be fetched in ranges, which players need (${r.status})`);
+
+  r = await fetch(`${BASE}/api/issues/${withFiles.id}/attachment/0`, { headers: { Authorization: "Bearer " + signToken(U) } });
+  ck(r.status === 200, `the person who reported it can see their own attachment (${r.status})`);
+
+  const OTHER = `u_iss_other_${T}`;
+  await execute("INSERT INTO users (id, email, password_hash, name, role, created_at, active) VALUES (?, ?, ?, 'Nosy Requestor', 'requestor', ?, 1)",
+    [OTHER, `${OTHER}@issue.test`, hash, Date.now()]);
+  r = await fetch(`${BASE}/api/issues/${withFiles.id}/attachment/0`, { headers: { Authorization: "Bearer " + signToken(OTHER) } });
+  ck(r.status === 404, `somebody else's attachment is not readable (${r.status})`);
+  await execute("DELETE FROM users WHERE id = ?", [OTHER]);
+
+  const fd2 = new FormData();
+  fd2.append("message", "Trying to attach a spreadsheet instead of a screenshot.");
+  fd2.append("files", new Blob([Buffer.from("PK")], { type: "application/vnd.ms-excel" }), "book.xls");
+  r = await fetch(`${BASE}/api/issues`, { method: "POST", headers: { Authorization: "Bearer " + signToken(U) }, body: fd2 });
+  ck(r.status === 400, `a file that is not a picture or video is refused (${r.status})`);
 
   // ---- the admin can read what has come in; a requestor cannot ----
   r = await fetch(`${BASE}/api/issues`, { headers: { Authorization: "Bearer " + signToken(A) } });

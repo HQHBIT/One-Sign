@@ -31,7 +31,7 @@ import * as storage from "./storage.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS = path.join(__dirname, "..", "uploads");
 
-export const AREAS = ["documents", "signed", "signatures", "voicenotes"];
+export const AREAS = ["documents", "signed", "signatures", "voicenotes", "issues"];
 
 /** A stored value is a bucket key when it carries its area as a path prefix. */
 export function isKey(storedValue) {

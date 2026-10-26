@@ -370,6 +370,22 @@ export const api = {
   // boxes are required when the destination is a signature stage
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
+  // Issues submitted on the reops form and handed to us — admin only.
+  // Report a problem or suggest an improvement from inside the app.
+  reportIssue({ message, category, page, files }) {
+    // Multipart only when something is attached, so the plain case stays a
+    // plain JSON post.
+    if (!files || !files.length) {
+      return this.fetch("/api/issues", { method: "POST", body: JSON.stringify({ message, category, page }) });
+    }
+    const fd = new FormData();
+    fd.append("message", message);
+    if (category) fd.append("category", category);
+    if (page) fd.append("page", page);
+    for (const f of files) fd.append("files", f, f.name);
+    return this.fetch("/api/issues", { method: "POST", body: fd });
+  },
+  issueReports() { return this.fetch("/api/issues"); },
   // instant: true finalises immediately; false/omitted keeps the 1-hour
   // rejection window. The approver chooses at approval time.
   // addDate (HQHB): when the requestor placed no date field, stamp today's date

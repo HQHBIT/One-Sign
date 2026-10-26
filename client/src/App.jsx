@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare, Hourglass
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare, Hourglass, Flag
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -2759,6 +2759,7 @@ function AdminView(props) {
     back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
+  if (tab === "issues") return <AdminIssues back={() => setTab("home")} />;
   if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
   if (tab === "password-resets") return <AdminPasswordResets {...props} back={() => setTab("home")} />;
   if (tab === "duplicates") return <AdminDuplicates {...props} back={() => setTab("home")} />;
@@ -2773,6 +2774,7 @@ function AdminView(props) {
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
+    { key: "issues", icon: Flag, title: "Reported issues", desc: "Everything submitted on the issues & enhancements form." },
     { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
     { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." },
     { key: "duplicates", icon: Users, title: "Accounts review", desc: "oneAccess sign-ins + possible duplicate accounts.", badge: dupCount ?? undefined }
@@ -4739,6 +4741,154 @@ function AdminEmails({ emails, back }) {
           <div className="text-xs font-mono opacity-60 mb-3">to {open.to} · {fmt(open.sentAt)}</div>
           {open.error && <div className="text-xs mb-3 p-3 rounded" style={{ backgroundColor: "rgba(155,44,44,.1)", color: "var(--c-rust-deep)" }}>SendGrid error: {open.error}</div>}
           <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.body}</pre>
+        </ModalShell>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+//   REPORTED ISSUES — what people submitted on the issues form
+//   ------------------------------------------------------------
+//   The form lives on reops; it hands each submission to SignFlow, which emails
+//   it out and keeps it here. This screen is the record: what was written, by
+//   whom, and whether the notification reached the inbox.
+//
+//   When nothing has arrived, the screen says whether that is because the hand-
+//   over is not connected yet or simply because nobody has reported anything —
+//   an empty list otherwise looks identical in both cases, and the difference is
+//   the whole question an administrator would be asking.
+// ============================================================
+// One screenshot or recording, fetched with the session and shown from memory.
+// Not <img src="/api/…?token=…">: a token in an address ends up in browser
+// history, in server logs and in anything that forwards a link.
+function IssueAttachment({ issueId, index, file }) {
+  const [url, setUrl] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let revoke = null;
+    let cancelled = false;
+    api.fetch(`/api/issues/${issueId}/attachment/${index}`, { raw: true })
+      .then((res) => res.blob())
+      .then((blob) => {
+        if (cancelled) return;
+        revoke = URL.createObjectURL(blob);
+        setUrl(revoke);
+      })
+      .catch((e) => !cancelled && setErr(e.message || "Could not load this attachment"));
+    return () => { cancelled = true; if (revoke) URL.revokeObjectURL(revoke); };
+  }, [issueId, index]);
+
+  const isVideo = /^video\//.test(file.type || "");
+  return (
+    <div>
+      <div className="text-xs opacity-60 mb-1 flex items-center gap-2">
+        <span className="truncate">{file.name}</span>
+        <span className="opacity-60">{(file.size / 1048576).toFixed(1)} MB</span>
+        {url && <a href={url} download={file.name} className="underline opacity-70 hover:opacity-100 ml-auto">download</a>}
+      </div>
+      {err ? <div className="text-xs" style={{ color: "var(--c-rust-deep)" }}>{err}</div>
+        : !url ? <div className="text-xs opacity-50">Loading…</div>
+          : isVideo
+            ? <video src={url} controls preload="metadata" className="w-full rounded" style={{ maxHeight: 360, backgroundColor: "#000" }} />
+            : <img src={url} alt={file.name} className="w-full rounded" style={{ maxHeight: 360, objectFit: "contain", backgroundColor: "rgba(15,26,46,.05)" }} />}
+    </div>
+  );
+}
+
+function AdminIssues({ back }) {
+  const [state, setState] = useState({ loading: true, issues: [], reportTo: "", hookConfigured: false, error: "" });
+  const [open, setOpen] = useState(null);
+  const load = useCallback(() => {
+    setState(s => ({ ...s, loading: true }));
+    api.issueReports()
+      .then(r => setState({ loading: false, issues: r.issues || [], reportTo: r.reportTo || "", hookConfigured: !!r.hookConfigured, error: "" }))
+      .catch(e => setState(s => ({ ...s, loading: false, error: e.message || "Could not load the reports" })));
+  }, []);
+  useEffect(load, [load]);
+
+  const { loading, issues, reportTo, hookConfigured, error } = state;
+  return (
+    <div>
+      <BackHeader back={back} title="Reported issues" step={loading ? "loading…" : `${issues.length} received`} />
+
+      <div className="card p-4 mt-3 text-xs flex items-start gap-3" style={{ backgroundColor: "rgba(184,137,74,.1)" }}>
+        <AlertCircle size={14} className="mt-0.5 shrink-0" style={{ color: "var(--c-sand)" }} />
+        <div>
+          Everything reported through <strong>Report an issue</strong> lands here, and each one is emailed to <span className="font-mono">{reportTo}</span> as it arrives.
+          {hookConfigured && <> Submissions handed over by the issues form on reops arrive here too.</>}
+        </div>
+      </div>
+
+      {error && (
+        <div className="card p-4 mt-3 text-xs" style={{ color: "var(--c-rust-deep)" }}>{error}</div>
+      )}
+
+      <div className="flex items-center gap-3 mt-4">
+        <button className="btn-ghost text-xs" onClick={load} disabled={loading}>
+          <RefreshCw size={12} /> Refresh
+        </button>
+      </div>
+
+      <div className="card mt-3 overflow-hidden">
+        {loading ? (
+          <div className="p-10 text-center opacity-50 text-sm">Loading…</div>
+        ) : issues.length === 0 ? (
+          <div className="p-10 text-center opacity-50 text-sm">Nothing reported yet.</div>
+        ) : issues.map((r, i) => (
+          <button key={r.id} onClick={() => setOpen(r)}
+            className={`w-full text-left px-5 py-4 flex items-start gap-4 ${i > 0 ? "border-t" : ""}`}
+            style={{ borderColor: "rgba(15,26,46,.06)" }}>
+            <Flag size={15} className="opacity-50 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-sm truncate">{r.reporter_name || "Someone"}</div>
+                <div className="text-xs opacity-50 shrink-0">{fmtShort(Number(r.created_at))}</div>
+              </div>
+              <div className="text-xs opacity-70 mt-1 line-clamp-2" style={{ whiteSpace: "pre-wrap" }}>{r.message}</div>
+              <div className="text-xs mt-2 flex items-center gap-2 flex-wrap">
+                <span className={r.category === "enhancement" ? "pill pill-approved-pending" : "pill pill-rejected"}>
+                  {r.category === "enhancement" ? "enhancement" : "issue"}
+                </span>
+                {r.attachments?.length > 0 && (
+                  <span className="pill pill-pending">
+                    {r.attachments.length} {r.attachments.length === 1 ? "attachment" : "attachments"}
+                  </span>
+                )}
+                {r.reporter_email && <span className="opacity-50 font-mono">{r.reporter_email}</span>}
+                {r.org_id && <span className="opacity-40">{r.org_id}</span>}
+                {Number(r.emailed) ? <span className="pill pill-approved">emailed</span> : <span className="pill pill-pending">not emailed</span>}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {open && (
+        <ModalShell title={open.category === "enhancement" ? "Enhancement" : "Reported issue"} onClose={() => setOpen(null)}>
+          <div className="text-xs opacity-60 mb-3">
+            {open.reporter_name || "Someone"}
+            {open.reporter_email ? <> · <span className="font-mono">{open.reporter_email}</span></> : null}
+            {" · "}{fmt(Number(open.created_at))}
+          </div>
+          <pre className="text-sm whitespace-pre-wrap" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>{open.message}</pre>
+
+          {/* What they attached, shown rather than merely listed: a screenshot
+              is the report, and making someone download it to see it wastes the
+              point of attaching one. */}
+          {open.attachments?.length > 0 && (
+            <div className="mt-4 grid gap-3">
+              {open.attachments.map((a, i) => (
+                <IssueAttachment key={i} issueId={open.id} index={i} file={a} />
+              ))}
+            </div>
+          )}
+
+          <div className="text-xs opacity-60 mt-4 grid gap-1">
+            {open.page && <div>Screen: <span className="font-mono">{open.page}</span></div>}
+            {open.org_id && <div>Organisation: {open.org_id}</div>}
+            <div>{Number(open.emailed) ? `Emailed to ${open.emailed_to}` : "The notification email did not go out — check the SendGrid log"}</div>
+          </div>
         </ModalShell>
       )}
     </div>

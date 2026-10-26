@@ -633,6 +633,12 @@ async function runSchema() {
     CONSTRAINT fk_ea_movements_doc FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // Screenshots and screen recordings attached to a report. A JSON list rather
+  // than a table of its own: they are only ever read with their report, never
+  // queried across reports, and a report without its attachments is not a thing
+  // we ever want. Each entry is { stored, name, type, size }.
+  await tryExec("ALTER TABLE issue_reports ADD COLUMN attachments_json TEXT DEFAULT NULL");
+
   // --- oneAccess identity reconciliation ------------------------------------
   // A person can end up with a local @hqhb.in account AND a separate oneAccess
   // account (different email). We reconcile by ITS: the @hqhb.in account is the
