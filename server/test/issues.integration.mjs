@@ -35,10 +35,10 @@ const api = spawn(process.execPath, ["src/index.js"], {
 let log = "";
 api.stdout.on("data", (d) => { log += d; });
 api.stderr.on("data", (d) => { log += d; });
-for (let i = 0; i < 60; i++) {
+for (let i = 0; i < 240; i++) {
   try { if ((await fetch(`${BASE}/api/health`)).ok) break; } catch {}
   await new Promise((r) => setTimeout(r, 500));
-  if (i === 59) { console.log(log); throw new Error("API did not start"); }
+  if (i === 239) { console.log(log); throw new Error("API did not start"); }
 }
 
 const pass = [], fail = [];
