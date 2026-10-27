@@ -49,7 +49,7 @@ const boardStages = (boardId) => query("SELECT * FROM ea_stages WHERE board_id =
 // the executives this assistant is linked to. (The owner asked for every
 // executive signatory to be available; a linked executive is still what the
 // assistant needs to approve ON BEHALF of someone, which is a separate right.)
-const signableExecutives = () => query("SELECT id, name, email FROM users WHERE role = 'executive' AND active = 1 ORDER BY name");
+const signableExecutives = () => query("SELECT id, name FROM users WHERE role = 'executive' AND active = 1 ORDER BY name");
 const signableExecutive = (execId) => queryOne("SELECT id, name FROM users WHERE id = ? AND role = 'executive' AND active = 1", [execId]);
 
 async function stageOut(s) {

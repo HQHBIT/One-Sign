@@ -58,7 +58,7 @@ import { ChangePasswordModal } from "./components/ChangePasswordModal.jsx";
 import { PasswordResetModal } from "./components/PasswordResetModal.jsx";
 
 // Forms — multi-step wizards and the big create flow
-import { NewRequest, teamSigners, ord } from "./forms/NewRequest.jsx";
+import { NewRequest, teamSigners, ord, approverCount, memberCount } from "./forms/NewRequest.jsx";
 import { ReviseRequest } from "./forms/ReviseRequest.jsx";
 import { RecommendationHistory } from "./components/RecommendationHistory.jsx";
 import { setDeploymentOrg, isHqhbBox } from "./lib/deployment.js";
@@ -997,9 +997,9 @@ function MyWorkflows({ teams, notify, back, onUse }) {
                 </div>
                 {team && (
                   <>
-                    {!(team.approvers || []).length && (team.members || []).length > 0 && (
+                    {approverCount(team) === 0 && memberCount(team) > 0 && (
                       <div className="text-[10px] mb-2 px-2 py-1 rounded inline-block" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "var(--c-sand)" }}>
-                        No approver designated — choosing from {team.name}'s {(team.members || []).length} member(s).
+                        No approver designated — choosing from {team.name}'s {memberCount(team)} member(s).
                       </div>
                     )}
                     <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">Signing order</div>

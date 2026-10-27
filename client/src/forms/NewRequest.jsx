@@ -19,7 +19,10 @@ import { TypePicker, ChosenType } from "../components/TypePicker.jsx";
 // an older payload only carries `approvers`.
 export const teamSigners = (t) =>
   (t?.signers?.length ? t.signers : (t?.approvers?.length ? t.approvers : (t?.members || [])));
-const usesMembers = (t) => !(t?.approvers?.length) && (t?.members?.length > 0);
+// Non-admins get counts, not the lists themselves (server/src/privacy.js).
+export const approverCount = (t) => t?.approverCount ?? (t?.approvers?.length || 0);
+export const memberCount = (t) => t?.memberCount ?? (t?.members?.length || 0);
+const usesMembers = (t) => approverCount(t) === 0 && memberCount(t) > 0;
 // 1st / 2nd / 3rd / 4th … — labels the signing order within a step.
 export const ord = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`; };
 
@@ -754,8 +757,8 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
               <div className="grid sm:grid-cols-3 gap-3">
                 {teams.map(t => {
                   const active = targetTeam === t.id;
-                  const nApprovers = (t.approvers || []).length;
-                  const nMembers = (t.members || []).length;
+                  const nApprovers = approverCount(t);
+                  const nMembers = memberCount(t);
                   // "Any approver signs" needs a designated approver. A team with only
                   // members is still usable — via Multi-step workflow, where the
                   // requestor names the signers and their order.
@@ -802,7 +805,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                         onClick={() => {
                           // adding a person immediately arms signature placement for them
                           const newIdx = directSigners.length;
-                          setDirectSigners(list => [...list, { userId: u.id, name: u.name, email: u.email, hasSignature: u.hasSignature, signatureAspect: u.signatureAspect, boxes: [], dateFields: [] }]);
+                          setDirectSigners(list => [...list, { userId: u.id, name: u.name, hint: u.email || u.hint, hasSignature: u.hasSignature, signatureAspect: u.signatureAspect, boxes: [], dateFields: [] }]);
                           setDirectQuery("");
                           setSelfPlacing(null); setSignerDatePlacing(false);
                           setPlacingSlot({ directIdx: newIdx, kind: "signature" });
@@ -810,7 +813,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                         className="w-full text-left px-3 py-2 rounded card tile-hover flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">{u.name}</div>
-                          <div className="text-xs opacity-60 font-mono truncate">{u.email}</div>
+                          <div className="text-xs opacity-60 font-mono truncate">{u.email || u.hint}</div>
                         </div>
                         <span className="flex items-center gap-2 shrink-0">
                           {!u.hasSignature && <span className="pill pill-rejected text-[10px]">no signature yet</span>}
@@ -950,7 +953,7 @@ export function NewRequest({ user, teams, users, addRequest, notify, onDone, def
                           </div>
                           {team && usesMembers(team) && (
                             <div className="text-[10px] mb-2 px-2 py-1 rounded" style={{ backgroundColor: "rgba(184,137,74,.12)", color: "var(--c-sand)" }}>
-                              No approver designated for {team.name} — choosing from its {(team.members || []).length} member(s).
+                              No approver designated for {team.name} — choosing from its {memberCount(team)} member(s).
                             </div>
                           )}
 
@@ -1113,7 +1116,7 @@ function UserPick({ value, onPick, onClear, placeholder }) {
     return (
       <div className="card px-3 py-2 inline-flex items-center gap-2" style={{ backgroundColor: "rgba(184,137,74,.08)" }}>
         <span className="text-sm font-medium">{value.name}</span>
-        <span className="text-xs opacity-50">{value.email}</span>
+        <span className="text-xs opacity-50">{value.hint}</span>
         <button className="btn-ghost !p-0.5" title="Choose someone else" onClick={onClear}><X size={12} /></button>
       </div>
     );
@@ -1130,9 +1133,9 @@ function UserPick({ value, onPick, onClear, placeholder }) {
         <div className="card mt-1 divide-y" style={{ borderColor: "var(--c-ink-08)" }}>
           {results.map(u => (
             <button key={u.id} className="w-full text-left px-3 py-2 text-sm hover:opacity-80 flex items-center justify-between gap-2"
-              onClick={() => { onPick({ userId: u.id, name: u.name, email: u.email }); setQ(""); setResults([]); }}>
+              onClick={() => { onPick({ userId: u.id, name: u.name, hint: u.email || u.hint }); setQ(""); setResults([]); }}>
               <span className="font-medium truncate">{u.name}</span>
-              <span className="text-xs opacity-50 truncate">{u.email}</span>
+              <span className="text-xs opacity-50 truncate">{u.email || u.hint}</span>
             </button>
           ))}
         </div>
