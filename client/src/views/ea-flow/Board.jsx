@@ -144,13 +144,25 @@ export function Board({ board, executives, notify, onBoardChanged }) {
 function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onMove, onOpen, onDownload, onRemove }) {
   const [over, setOver] = useState(false);
   return (
-    <div className="shrink-0 w-72 sm:w-80 flex flex-col rounded-xl transition-colors"
-      style={{ backgroundColor: over ? "rgba(184,137,74,.12)" : "rgba(15,26,46,.035)", border: `1px solid ${over ? "var(--c-gold)" : "var(--c-ink-08)"}`, scrollSnapAlign: "start", minHeight: 260 }}
+    // A card, like every other surface in the app, rather than the flat grey
+    // panel this used to be — and the stage's colour as a 3px bar along the
+    // top, which is exactly how the Dashboard marks a stage. The two views now
+    // show the same stage the same way instead of a bar here and a dot there.
+    <div className="shrink-0 w-72 sm:w-80 flex flex-col card transition-colors"
+      style={{
+        // borderTopColor comes last on purpose: the drag-over state repaints
+        // every border, and without it the stage would lose its colour exactly
+        // when a card is hovering over it.
+        ...(over ? { backgroundColor: "rgba(184,137,74,.12)", borderColor: "var(--c-gold)" } : null),
+        borderTop: `3px solid ${colour}`,
+        scrollSnapAlign: "start", minHeight: 260,
+      }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!over) setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); const id = e.dataTransfer.getData(DRAG); if (id) onDrop(id); }}>
+      {/* No colour dot: the bar along the top says the same thing, and says it
+          the way the Dashboard does. */}
       <div className="px-3 pt-3 pb-2 flex items-center gap-2 relative" ref={menuRef}>
-        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colour }} />
         <div className="min-w-0 flex-1">
           <div className="font-medium text-sm truncate">{stage.name}</div>
           {stage.requiresSignature && <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>}
@@ -188,8 +200,15 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
   const inStage = Date.now() - doc.enteredStageAt; void tick;
 
   return (
+    // The column is now a card too, so a card sitting on it needs to be lifted
+    // rather than outlined — otherwise two identical paper surfaces meet and
+    // the card's edge disappears into the column.
     <div className="card p-3 space-y-2" draggable={!doc.waitingForSignature}
-      style={{ cursor: doc.waitingForSignature ? "default" : "grab", opacity: doc.waitingForSignature ? 0.92 : 1 }}
+      style={{
+        cursor: doc.waitingForSignature ? "default" : "grab",
+        opacity: doc.waitingForSignature ? 0.92 : 1,
+        boxShadow: "0 1px 3px rgba(15,26,46,.10)",
+      }}
       onDragStart={(e) => { e.dataTransfer.setData(DRAG, doc.id); e.dataTransfer.effectAllowed = "move"; }}>
       <div className="flex items-start gap-2">
         <GripVertical size={13} className="opacity-25 shrink-0 mt-0.5 hidden sm:block" aria-hidden="true" />
