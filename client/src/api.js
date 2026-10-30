@@ -374,6 +374,8 @@ export const api = {
   eaDeleteDocument(id) { return this.fetch(`/api/ea-flow/documents/${id}`, { method: "DELETE" }); },
   // boxes are required when the destination is a signature stage
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
+  // Nudges only the people on this card's CC stage who have not opened it.
+  eaRemindCc(id) { return this.fetch(`/api/ea-flow/documents/${id}/cc-remind`, { method: "POST", body: "{}" }); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
 
   // -------- documents shared with ME for information (a CC stage) --------

@@ -655,6 +655,12 @@ async function runSchema() {
   // needs to tell a deliberate skip from work still to come.
   await tryExec("ALTER TABLE ea_movements ADD COLUMN skipped_stage_ids TEXT DEFAULT NULL");
 
+  // Nudging someone who has not opened a document they were copied on. Kept on
+  // the notice rather than in the `reminders` table, which hangs off a
+  // request_id — a CC notice deliberately has no request behind it.
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminded_at BIGINT DEFAULT NULL");
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminder_count INT NOT NULL DEFAULT 0");
+
   // Who a CC stage copies. A list, not a column: a paper is routinely shown to
   // several people at once, and signer_id can only ever hold one. It stays the
   // single SIGNER of a signature stage, which really is one person — a request
