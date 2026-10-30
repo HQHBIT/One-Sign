@@ -215,9 +215,28 @@ try {
   await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
   r = await add2({ name: "CC", kind: "cc" });
   ck(r.status === 400, `a CC stage with nobody named is refused (${r.status})`);
-  r = await add2({ name: "CC", kind: "cc", signerId: EXEC }); const T_CC = (await j(r)).stage?.id;
-  ck(r.status === 200 && (await j(await call(EA, "GET", "/api/ea-flow/boards"))).boards.find((x) => x.id === B2)
-    ?.stages.find((s) => s.id === T_CC)?.kind === "cc", "a CC stage names someone and reports its kind");
+  ck((await add2({ name: "CC", kind: "cc", ccUserIds: [REQR] })).status === 400,
+    "a CC stage naming someone who never signs is refused");
+  // TWO people. A paper is routinely shown to several at once, and each of them
+  // is a separate answer to "did they read it".
+  r = await add2({ name: "CC", kind: "cc", ccUserIds: [EXEC, UNLINKED, EXEC] }); const T_CC = (await j(r)).stage?.id;
+  const ccStage = async () => (await j(await call(EA, "GET", "/api/ea-flow/boards")))
+    .boards.find((x) => x.id === B2)?.stages.find((s) => s.id === T_CC);
+  let st = await ccStage();
+  ck(r.status === 200 && st?.kind === "cc", "a CC stage reports its kind");
+  ck(st?.ccPeople?.length === 2, `…and copies everyone named, with the duplicate collapsed (${st?.ccPeople?.length})`);
+  ck(!!st?.signer?.id, "…and still reports one signer, so a client from before this names somebody rather than nobody");
+  // The list is replaced on edit, not added to — "who is copied" is one
+  // statement of fact, not an accumulation.
+  await call(EA, "PUT", `/api/ea-flow/stages/${T_CC}`, { name: "CC", kind: "cc", ccUserIds: [EXEC] });
+  st = await ccStage();
+  ck(st?.ccPeople?.length === 1 && st.ccPeople[0].id === EXEC, "editing the list replaces it");
+  await call(EA, "PUT", `/api/ea-flow/stages/${T_CC}`, { name: "CC", kind: "cc", ccUserIds: [EXEC, UNLINKED] });
+  ck((await ccStage())?.ccPeople?.length === 2, "…and both are there when both are chosen");
+  // The single-person shape an older client sends still works.
+  r = await add2({ name: "CC old", kind: "cc", signerId: UNLINKED });
+  ck(r.status === 200 && (await j(r)).stage?.ccPeople?.length === 1, "a CC stage made the old way, with one signerId, still works");
+  await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
   const T_END = (await j(await add2({ name: "Done" }))).stage?.id;
 
   // ---- a document filed straight into a stage ----
@@ -243,20 +262,30 @@ try {
   await new Promise((res) => setTimeout(res, 30));
   r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/move`, { toStageId: T_CC }); b = await j(r);
   ck(r.status === 200, `a card enters a CC stage with no signature box (${r.status} ${b.error || ""})`);
-  const notice = await queryOne("SELECT * FROM ea_cc_notices WHERE document_id = ? AND stage_id = ?", [D_CC, T_CC]);
-  ck(!!notice && notice.user_id === EXEC && !notice.viewed_at, "…a notice is recorded against the person, unread");
-  ck(b.document?.cc?.viewedAt === null && b.document?.cc?.name === "The Executive", "…and the card says who has it and that they have not opened it");
+  const notices = await query("SELECT * FROM ea_cc_notices WHERE document_id = ? AND stage_id = ? ORDER BY user_id", [D_CC, T_CC]);
+  ck(notices.length === 2 && notices.every((n) => !n.viewed_at), `a notice is recorded for EACH person copied, all unread (${notices.length})`);
+  ck(notices.some((n) => n.user_id === EXEC) && notices.some((n) => n.user_id === UNLINKED), "…one per person on the stage");
+  ck(b.document?.cc?.notified === 2 && b.document?.cc?.viewed === 0 && b.document?.cc?.people?.length === 2,
+    `…and the card says how many have it and how many have opened it (${b.document?.cc?.viewed} of ${b.document?.cc?.notified})`);
   ck(!(await queryOne("SELECT request_id FROM ea_documents WHERE id = ?", [D_CC]))?.request_id, "…and nobody is asked to sign anything");
 
   // ---- the person CC'd can read it, and only them ----
   b = await j(await call(EXEC, "GET", "/api/ea-cc"));
   ck(b.documents?.some((d) => d.id === D_CC), "the person CC'd sees it in their own list");
+  // Each person copied gets their OWN access and their own read state — one of
+  // them opening it must not mark it read for everybody.
+  ck((await j(await call(UNLINKED, "GET", "/api/ea-cc"))).documents?.some((d) => d.id === D_CC),
+    "…and so does the second person copied");
   ck((await j(await call(REQR, "GET", "/api/ea-cc"))).documents?.length === 0, "someone never CC'd sees nothing");
   ck((await fetch(`${BASE}/api/ea-cc/${D_CC}/file`, { headers: hdr(REQR, false) })).status === 404, "…and cannot read the file");
   r = await fetch(`${BASE}/api/ea-cc/${D_CC}/file`, { headers: hdr(EXEC, false) });
   ck(r.status === 200 && (await r.arrayBuffer()).byteLength === pdfBytes.length, `the person CC'd reads the document (${r.status})`);
-  const seen = await queryOne("SELECT viewed_at FROM ea_cc_notices WHERE document_id = ?", [D_CC]);
+  const seen = await queryOne("SELECT viewed_at FROM ea_cc_notices WHERE document_id = ? AND user_id = ?", [D_CC, EXEC]);
   ck(!!seen?.viewed_at, "…and opening it is what records that they saw it");
+  // The crux of copying several people: one reading it says nothing about the
+  // others. A shared flag here would quietly report the whole stage as read.
+  const other = await queryOne("SELECT viewed_at FROM ea_cc_notices WHERE document_id = ? AND user_id = ?", [D_CC, UNLINKED]);
+  ck(!other?.viewed_at, "…and says nothing about whether anyone else has");
 
   // A CC stage is not a gate: the card leaves whenever the assistant says so.
   await new Promise((res) => setTimeout(res, 30));
@@ -287,11 +316,13 @@ try {
   // what makes those two numbers differ.
   ck(sSig?.skippedCount === 2, `the report counts both documents that went around the signature stage (${sSig?.skippedCount})`);
   ck(sCc?.skippedCount === 1, `…and only the one that went around the CC stage (${sCc?.skippedCount})`);
-  ck(sCc?.kind === "cc" && sCc?.ccNotified === 1 && sCc?.ccViewed === 1, "…and how many CC'd people actually opened it");
+  ck(sCc?.kind === "cc" && sCc?.ccNotified === 2 && sCc?.ccViewed === 1,
+    `…and how many of the CC'd people actually opened it (${sCc?.ccViewed} of ${sCc?.ccNotified})`);
   const rowSkip = b.documents?.find((d) => d.id === D_SKIP);
   ck(rowSkip?.stages.find((s) => s.stageId === T_SIG)?.skipped === true, "a skipped stage is marked on the document's own row");
   const rowCc = b.documents?.find((d) => d.id === D_CC);
-  ck(rowCc?.cc?.[0]?.viewedAt > 0, "and the CC'd document carries when it was read");
+  ck(rowCc?.cc?.length === 2 && rowCc.cc.filter((c) => c.viewedAt).length === 1 && rowCc.cc.every((c) => c.name),
+    "and the CC'd document carries each person, named, with who has read it");
 
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");

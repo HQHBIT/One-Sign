@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Upload, FileText } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
+import { ccNames } from "./time.js";
 
 // A document enters the board here: the file, a title people will recognise on
 // the card, the stage it is actually at, and an optional note that travels with
@@ -86,7 +87,7 @@ export function AddDocument({ stages, onAdd, onClose }) {
               <option key={s.id} value={s.id}>
                 {s.name}{i === 0 ? " (the start)" : ""}
                 {(s.kind === "signature" || s.requiresSignature) ? ` · ${s.signer?.name || "signature"} signs` : ""}
-                {s.kind === "cc" ? ` · ${s.signer?.name || "someone"} is shown it` : ""}
+                {s.kind === "cc" ? ` · ${ccNames(s) || "someone"} is shown it` : ""}
               </option>
             ))}
           </select>
@@ -100,7 +101,7 @@ export function AddDocument({ stages, onAdd, onClose }) {
         )}
         {kind === "cc" && (
           <div className="text-xs opacity-60">
-            <span className="font-medium">{stage?.signer?.name}</span> will be told it is there to read. They do not sign it.
+            <span className="font-medium">{ccNames(stage)}</span> will be told it is there to read — they do not sign it.
           </div>
         )}
         <div className="flex justify-end gap-2 pt-2">

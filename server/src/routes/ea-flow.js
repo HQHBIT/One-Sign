@@ -85,14 +85,25 @@ const kindOf = (s) => s?.stage_kind || (s?.requires_signature ? "signature" : "p
 const needsSignature = (s) => kindOf(s) === "signature";
 const isCc = (s) => kindOf(s) === "cc";
 
+// Everyone a CC stage copies, in a stable order. Empty for any other kind.
+// Inactive people drop out here rather than being told about documents.
+const ccRecipients = (stageId) => query(
+  `SELECT u.id, u.name, u.role FROM ea_stage_cc c JOIN users u ON u.id = c.user_id
+    WHERE c.stage_id = ? AND u.active = 1 ORDER BY u.name`, [stageId]);
+
 async function stageOut(s) {
   const signer = s.signer_id ? await queryOne("SELECT id, name FROM users WHERE id = ?", [s.signer_id]) : null;
+  const cc = isCc(s) ? await ccRecipients(s.id) : [];
   return {
     id: s.id, boardId: s.board_id, name: s.name, position: s.position,
     kind: kindOf(s),
     // Kept so an older client still understands a signature stage.
     requiresSignature: needsSignature(s),
-    signer: signer ? { id: signer.id, name: signer.name } : null,
+    // `signer` is the ONE person who signs; `ccPeople` is the many who are
+    // merely shown it. A CC stage reports its first recipient as `signer` too,
+    // so a client from before this change names somebody rather than nobody.
+    signer: signer ? { id: signer.id, name: signer.name } : (cc[0] ? { id: cc[0].id, name: cc[0].name } : null),
+    ccPeople: cc.map((u) => ({ id: u.id, name: u.name, role: u.role })),
   };
 }
 
@@ -152,13 +163,18 @@ async function noticeCc({ doc, stage, person, at }) {
   }).catch(() => {});
 }
 
-// Who was told to look at this document at this stage, and whether they have.
+// Everyone told to look at this document at this stage, and whether they have.
+// A list because a CC stage copies several people, and "two of five have read
+// it" is the thing the assistant actually needs to know.
 async function ccStateFor(documentId, stageId) {
-  const n = await queryOne(
+  const rows = await query(
     `SELECT n.notified_at, n.viewed_at, u.name FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
-      WHERE n.document_id = ? AND n.stage_id = ? LIMIT 1`, [documentId, stageId]);
-  if (!n) return null;
-  return { name: n.name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null };
+      WHERE n.document_id = ? AND n.stage_id = ? ORDER BY u.name`, [documentId, stageId]);
+  if (!rows.length) return null;
+  const people = rows.map((n) => ({
+    name: n.name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
+  }));
+  return { people, notified: people.length, viewed: people.filter((p) => p.viewedAt).length };
 }
 
 // GET /executives — everyone a signature stage may name.
@@ -237,6 +253,15 @@ router.delete("/boards/:id", async (req, res, next) => {
 // db.js: stage_kind is the truth, that column is a compatibility shadow for a
 // server still running the previous build mid-deploy.
 const STAGE_KINDS = ["plain", "signature", "cc"];
+// Replaces a stage's CC list wholesale. Rewriting rather than diffing keeps
+// "who is copied" a single statement of fact; the notices already sent are
+// untouched, because being told about a document is a thing that happened.
+async function setStageCc(stageId, userIds) {
+  await execute("DELETE FROM ea_stage_cc WHERE stage_id = ?", [stageId]);
+  for (const uid_ of userIds) {
+    await execute("INSERT IGNORE INTO ea_stage_cc (stage_id, user_id) VALUES (?, ?)", [stageId, uid_]);
+  }
+}
 async function signatureSettings(req, body, current = null) {
   // An older client sends requiresSignature and knows nothing of kinds; a newer
   // one sends kind. Accept both, and let kind win when it is given.
@@ -244,16 +269,32 @@ async function signatureSettings(req, body, current = null) {
     ? (body.requiresSignature === undefined ? kindOf(current) : (body.requiresSignature ? "signature" : "plain"))
     : String(body.kind);
   if (!STAGE_KINDS.includes(kind)) return "Choose what this stage asks for";
-  if (kind === "plain") return { kind, requiresSignature: 0, signerId: null };
+  if (kind === "plain") return { kind, requiresSignature: 0, signerId: null, ccUserIds: [] };
+
+  // A CC stage copies MANY people; a signature stage has exactly one signer,
+  // because the request it raises has exactly one signer. Different shapes on
+  // purpose rather than one field pretending to serve both.
+  if (kind === "cc") {
+    let ids = body.ccUserIds;
+    // Accept the single-person shapes too: an older client sends signerId, and
+    // a stage made before CC stages could hold a list still has one.
+    if (ids === undefined) {
+      ids = body.signerId !== undefined
+        ? (body.signerId ? [body.signerId] : [])
+        : (current ? (await ccRecipients(current.id)).map((u) => u.id) : []);
+    }
+    const unique = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+    if (!unique.length) return "Choose who should see the document at this stage";
+    for (const id of unique) {
+      if (!(await signableExecutive(id))) return "Choose one of the signatories";
+    }
+    return { kind, requiresSignature: 0, signerId: null, ccUserIds: unique };
+  }
 
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
-  if (!signerId) {
-    return kind === "cc"
-      ? "Choose who should see the document at this stage"
-      : "Choose whose signature this stage needs";
-  }
+  if (!signerId) return "Choose whose signature this stage needs";
   if (!(await signableExecutive(signerId))) return "Choose one of the signatories";
-  return { kind, requiresSignature: kind === "signature" ? 1 : 0, signerId };
+  return { kind, requiresSignature: 1, signerId, ccUserIds: [] };
 }
 
 router.post("/boards/:id/stages", async (req, res, next) => {
@@ -270,6 +311,7 @@ router.post("/boards/:id/stages", async (req, res, next) => {
     const id = uid("eas");
     await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, Date.now()]);
+    await setStageCc(id, sig.ccUserIds);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [id]))), count: 0 } });
   } catch (e) { next(e); }
 });
@@ -285,6 +327,7 @@ router.put("/stages/:id", async (req, res, next) => {
     const sig = await signatureSettings(req, req.body || {}, s);
     if (typeof sig === "string") return res.status(400).json({ error: sig });
     await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ? WHERE id = ?", [name, sig.kind, sig.requiresSignature, sig.signerId, s.id]);
+    await setStageCc(s.id, sig.ccUserIds);
     const n = await queryOne("SELECT COUNT(*) AS n FROM ea_documents WHERE stage_id = ?", [s.id]);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [s.id]))), count: Number(n.n) } });
   } catch (e) { next(e); }
@@ -473,9 +516,12 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
   const now = at || Date.now();
 
   if (isCc(to)) {
-    const person = to.signer_id && await signableExecutive(to.signer_id);
-    if (!person) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
-    await noticeCc({ doc, stage: to, person, at: now });
+    // Everyone on the stage, not the first of them. A stage whose people have
+    // all been deactivated would silently copy nobody, so that is refused —
+    // the assistant should know the stage no longer does anything.
+    const people = await ccRecipients(to.id);
+    if (!people.length) return { status: 400, error: "Nobody on this stage can be shown the document any more — edit the stage" };
+    for (const person of people) await noticeCc({ doc, stage: to, person, at: now });
   }
 
   // Which stages did the card jump straight over? Only a FORWARD move skips
@@ -544,7 +590,10 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
     }]));
     // Every CC notice on this board, read once rather than per card.
     const notices = await query(
-      `SELECT n.* FROM ea_cc_notices n JOIN ea_documents d ON d.id = n.document_id WHERE d.board_id = ?`, [b.id]);
+      `SELECT n.*, u.name AS user_name FROM ea_cc_notices n
+         JOIN ea_documents d ON d.id = n.document_id
+         JOIN users u ON u.id = n.user_id
+        WHERE d.board_id = ? ORDER BY u.name`, [b.id]);
     const noticesByDoc = {};
     for (const n of notices) {
       (noticesByDoc[n.document_id] ||= []).push(n);
@@ -580,7 +629,7 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
         stages: stages.map((s) => ({ stageId: s.id, ms: dwell[s.id], skipped: skipped.has(s.id) })),
         skippedStageIds: [...skipped],
         cc: (noticesByDoc[d.id] || []).map((n) => ({
-          stageId: n.stage_id, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
+          stageId: n.stage_id, name: n.user_name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
         })),
         signerName: rq?.signerName || null, requestStatus: rq?.status || null,
       });

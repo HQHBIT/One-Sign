@@ -135,13 +135,24 @@ export function Dashboard({ board, notify }) {
                             {stages[i].name} skipped
                           </span>
                         ))}
-                        {(d.cc || []).map((c) => {
-                          const i = stages.findIndex((s) => s.id === c.stageId);
+                        {/* A CC stage copies several people, so there is one
+                            notice per PERSON. Grouped per stage, or a stage
+                            copied to five would print itself five times. */}
+                        {Object.entries((d.cc || []).reduce((acc, c) => {
+                          (acc[c.stageId] ||= []).push(c); return acc;
+                        }, {})).map(([stageId, list]) => {
+                          const i = stages.findIndex((s) => s.id === stageId);
                           if (i < 0) return null;
+                          const seen = list.filter((c) => c.viewedAt).length;
+                          const all = seen === list.length;
                           return (
-                            <span key={`cc_${c.stageId}`} style={c.viewedAt ? undefined : { color: "var(--c-rust)" }}>
+                            <span key={`cc_${stageId}`} style={all ? undefined : { color: "var(--c-rust)" }}
+                              title={list.map((c) => `${c.name || "someone"} — ${c.viewedAt ? `opened ${fmtWhen(c.viewedAt)}` : "not opened"}`).join("\n")}>
                               <Eye size={10} className="inline mr-1 align-middle" />
-                              {stages[i].name} {c.viewedAt ? `seen ${fmtWhen(c.viewedAt)}` : "not opened"}
+                              {stages[i].name}{" "}
+                              {list.length === 1
+                                ? (all ? `seen ${fmtWhen(list[0].viewedAt)}` : "not opened")
+                                : `seen by ${seen} of ${list.length}`}
                             </span>
                           );
                         })}
