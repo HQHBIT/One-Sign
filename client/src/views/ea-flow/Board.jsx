@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -61,6 +61,20 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   };
 
   // ---- documents ----
+  // Ask again, for the people on this card's CC stage who have not opened it.
+  // The server decides who that is and whether the cooldown has passed; this
+  // only reports what it did.
+  const [reminding, setReminding] = useState(null);
+  const remind = async (doc) => {
+    setReminding(doc.id);
+    try {
+      const r = await api.eaRemindCc(doc.id);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? r.document : d)));
+      notify(`Reminded ${r.reminded} ${r.reminded === 1 ? "person" : "people"} about ${doc.title}`, "success");
+    } catch (e) { notify(e.message || "Could not send the reminder", "error"); }
+    finally { setReminding(null); }
+  };
+
   const addDoc = async ({ file, title, note, stageId, boxes }) => {
     const landing = stages.find((s) => s.id === stageId) || stages[0];
     try {
@@ -140,7 +154,8 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             // Papers arrive at whichever step they are actually at, so every
             // column can start one — not only the first.
             onAddHere={() => setAdding({ stageId: s.id })}
-            onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc} />
+            onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
+            onRemind={remind} reminding={reminding} />
         ))}
       </div>
 
@@ -157,7 +172,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, reminding }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -206,7 +221,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} />)}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} reminding={reminding === d.id} />)}
         {/* The empty state was a dead label on every column but the first,
             which quietly said "documents begin over there". It is the same
             invitation everywhere now, and it is clickable. */}
@@ -224,9 +239,14 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
+  // `tick` already re-renders the card every minute for the dwell time, so the
+  // reminder becomes available on its own when the cooldown passes rather than
+  // staying greyed out until someone reloads the board.
+  void tick;
+  const remindReady = !doc.cc?.remindableAt || Date.now() >= doc.cc.remindableAt;
   useEffect(() => {
     if (!menu) return;
     const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setMenu(false); };
@@ -292,6 +312,20 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onDownload(doc)} title="Download"><Download size={12} /></button>
+        {/* Nothing holds a card on a CC stage, so a document can sit unread
+            while the board looks perfectly healthy. This is the only way to ask
+            again — and it is offered only while somebody still has not opened
+            it, because reminding a person who already read it is how reminders
+            become noise. */}
+        {doc.cc?.canRemind && (
+          <button className="btn-ghost text-xs px-2 py-1" disabled={reminding || !remindReady}
+            title={remindReady
+              ? `Remind the ${doc.cc.notified - doc.cc.viewed} who have not opened it`
+              : `Already reminded — next reminder after ${fmtWhen(doc.cc.remindableAt)}`}
+            onClick={() => onRemind(doc)}>
+            <BellRing size={12} /> {reminding ? "…" : "Remind"}
+          </button>
+        )}
         <button className="btn-ghost text-xs px-2 py-1 ml-auto" onClick={() => setMenu((m) => !m)} disabled={doc.waitingForSignature}
           title={doc.waitingForSignature ? `Waiting for ${rq?.signerName} to sign` : "Move to another stage"}><FolderInput size={12} /> Move to…</button>
         {menu && (

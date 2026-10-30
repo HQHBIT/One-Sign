@@ -287,10 +287,33 @@ try {
   const other = await queryOne("SELECT viewed_at FROM ea_cc_notices WHERE document_id = ? AND user_id = ?", [D_CC, UNLINKED]);
   ck(!other?.viewed_at, "…and says nothing about whether anyone else has");
 
+  // ---- reminding whoever has not opened it ----
+  // EXEC has read it; UNLINKED has not. A reminder must reach exactly one of
+  // them: writing to the person who already read it is how a reminder turns
+  // into noise that gets filtered.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/cc-remind`);
+  b = await j(r);
+  ck(r.status === 200 && b.reminded === 1, `a reminder goes only to the people who have not opened it (${r.status}, ${b.reminded})`);
+  const remindRows = await query("SELECT user_id, reminded_at, reminder_count FROM ea_cc_notices WHERE document_id = ? AND stage_id = ?", [D_CC, T_CC]);
+  const remExec = remindRows.find((x) => x.user_id === EXEC);
+  const remOther = remindRows.find((x) => x.user_id === UNLINKED);
+  ck(!remExec?.reminded_at && Number(remExec?.reminder_count) === 0, "…the one who read it is left alone");
+  ck(!!remOther?.reminded_at && Number(remOther?.reminder_count) === 1, "…and the one who has not is recorded as reminded");
+  ck(b.document?.cc?.remindableAt > Date.now(), "…and the card says when the next one is allowed");
+  // Same 24 hours as a request reminder, refused the same way.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/cc-remind`);
+  ck(r.status === 429, `a second reminder inside the cooldown is refused (${r.status})`);
+
   // A CC stage is not a gate: the card leaves whenever the assistant says so.
   await new Promise((res) => setTimeout(res, 30));
   r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/move`, { toStageId: T_END });
   ck(r.status === 200, `a CC stage never holds the card (${r.status})`);
+  // Off the stage, there is nobody to nudge about it any more.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/cc-remind`);
+  ck(r.status === 400, `a card that has left the CC stage cannot be reminded (${r.status})`);
+  // And a document on a stage where everyone HAS read it has nobody to nudge.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/cc-remind`);
+  ck(r.status === 400, `a document that is not on a CC stage at all is refused (${r.status})`);
 
   // ---- stages jumped over ----
   r = await uploadDoc(EA, B2, "Goes straight through", "", { stageId: T_IN }); const D_SKIP = (await j(r)).document?.id;

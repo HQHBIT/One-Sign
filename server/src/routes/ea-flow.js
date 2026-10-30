@@ -163,18 +163,33 @@ async function noticeCc({ doc, stage, person, at }) {
   }).catch(() => {});
 }
 
+// The same 24 hours a request reminder waits. One number and one habit: an
+// assistant should not have to learn that nudging a reader works differently
+// from nudging a signer.
+const CC_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
 // Everyone told to look at this document at this stage, and whether they have.
 // A list because a CC stage copies several people, and "two of five have read
 // it" is the thing the assistant actually needs to know.
 async function ccStateFor(documentId, stageId) {
   const rows = await query(
-    `SELECT n.notified_at, n.viewed_at, u.name FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+    `SELECT n.notified_at, n.viewed_at, n.reminded_at, n.reminder_count, u.name
+       FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
       WHERE n.document_id = ? AND n.stage_id = ? ORDER BY u.name`, [documentId, stageId]);
   if (!rows.length) return null;
   const people = rows.map((n) => ({
     name: n.name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
+    remindedAt: n.reminded_at ? Number(n.reminded_at) : null, reminders: Number(n.reminder_count || 0),
   }));
-  return { people, notified: people.length, viewed: people.filter((p) => p.viewedAt).length };
+  const unread = people.filter((p) => !p.viewedAt);
+  // When the next nudge is allowed, worked out here so the button can SAY so
+  // rather than the assistant discovering it from a refusal.
+  const lastReminder = unread.reduce((m, p) => Math.max(m, p.remindedAt || 0), 0);
+  return {
+    people, notified: people.length, viewed: people.length - unread.length,
+    canRemind: unread.length > 0,
+    remindableAt: lastReminder ? lastReminder + CC_REMINDER_COOLDOWN_MS : 0,
+  };
 }
 
 // GET /executives — everyone a signature stage may name.
@@ -545,6 +560,51 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
       skipped.length ? JSON.stringify(skipped) : null]);
   return null;
 }
+
+// ---------- nudge whoever has not opened it ----------
+// A CC stage never holds the card, which is the point of it — and also why a
+// document can sit read by nobody while the board looks perfectly healthy. The
+// assistant can ask again.
+//
+// Only the people who have NOT opened it are written to. Reminding someone who
+// already read the paper is how a reminder becomes noise that gets filtered.
+router.post("/documents/:id/cc-remind", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const stage = await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
+    if (!isCc(stage)) return res.status(400).json({ error: "This document is not on a stage that shares it for information" });
+
+    const unread = await query(
+      `SELECT n.*, u.email, u.name FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+        WHERE n.document_id = ? AND n.stage_id = ? AND n.viewed_at IS NULL AND u.active = 1`,
+      [d.id, stage.id]);
+    if (!unread.length) return res.status(400).json({ error: "Everyone has already opened it" });
+
+    // Cooldown measured per NOTICE, so adding a sixth person to a stage does
+    // not have to wait out a reminder the other five were sent.
+    const now = Date.now();
+    const due = unread.filter((n) => !n.reminded_at || now - Number(n.reminded_at) >= CC_REMINDER_COOLDOWN_MS);
+    if (!due.length) {
+      const soonest = Math.min(...unread.map((n) => Number(n.reminded_at)));
+      const hrs = Math.ceil((CC_REMINDER_COOLDOWN_MS - (now - soonest)) / 3600000);
+      return res.status(429).json({ error: `Next reminder allowed in ${hrs} hour(s)` });
+    }
+
+    for (const n of due) {
+      await execute("UPDATE ea_cc_notices SET reminded_at = ?, reminder_count = reminder_count + 1 WHERE id = ?", [now, n.id]);
+      if (!n.email) continue;
+      sendEmail({
+        to: n.email,
+        template: "ea_cc_notice",
+        // The same template, told it is a second ask: one place holds the
+        // wording for "please read this", whether it is the first time or not.
+        ctx: { name: n.name, title: d.title, stageName: stage.name, documentId: d.id, reminder: true },
+      }).catch(() => {});
+    }
+    res.json({ reminded: due.length, document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
+  } catch (e) { next(e); }
+});
 
 router.post("/documents/:id/move", async (req, res, next) => {
   try {
