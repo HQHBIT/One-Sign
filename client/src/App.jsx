@@ -2013,11 +2013,11 @@ function ForInformationList({ items, notify, onChanged, back }) {
               <div className="min-w-0 flex-1">
                 <div className="font-medium truncate">{d.title}</div>
                 <div className="text-xs opacity-60 truncate">
-                  {d.fromName ? `from ${d.fromName}` : ""}{d.stageName ? ` · ${d.stageName}` : ""} · shared {fmtWhen(d.notifiedAt)}
+                  {d.fromName ? `from ${d.fromName}` : ""}{d.stageName ? ` · ${d.stageName}` : ""} · shared {fmt(d.notifiedAt)}
                 </div>
               </div>
               {d.viewedAt
-                ? <span className="pill pill-approved shrink-0"><CheckCircle size={10} /> Opened {fmtWhen(d.viewedAt)}</span>
+                ? <span className="pill pill-approved shrink-0"><CheckCircle size={10} /> Opened {fmt(d.viewedAt)}</span>
                 : <span className="pill pill-pending shrink-0">New</span>}
               <button className="btn-primary text-xs shrink-0" disabled={busyId === d.id} onClick={() => openDoc(d)}>
                 <Eye size={13} /> {busyId === d.id ? "…" : "Open"}
