@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Hourglass, PenLine, CircleCheck, Timer, Eye } from "lucide-react";
 import { api } from "../../api.js";
 import { fmtDuration, fmtWhen, stageColour } from "./time.js";
+import { buildFlowCsv } from "./csv.js";
 
 // Where every document sat, and for how long. Everything shown here is
 // computed by the server from the movement trail; this only draws it.
@@ -26,16 +27,10 @@ export function Dashboard({ board, notify }) {
   const signers = useMemo(() => [...new Set((data?.documents || []).map((d) => d.signerName).filter(Boolean))], [data]);
 
   const exportCsv = () => {
-    const stages = data.stages;
-    const head = ["Document", "File", "Added", "Current stage", "In current stage", ...stages.map((s) => `Time in ${s.name}`), "Total elapsed", "Completed"];
-    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const lines = [head.map(esc).join(",")];
-    for (const d of rows) {
-      const cur = stages.find((s) => s.id === d.currentStageId);
-      lines.push([d.title, d.fileName, fmtWhen(d.createdAt), cur?.name || "", d.completedAt ? "" : fmtDuration(Date.now() - d.enteredStageAt),
-        ...d.stages.map((s) => fmtDuration(s.ms)), fmtDuration(d.totalMs), d.completedAt ? fmtWhen(d.completedAt) : ""].map(esc).join(","));
-    }
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    // The sheet itself is built by buildFlowCsv, which is a pure function of
+    // the data and therefore testable; this handler only turns it into a file.
+    const csv = buildFlowCsv({ stages: data.stages, documents: rows });
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${board.name.replace(/[^\w-]+/g, "_")}-flow-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
   };
