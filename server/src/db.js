@@ -655,10 +655,28 @@ async function runSchema() {
   // needs to tell a deliberate skip from work still to come.
   await tryExec("ALTER TABLE ea_movements ADD COLUMN skipped_stage_ids TEXT DEFAULT NULL");
 
+  // Who a CC stage copies. A list, not a column: a paper is routinely shown to
+  // several people at once, and signer_id can only ever hold one. It stays the
+  // single SIGNER of a signature stage, which really is one person — a request
+  // has one signer — so the two are deliberately not the same field.
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_stage_cc (
+    stage_id  VARCHAR(64) NOT NULL,
+    user_id   VARCHAR(64) NOT NULL,
+    PRIMARY KEY (stage_id, user_id),
+    INDEX idx_ea_stage_cc_user (user_id),
+    CONSTRAINT fk_ea_stage_cc_stage FOREIGN KEY (stage_id) REFERENCES ea_stages(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_stage_cc_user  FOREIGN KEY (user_id)  REFERENCES users(id)     ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // CC stages made while a stage could only name one person keep that person.
+  await tryExec(`INSERT IGNORE INTO ea_stage_cc (stage_id, user_id)
+    SELECT id, signer_id FROM ea_stages WHERE stage_kind = 'cc' AND signer_id IS NOT NULL`);
+
   // A CC stage tells someone to LOOK at a document. They are not a signer, so
   // there is no request to hang this on: notified_at is when they were told,
   // viewed_at when they actually opened it — which is the only thing that makes
-  // "for information" reportable rather than hopeful.
+  // "for information" reportable rather than hopeful. One row per PERSON per
+  // stage, so a document copied to five people is five separate answers to
+  // "did they read it".
   await tryExec(`CREATE TABLE IF NOT EXISTS ea_cc_notices (
     id           VARCHAR(64)  NOT NULL PRIMARY KEY,
     document_id  VARCHAR(64)  NOT NULL,

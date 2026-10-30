@@ -14,6 +14,21 @@ export function fmtWhen(ts) {
   return new Date(Number(ts)).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
 }
 
+// The people a CC stage copies, as a phrase that fits on a card: "Ali",
+// "Ali and Sara", "Ali, Sara and 2 others". A stage can copy a dozen people and
+// the column header still has to be one readable line.
+//
+// Falls back to the single `signer` a stage reported before CC stages could
+// hold a list, so a board loaded from an older server still names somebody.
+export function ccNames(stage) {
+  const people = stage?.ccPeople?.length ? stage.ccPeople : (stage?.signer ? [stage.signer] : []);
+  const names = people.map((p) => p.name).filter(Boolean);
+  if (!names.length) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 === 1 ? "" : "s"}`;
+}
+
 // One colour per stage on the dashboard strips, cycling if a board has more.
 export const STAGE_COLOURS = ["#B8894A", "#5E7E98", "#5C8A5C", "#9A6B8C", "#C27C4A", "#6B8E9E", "#8C7A5C", "#7A6B9A"];
 export const stageColour = (i) => STAGE_COLOURS[i % STAGE_COLOURS.length];

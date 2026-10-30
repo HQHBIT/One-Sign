@@ -20,10 +20,24 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
   const [name, setName] = useState(stage?.name || "");
   // An older board row has no kind; requiresSignature is what it had.
   const [kind, setKind] = useState(stage?.kind || (stage?.requiresSignature ? "signature" : "plain"));
+  // One signer, because the request a signature stage raises has one signer.
   const [signerId, setSignerId] = useState(stage?.signer?.id || executives[0]?.id || "");
+  // Many CC'd people, because a paper is routinely shown to several at once.
+  // ccPeople is new; fall back to the single person an older stage recorded.
+  const [ccIds, setCcIds] = useState(() => new Set(
+    stage?.ccPeople?.length ? stage.ccPeople.map((p) => p.id)
+      : (stage?.kind === "cc" && stage?.signer?.id ? [stage.signer.id] : [])
+  ));
   const [busy, setBusy] = useState(false);
-  const namesSomeone = kind !== "plain";
-  const ok = name.trim().length > 0 && (!namesSomeone || !!signerId);
+  const ok = name.trim().length > 0
+    && (kind !== "signature" || !!signerId)
+    && (kind !== "cc" || ccIds.size > 0);
+
+  const toggleCc = (id) => setCcIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const save = async () => {
     if (!ok || busy) return;
@@ -35,7 +49,8 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
         // Still sent so a server mid-deploy, which knows only this flag, cannot
         // read a CC stage as one that demands a signature.
         requiresSignature: kind === "signature",
-        signerId: namesSomeone ? signerId : null,
+        signerId: kind === "signature" ? signerId : null,
+        ccUserIds: kind === "cc" ? [...ccIds] : [],
       });
     } finally { setBusy(false); }
   };
@@ -78,11 +93,11 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
           </div>
         </div>
 
-        {namesSomeone && (
+        {/* One signer: a signature stage raises a request, and a request has
+            one signer. A dropdown says "exactly one" without needing to. */}
+        {kind === "signature" && (
           <label className="block">
-            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
-              {kind === "cc" ? "Who should see it" : "Whose signature"}
-            </div>
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Whose signature</div>
             <select value={signerId} onChange={(e) => setSignerId(e.target.value)} className="w-full">
               {/* The role is shown because two signatories can share a name, and
                   because it explains why someone appears here at all. */}
@@ -93,6 +108,31 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
               ))}
             </select>
           </label>
+        )}
+
+        {/* Many readers: tick boxes rather than a dropdown, because a paper is
+            routinely shown to several people at once and the list has to be
+            readable at a glance when someone comes back to edit it. */}
+        {kind === "cc" && (
+          <div>
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
+              Who should see it {ccIds.size > 0 && <span className="opacity-70">· {ccIds.size} chosen</span>}
+            </div>
+            <div className="rounded-lg max-h-56 overflow-auto" style={{ border: "1px solid var(--c-ink-10)" }}>
+              {executives.map((x) => (
+                <label key={x.id} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer text-sm border-b last:border-0"
+                  style={{ borderColor: "var(--c-ink-08)" }}>
+                  <input type="checkbox" checked={ccIds.has(x.id)} onChange={() => toggleCc(x.id)}
+                    style={{ accentColor: "var(--c-gold)" }} />
+                  <span className="truncate">
+                    {x.name}
+                    {x.role && x.role !== "executive" && <span className="opacity-50"> · {ROLE_LABELS[x.role] || x.role}</span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {ccIds.size === 0 && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>Choose at least one person.</div>}
+          </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2">

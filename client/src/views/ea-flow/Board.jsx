@@ -6,7 +6,7 @@ import { ModalShell } from "../../components/ModalShell.jsx";
 import { StageEditor } from "./StageEditor.jsx";
 import { AddDocument } from "./AddDocument.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
-import { fmtDuration, fmtWhen, stageColour } from "./time.js";
+import { fmtDuration, fmtWhen, stageColour, ccNames } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
 const DRAG = "text/x-ea-document";
@@ -79,7 +79,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
       setPlacing(null);
       notify(
         signs ? `Sent to ${stage.signer?.name} to sign`
-          : stage.kind === "cc" ? `${stage.signer?.name} has been told to read ${doc.title}`
+          : stage.kind === "cc" ? `${ccNames(stage)} ${(stage.ccPeople?.length ?? 1) > 1 ? "have" : "has"} been told to read ${doc.title}`
             : `${doc.title} moved to ${stage.name}`,
         "success");
       await onBoardChanged();
@@ -180,7 +180,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
               stage looked identical to a plain one before, which made a stage
               that notifies somebody indistinguishable from one that does not. */}
           {stage.kind === "cc"
-            ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><Eye size={10} /> {stage.signer?.name} is shown it</div>
+            ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><Eye size={10} /> {ccNames(stage)} {(stage.ccPeople?.length ?? 1) > 1 ? "are" : "is"} shown it</div>
             : (stage.kind === "signature" || stage.requiresSignature)
               ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>
               : null}
@@ -248,11 +248,26 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
         {/* A CC stage never holds the card, so the only thing worth showing is
             whether the person has actually opened it — "sent" on its own tells
             the assistant nothing they did not already know. */}
-        {doc.cc && (
-          doc.cc.viewedAt
-            ? <span className="pill pill-approved" title={`Opened ${fmtWhen(doc.cc.viewedAt)}`}><Eye size={10} /> Seen by {doc.cc.name?.split(" ")[0]}</span>
-            : <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={`Told ${fmtWhen(doc.cc.notifiedAt)}`}><Eye size={10} /> Not opened yet</span>
-        )}
+        {doc.cc && (() => {
+          // With several people copied this is a COUNT, not a name. The names
+          // and their individual state go in the tooltip, where a long list
+          // cannot push the card apart.
+          const { notified, viewed, people } = doc.cc;
+          const tip = people.map((p) => `${p.name} — ${p.viewedAt ? `opened ${fmtWhen(p.viewedAt)}` : "not opened"}`).join("\n");
+          const one = notified === 1;
+          if (viewed === notified) {
+            return (
+              <span className="pill pill-approved" title={tip}>
+                <Eye size={10} /> {one ? `Seen by ${people[0].name.split(" ")[0]}` : `Seen by all ${notified}`}
+              </span>
+            );
+          }
+          return (
+            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={tip}>
+              <Eye size={10} /> {viewed === 0 ? (one ? "Not opened yet" : `None of ${notified} opened`) : `Seen by ${viewed} of ${notified}`}
+            </span>
+          );
+        })()}
       </div>
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
