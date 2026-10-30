@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { PenLine } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
+import { ROLE_LABELS } from "../../lib/constants.js";
 
-// Add or edit one stage: its name, and whether entering it should ask one of
-// the assistant's executives to sign. `executives` are the people this
-// assistant is linked to — the only ones a stage may name.
+// Add or edit one stage: its name, and whether entering it should ask someone
+// to sign. `executives` (a historical name) is everyone who may be NAMED by a
+// signature stage — every active Approver and Executive, not only the people
+// this assistant is linked to, and not only the Executive role. Entering the
+// stage raises an ordinary direct request to whoever is named.
 export function StageEditor({ stage, executives, onSave, onClose }) {
   const [name, setName] = useState(stage?.name || "");
   const [needsSig, setNeedsSig] = useState(!!stage?.requiresSignature);
@@ -34,8 +37,8 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
           <span>
             <span className="text-sm font-medium inline-flex items-center gap-1.5"><PenLine size={13} /> This stage needs a signature</span>
             <span className="block text-xs opacity-60 mt-0.5">
-              Moving a document here sends it to the executive to sign, exactly like a normal request. It can move on once they have signed.
-              {executives.length === 0 && " — no executive accounts exist yet."}
+              Moving a document here sends it to that person to sign, exactly like a normal request. It can move on once they have signed.
+              {executives.length === 0 && " — nobody can be named yet: this needs an active Approver or Executive account."}
             </span>
           </span>
         </label>
@@ -44,7 +47,13 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
           <label className="block">
             <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Whose signature</div>
             <select value={signerId} onChange={(e) => setSignerId(e.target.value)} className="w-full">
-              {executives.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              {/* The role is shown because two signatories can share a name, and
+                  because it explains why someone appears here at all. */}
+              {executives.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}{x.role && x.role !== "executive" ? ` · ${ROLE_LABELS[x.role] || x.role}` : ""}
+                </option>
+              ))}
             </select>
           </label>
         )}

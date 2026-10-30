@@ -21,7 +21,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { query, queryOne, execute } from "../db.js";
-import { authRequired, requireRole } from "../auth.js";
+import { authRequired, requireRole, SIGNER_ROLES } from "../auth.js";
 import { deploymentOrg } from "../org.js";
 import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { raiseDirectRequest, DirectRequestError } from "./requests.js";
@@ -45,12 +45,29 @@ const myStage = (uid_, id) => queryOne(
 const myDoc = (uid_, id) => queryOne(
   "SELECT d.* FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id WHERE d.id = ? AND b.owner_id = ?", [id, uid_]);
 const boardStages = (boardId) => query("SELECT * FROM ea_stages WHERE board_id = ? ORDER BY position ASC", [boardId]);
-// Anyone with the Executive role may be named by a signature stage — not only
-// the executives this assistant is linked to. (The owner asked for every
-// executive signatory to be available; a linked executive is still what the
-// assistant needs to approve ON BEHALF of someone, which is a separate right.)
-const signableExecutives = () => query("SELECT id, name, email FROM users WHERE role = 'executive' AND active = 1 ORDER BY name");
-const signableExecutive = (execId) => queryOne("SELECT id, name FROM users WHERE id = ? AND role = 'executive' AND active = 1", [execId]);
+// Who a signature stage may name. NOT only the executives this assistant is
+// linked to — being linked is what lets an assistant act ON BEHALF of someone,
+// which is a separate right from simply being sent a document to sign.
+//
+// Nor only the Executive role, which is what this used to be. A signature stage
+// raises an ordinary direct request to the person named, and raiseDirectRequest
+// asks nothing of their role — so an Approver signs one exactly as an Executive
+// does. Restricting the list to role='executive' therefore hid most of the
+// people who actually sign: on a deployment whose signatories are Approvers the
+// list came back empty, which DISABLES the "needs a signature" checkbox
+// outright and reads as the feature being missing.
+//
+// SIGNER_ROLES is the existing answer to "who signs" (approver + executive), so
+// this defers to it rather than inventing a second rule that can drift from it.
+// `role` is returned so the picker can tell two similar names apart.
+// (The wire name stays `executives` — historical, and the client reads it.)
+const ROLE_PLACEHOLDERS = SIGNER_ROLES.map(() => "?").join(",");
+const signableExecutives = () => query(
+  `SELECT id, name, email, role FROM users WHERE role IN (${ROLE_PLACEHOLDERS}) AND active = 1 ORDER BY name`,
+  SIGNER_ROLES);
+const signableExecutive = (execId) => queryOne(
+  `SELECT id, name, role FROM users WHERE id = ? AND role IN (${ROLE_PLACEHOLDERS}) AND active = 1`,
+  [execId, ...SIGNER_ROLES]);
 
 async function stageOut(s) {
   const signer = s.signer_id ? await queryOne("SELECT id, name FROM users WHERE id = ?", [s.signer_id]) : null;
@@ -156,14 +173,14 @@ router.delete("/boards/:id", async (req, res, next) => {
 // ============================================================
 //   stages
 // ============================================================
-// Reads the signature settings off a body and checks the executive is one of
+// Reads the signature settings off a body and checks the named person is one
 // this assistant's. Returns { requiresSignature, signerId } or an error string.
 async function signatureSettings(req, body, current = null) {
   const requiresSignature = body.requiresSignature === undefined ? !!current?.requires_signature : !!body.requiresSignature;
   if (!requiresSignature) return { requiresSignature: 0, signerId: null };
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
   if (!signerId) return "Choose whose signature this stage needs";
-  if (!(await signableExecutive(signerId))) return "Choose one of the executives";
+  if (!(await signableExecutive(signerId))) return "Choose one of the signatories";
   return { requiresSignature: 1, signerId };
 }
 
@@ -312,7 +329,7 @@ router.delete("/documents/:id", async (req, res, next) => {
     const d = await myDoc(req.user.id, req.params.id);
     if (!d) return res.status(404).json({ error: "Not found" });
     const rq = await requestFor(d);
-    if (isWaiting(rq)) return res.status(409).json({ error: `Waiting for ${rq.signerName || "the executive"} to sign — withdraw that request first` });
+    if (isWaiting(rq)) return res.status(409).json({ error: `Waiting for ${rq.signerName || "the signatory"} to sign — withdraw that request first` });
     await execute("DELETE FROM ea_documents WHERE id = ?", [d.id]);
     deleteStored("documents", d.file_path).catch(() => {});
     res.json({ ok: true });
@@ -333,7 +350,7 @@ router.post("/documents/:id/move", async (req, res, next) => {
     const rq = await requestFor(d);
 
     if (from?.requires_signature && isWaiting(rq)) {
-      return res.status(409).json({ error: `Waiting for ${rq.signerName || "the executive"} to sign` });
+      return res.status(409).json({ error: `Waiting for ${rq.signerName || "the signatory"} to sign` });
     }
 
     let raised = null;
@@ -342,7 +359,7 @@ router.post("/documents/:id/move", async (req, res, next) => {
       if (!boxes.length || boxes.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
         return res.status(400).json({ error: "Place the signature box on the document first" });
       const signer = to.signer_id && await signableExecutive(to.signer_id);
-      if (!signer) return res.status(400).json({ error: "This stage's executive is no longer available — edit the stage" });
+      if (!signer) return res.status(400).json({ error: "This stage's signatory is no longer available — edit the stage" });
       const { bytes } = await currentBytes(d);
       const ext = d.file_type === "pdf" ? "pdf" : "xlsx";
       try {
