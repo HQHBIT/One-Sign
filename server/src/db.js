@@ -633,6 +633,46 @@ async function runSchema() {
     CONSTRAINT fk_ea_movements_doc FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // What a stage ASKS OF someone, rather than only whether it wants a signature.
+  //   plain      — a holding step; nobody is asked for anything
+  //   signature  — raises a request to signer_id, and the card cannot leave until signed
+  //   cc         — signer_id is shown the document FOR INFORMATION; they never sign
+  //                and the card is free to move on
+  //
+  // stage_kind is the single source of truth. requires_signature is kept beside
+  // it for one reason only: a server running the previous build during a deploy
+  // reads that column, and must not mistake a CC stage for a signature stage.
+  // It is written in exactly one place (signatureSettings in ea-flow.js) so the
+  // two cannot drift, and stage_kind wins wherever they ever disagreed.
+  await tryExec("ALTER TABLE ea_stages ADD COLUMN stage_kind ENUM('plain','signature','cc') NOT NULL DEFAULT 'plain'");
+  // Backfill once, for the stages that existed before kinds did. Guarded on
+  // 'plain' so a stage later changed by hand is never dragged back.
+  await tryExec("UPDATE ea_stages SET stage_kind = 'signature' WHERE requires_signature = 1 AND stage_kind = 'plain'");
+
+  // The stages a card jumped straight over on its way here, as a JSON array of
+  // stage ids. A skipped stage is otherwise indistinguishable from one the card
+  // has not reached yet — both simply have no movement row — and the report
+  // needs to tell a deliberate skip from work still to come.
+  await tryExec("ALTER TABLE ea_movements ADD COLUMN skipped_stage_ids TEXT DEFAULT NULL");
+
+  // A CC stage tells someone to LOOK at a document. They are not a signer, so
+  // there is no request to hang this on: notified_at is when they were told,
+  // viewed_at when they actually opened it — which is the only thing that makes
+  // "for information" reportable rather than hopeful.
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_cc_notices (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    document_id  VARCHAR(64)  NOT NULL,
+    stage_id     VARCHAR(64)  NOT NULL,
+    user_id      VARCHAR(64)  NOT NULL,
+    notified_at  BIGINT       NOT NULL,
+    viewed_at    BIGINT       DEFAULT NULL,
+    UNIQUE KEY uq_ea_cc (document_id, stage_id, user_id),
+    INDEX idx_ea_cc_user (user_id, notified_at),
+    CONSTRAINT fk_ea_cc_doc   FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_cc_stage FOREIGN KEY (stage_id)    REFERENCES ea_stages(id)    ON DELETE CASCADE,
+    CONSTRAINT fk_ea_cc_user  FOREIGN KEY (user_id)     REFERENCES users(id)        ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Screenshots and screen recordings attached to a report. A JSON list rather
   // than a table of its own: they are only ever read with their report, never
   // queried across reports, and a report without its attachments is not a thing

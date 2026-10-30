@@ -353,11 +353,16 @@ export const api = {
   eaDeleteStage(id) { return this.fetch(`/api/ea-flow/stages/${id}`, { method: "DELETE" }); },
   eaOrderStages(boardId, stageIds) { return this.fetch(`/api/ea-flow/boards/${boardId}/stages/order`, { method: "PUT", body: JSON.stringify({ stageIds }) }).then(r => r.stages); },
   eaDocuments(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/documents`).then(r => r.documents); },
-  eaAddDocument(boardId, { file, title, note }) {
+  // stageId files the document straight into a stage other than the first;
+  // boxes are required when that stage asks for a signature, exactly as they
+  // are when moving a card into one.
+  eaAddDocument(boardId, { file, title, note, stageId, boxes }) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (title) fd.append("title", title);
     if (note) fd.append("note", note);
+    if (stageId) fd.append("stageId", stageId);
+    if (boxes?.length) fd.append("boxes", JSON.stringify(boxes));
     return this.fetch(`/api/ea-flow/boards/${boardId}/documents`, { method: "POST", body: fd }).then(r => r.document);
   },
   // The card's current bytes (the signed copy once signed), as a blob URL.
@@ -370,6 +375,16 @@ export const api = {
   // boxes are required when the destination is a signature stage
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
+
+  // -------- documents shared with ME for information (a CC stage) --------
+  // A separate API from ea-flow: the reader is an executive or approver, never
+  // the assistant whose board it came from.
+  ccForMe() { return this.fetch("/api/ea-cc").then(r => r.documents); },
+  async ccFileUrl(id) {
+    const res = await this.fetch(`/api/ea-cc/${id}/file`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
+  ccMarkSeen(id) { return this.fetch(`/api/ea-cc/${id}/seen`, { method: "POST", body: "{}" }); },
   // Issues submitted on the reops form and handed to us — admin only.
   // Report a problem or suggest an improvement from inside the app.
   reportIssue({ message, category, page, files }) {

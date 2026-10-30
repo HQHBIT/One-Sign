@@ -26,12 +26,21 @@ import { deploymentOrg } from "../org.js";
 import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { raiseDirectRequest, DirectRequestError } from "./requests.js";
 import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
+import { sendEmail } from "../email.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: UPLOAD_CEILING_BYTES } });
 const uid = (p) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 const MAX_NAME = 60, MAX_TITLE = 120;
 const tidy = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+// Signature boxes arrive as JSON on a multipart upload and as a real array on a
+// JSON move. Accept either, and never throw on malformed input — enterStage
+// already refuses an empty list with a message the assistant can act on.
+function parseBoxes(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v !== "string" || !v.trim()) return [];
+  try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
+}
 
 // The feature exists on HQHB deployments only. Checked before authentication
 // so a WAQF box does not even reveal that the routes are there.
@@ -69,9 +78,22 @@ const signableExecutive = (execId) => queryOne(
   `SELECT id, name, role FROM users WHERE id = ? AND role IN (${ROLE_PLACEHOLDERS}) AND active = 1`,
   [execId, ...SIGNER_ROLES]);
 
+// What a stage asks of its person. stage_kind is authoritative; the fallback to
+// requires_signature covers a row written by the previous build during a deploy,
+// before the backfill has run.
+const kindOf = (s) => s?.stage_kind || (s?.requires_signature ? "signature" : "plain");
+const needsSignature = (s) => kindOf(s) === "signature";
+const isCc = (s) => kindOf(s) === "cc";
+
 async function stageOut(s) {
   const signer = s.signer_id ? await queryOne("SELECT id, name FROM users WHERE id = ?", [s.signer_id]) : null;
-  return { id: s.id, boardId: s.board_id, name: s.name, position: s.position, requiresSignature: !!s.requires_signature, signer: signer ? { id: signer.id, name: signer.name } : null };
+  return {
+    id: s.id, boardId: s.board_id, name: s.name, position: s.position,
+    kind: kindOf(s),
+    // Kept so an older client still understands a signature stage.
+    requiresSignature: needsSignature(s),
+    signer: signer ? { id: signer.id, name: signer.name } : null,
+  };
 }
 
 // The request a card raised at its latest signature stage, if any.
@@ -97,10 +119,46 @@ async function docOut(d, stageById) {
     enteredStageAt: Number(d.entered_stage_at), completedAt: d.completed_at ? Number(d.completed_at) : null,
     // Shown on the card only while the card sits on a signature stage; the
     // signed copy stays the current file wherever the card goes afterwards.
-    request: stage?.requires_signature && rq ? { id: rq.id, status: rq.status, rejectReason: rq.rejectReason, signerName: rq.signerName } : null,
+    request: needsSignature(stage) && rq ? { id: rq.id, status: rq.status, rejectReason: rq.rejectReason, signerName: rq.signerName } : null,
     currentFile: isSigned(rq) ? "signed" : "original",
-    waitingForSignature: !!stage?.requires_signature && isWaiting(rq),
+    waitingForSignature: needsSignature(stage) && isWaiting(rq),
+    // On a CC stage the card is never held; what the assistant wants to see is
+    // whether the person has actually opened it yet.
+    cc: isCc(stage) ? await ccStateFor(d.id, stage.id) : null,
   };
+}
+
+// Tell someone a document is waiting for their eyes at a CC stage.
+//
+// The notice row is what makes this reportable and what grants them access to
+// read the file; the email is a courtesy on top. A re-entry into the same stage
+// refreshes the notice and clears viewed_at, because it is a fresh ask about a
+// document that may since have been signed by someone else.
+//
+// The email is deliberately not awaited: a card must still move when SendGrid
+// is slow or unconfigured, exactly as the rest of the app treats notification.
+async function noticeCc({ doc, stage, person, at }) {
+  await execute(
+    `INSERT INTO ea_cc_notices (id, document_id, stage_id, user_id, notified_at, viewed_at)
+     VALUES (?, ?, ?, ?, ?, NULL)
+     ON DUPLICATE KEY UPDATE notified_at = VALUES(notified_at), viewed_at = NULL`,
+    [uid("eacc"), doc.id, stage.id, person.id, at]);
+  const to = await queryOne("SELECT email, name FROM users WHERE id = ?", [person.id]);
+  if (!to?.email) return;
+  sendEmail({
+    to: to.email,
+    template: "ea_cc_notice",
+    ctx: { name: to.name, title: doc.title, stageName: stage.name, documentId: doc.id },
+  }).catch(() => {});
+}
+
+// Who was told to look at this document at this stage, and whether they have.
+async function ccStateFor(documentId, stageId) {
+  const n = await queryOne(
+    `SELECT n.notified_at, n.viewed_at, u.name FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+      WHERE n.document_id = ? AND n.stage_id = ? LIMIT 1`, [documentId, stageId]);
+  if (!n) return null;
+  return { name: n.name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null };
 }
 
 // GET /executives — everyone a signature stage may name.
@@ -173,15 +231,29 @@ router.delete("/boards/:id", async (req, res, next) => {
 // ============================================================
 //   stages
 // ============================================================
-// Reads the signature settings off a body and checks the named person is one
-// this assistant's. Returns { requiresSignature, signerId } or an error string.
+// Reads a stage's kind and its person off a body, checking the person is one we
+// are allowed to name. Returns { kind, requiresSignature, signerId } or an error
+// string. THE ONLY writer of requires_signature — see the note on the column in
+// db.js: stage_kind is the truth, that column is a compatibility shadow for a
+// server still running the previous build mid-deploy.
+const STAGE_KINDS = ["plain", "signature", "cc"];
 async function signatureSettings(req, body, current = null) {
-  const requiresSignature = body.requiresSignature === undefined ? !!current?.requires_signature : !!body.requiresSignature;
-  if (!requiresSignature) return { requiresSignature: 0, signerId: null };
+  // An older client sends requiresSignature and knows nothing of kinds; a newer
+  // one sends kind. Accept both, and let kind win when it is given.
+  let kind = body.kind === undefined
+    ? (body.requiresSignature === undefined ? kindOf(current) : (body.requiresSignature ? "signature" : "plain"))
+    : String(body.kind);
+  if (!STAGE_KINDS.includes(kind)) return "Choose what this stage asks for";
+  if (kind === "plain") return { kind, requiresSignature: 0, signerId: null };
+
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
-  if (!signerId) return "Choose whose signature this stage needs";
+  if (!signerId) {
+    return kind === "cc"
+      ? "Choose who should see the document at this stage"
+      : "Choose whose signature this stage needs";
+  }
   if (!(await signableExecutive(signerId))) return "Choose one of the signatories";
-  return { requiresSignature: 1, signerId };
+  return { kind, requiresSignature: kind === "signature" ? 1 : 0, signerId };
 }
 
 router.post("/boards/:id/stages", async (req, res, next) => {
@@ -196,8 +268,8 @@ router.post("/boards/:id/stages", async (req, res, next) => {
     if (typeof sig === "string") return res.status(400).json({ error: sig });
     const last = await queryOne("SELECT COALESCE(MAX(position), 0) AS p FROM ea_stages WHERE board_id = ?", [b.id]);
     const id = uid("eas");
-    await execute("INSERT INTO ea_stages (id, board_id, name, position, requires_signature, signer_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [id, b.id, name, Number(last.p) + 1, sig.requiresSignature, sig.signerId, Date.now()]);
+    await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, Date.now()]);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [id]))), count: 0 } });
   } catch (e) { next(e); }
 });
@@ -212,7 +284,7 @@ router.put("/stages/:id", async (req, res, next) => {
     if (clash) return res.status(409).json({ error: `This board already has a stage called "${name}"` });
     const sig = await signatureSettings(req, req.body || {}, s);
     if (typeof sig === "string") return res.status(400).json({ error: sig });
-    await execute("UPDATE ea_stages SET name = ?, requires_signature = ?, signer_id = ? WHERE id = ?", [name, sig.requiresSignature, sig.signerId, s.id]);
+    await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ? WHERE id = ?", [name, sig.kind, sig.requiresSignature, sig.signerId, s.id]);
     const n = await queryOne("SELECT COUNT(*) AS n FROM ea_documents WHERE stage_id = ?", [s.id]);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [s.id]))), count: Number(n.n) } });
   } catch (e) { next(e); }
@@ -265,8 +337,15 @@ router.post("/boards/:id/documents", upload.single("file"), async (req, res, nex
   try {
     const b = await myBoard(req.user.id, req.params.id);
     if (!b) return res.status(404).json({ error: "Not found" });
-    const first = (await boardStages(b.id))[0];
+    const stages = await boardStages(b.id);
+    const first = stages[0];
     if (!first) return res.status(400).json({ error: "Add a stage to the board first" });
+    // A document may be filed straight into the stage it is actually at —
+    // papers do not always arrive at the beginning. No stageId still means the
+    // first stage, so every existing caller behaves exactly as before.
+    const wanted = String(req.body?.stageId || "").trim();
+    const landing = wanted ? stages.find((s) => s.id === wanted) : first;
+    if (!landing) return res.status(400).json({ error: "Choose a stage on this board" });
     const file = req.file;
     if (!file) return res.status(400).json({ error: "file is required" });
     const tooBig = uploadSizeError(file);
@@ -281,19 +360,32 @@ router.post("/boards/:id/documents", upload.single("file"), async (req, res, nex
     const storedName = await writeStored("documents", `${id}.${ext}`, file.buffer,
       { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const now = Date.now();
+    // Created in the FIRST stage and then entered into the landing stage, even
+    // when they are the same. enterStage is what raises a signature request and
+    // sends a CC notice, so routing the creation through it is what stops an
+    // upload into a signature stage from sitting there with nobody asked.
     await execute(
       `INSERT INTO ea_documents (id, board_id, stage_id, title, note, file_name, file_path, file_type, request_id, created_by, created_at, entered_stage_at, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
       [id, b.id, first.id, title, note, file.originalname, storedName, fileType, req.user.id, now, now]);
-    await execute("INSERT INTO ea_movements (id, document_id, from_stage_id, to_stage_id, moved_at, moved_by, request_id) VALUES (?, ?, NULL, ?, ?, ?, NULL)",
-      [uid("eam"), id, first.id, now, req.user.id]);
+    const doc = await queryOne("SELECT * FROM ea_documents WHERE id = ?", [id]);
+    // `from: null` — a card being created has skipped nothing, however far
+    // along the board it is filed.
+    const boxes = parseBoxes(req.body?.boxes);
+    const bad = await enterStage({ doc, from: null, to: landing, boxes, actor: req.user, at: now });
+    if (bad) {
+      // Nothing was asked of anyone, so leave no half-made card behind.
+      await execute("DELETE FROM ea_documents WHERE id = ?", [id]);
+      await deleteStored("documents", storedName).catch(() => {});
+      return res.status(bad.status).json({ error: bad.error });
+    }
     res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [id])) });
   } catch (e) { next(e); }
 });
 
 // The card's current bytes: the signed copy once its latest request is
 // approved, the upload otherwise.
-async function currentBytes(d) {
+export async function currentBytes(d) {
   const rq = await requestFor(d);
   if (isSigned(rq)) return { bytes: await readStored("signed", rq.signedFilePath), signed: true };
   return { bytes: await readStored("documents", d.file_path), signed: false };
@@ -339,6 +431,75 @@ router.delete("/documents/:id", async (req, res, next) => {
 // POST /documents/:id/move { toStageId, boxes? }
 // Entering a signature stage needs the signature box(es) and raises the request;
 // leaving one needs the request to be settled.
+// Entering a stage has to mean the same thing however the card got there — by
+// being dragged, by "Move to…", or by being uploaded straight into it. One
+// helper, used by the move route and the upload route both, so a signature can
+// never be raised on one path and quietly skipped on the other.
+//
+// Returns an { status, error } object to refuse, or null when it has done the
+// work. `from` is null for a card that is only now being created.
+// `at` matters more than it looks: the dashboard measures a card's total life
+// from created_at but its per-stage dwell from movement timestamps, so if a
+// card is created at one instant and its first movement written at the next,
+// the two disagree by however long the insert took. The upload route passes
+// the timestamp it already used, which keeps them identical.
+async function enterStage({ doc, from, to, boxes, actor, at }) {
+  let raised = null;
+
+  if (needsSignature(to)) {
+    const list = Array.isArray(boxes) ? boxes : [];
+    if (!list.length || list.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
+      return { status: 400, error: "Place the signature box on the document first" };
+    const signer = to.signer_id && await signableExecutive(to.signer_id);
+    if (!signer) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
+    const { bytes } = await currentBytes(doc);
+    const ext = doc.file_type === "pdf" ? "pdf" : "xlsx";
+    try {
+      raised = await raiseDirectRequest({
+        user: actor,
+        file: { buffer: bytes, originalname: doc.file_name },
+        ext, fileType: doc.file_type, note: doc.note || "",
+        signers: [{ userId: signer.id, boxes: list.map((b) => ({ page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h })), dateFields: [] }],
+        requestType: "document",
+        retain: false, // the card keeps reading this request's signed copy
+      });
+    } catch (e) {
+      if (e instanceof DirectRequestError) return { status: e.status, error: e.message };
+      throw e;
+    }
+  }
+
+  const stages = await boardStages(doc.board_id);
+  const now = at || Date.now();
+
+  if (isCc(to)) {
+    const person = to.signer_id && await signableExecutive(to.signer_id);
+    if (!person) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
+    await noticeCc({ doc, stage: to, person, at: now });
+  }
+
+  // Which stages did the card jump straight over? Only a FORWARD move skips
+  // anything — going back is revisiting, not skipping — and only the stages
+  // strictly between the two. Without this a skipped stage is indistinguishable
+  // from one the card simply has not reached yet.
+  const fromPos = from ? Number(from.position) : null;
+  const toPos = Number(to.position);
+  const skipped = fromPos !== null && toPos > fromPos
+    ? stages.filter((s) => Number(s.position) > fromPos && Number(s.position) < toPos).map((s) => s.id)
+    : [];
+
+  const last = stages.at(-1);
+  await execute(
+    "UPDATE ea_documents SET stage_id = ?, entered_stage_at = ?, request_id = COALESCE(?, request_id), completed_at = ? WHERE id = ?",
+    [to.id, now, raised?.id || null, last && last.id === to.id ? now : null, doc.id]);
+  await execute(
+    `INSERT INTO ea_movements (id, document_id, from_stage_id, to_stage_id, moved_at, moved_by, request_id, skipped_stage_ids)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [uid("eam"), doc.id, from?.id || null, to.id, now, actor.id, raised?.id || null,
+      skipped.length ? JSON.stringify(skipped) : null]);
+  return null;
+}
+
 router.post("/documents/:id/move", async (req, res, next) => {
   try {
     const d = await myDoc(req.user.id, req.params.id);
@@ -349,41 +510,14 @@ router.post("/documents/:id/move", async (req, res, next) => {
     const from = await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
     const rq = await requestFor(d);
 
-    if (from?.requires_signature && isWaiting(rq)) {
+    // A signature stage still holds the card until it is signed. A CC stage
+    // never does — being asked to read something is not a gate.
+    if (needsSignature(from) && isWaiting(rq)) {
       return res.status(409).json({ error: `Waiting for ${rq.signerName || "the signatory"} to sign` });
     }
 
-    let raised = null;
-    if (to.requires_signature) {
-      const boxes = Array.isArray(req.body?.boxes) ? req.body.boxes : [];
-      if (!boxes.length || boxes.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
-        return res.status(400).json({ error: "Place the signature box on the document first" });
-      const signer = to.signer_id && await signableExecutive(to.signer_id);
-      if (!signer) return res.status(400).json({ error: "This stage's signatory is no longer available — edit the stage" });
-      const { bytes } = await currentBytes(d);
-      const ext = d.file_type === "pdf" ? "pdf" : "xlsx";
-      try {
-        raised = await raiseDirectRequest({
-          user: req.user,
-          file: { buffer: bytes, originalname: d.file_name },
-          ext, fileType: d.file_type, note: d.note || "",
-          signers: [{ userId: signer.id, boxes: boxes.map((b) => ({ page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h })), dateFields: [] }],
-          requestType: "document",
-          retain: false, // the card keeps reading this request's signed copy
-        });
-      } catch (e) {
-        if (e instanceof DirectRequestError) return res.status(e.status).json({ error: e.message });
-        throw e;
-      }
-    }
-
-    const last = (await boardStages(d.board_id)).at(-1);
-    const now = Date.now();
-    await execute(
-      "UPDATE ea_documents SET stage_id = ?, entered_stage_at = ?, request_id = COALESCE(?, request_id), completed_at = ? WHERE id = ?",
-      [to.id, now, raised?.id || null, last && last.id === to.id ? now : null, d.id]);
-    await execute("INSERT INTO ea_movements (id, document_id, from_stage_id, to_stage_id, moved_at, moved_by, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [uid("eam"), d.id, d.stage_id, to.id, now, req.user.id, raised?.id || null]);
+    const bad = await enterStage({ doc: d, from, to, boxes: parseBoxes(req.body?.boxes), actor: req.user });
+    if (bad) return res.status(bad.status).json({ error: bad.error });
     res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
   } catch (e) { next(e); }
 });
@@ -401,12 +535,28 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
     const stages = await boardStages(b.id);
     const docs = await query("SELECT * FROM ea_documents WHERE board_id = ? ORDER BY created_at ASC", [b.id]);
     const now = Date.now();
-    const perStage = Object.fromEntries(stages.map((s) => [s.id, { id: s.id, name: s.name, requiresSignature: !!s.requires_signature, count: 0, sumMs: 0, spells: 0, maxMs: 0, oldestMs: 0 }]));
+    const perStage = Object.fromEntries(stages.map((s) => [s.id, {
+      id: s.id, name: s.name, kind: kindOf(s), requiresSignature: needsSignature(s),
+      count: 0, sumMs: 0, spells: 0, maxMs: 0, oldestMs: 0,
+      // A stage can be reported on for being passed over as much as for being
+      // sat in — "nobody ever stops here" is a finding about the flow.
+      skippedCount: 0, ccNotified: 0, ccViewed: 0,
+    }]));
+    // Every CC notice on this board, read once rather than per card.
+    const notices = await query(
+      `SELECT n.* FROM ea_cc_notices n JOIN ea_documents d ON d.id = n.document_id WHERE d.board_id = ?`, [b.id]);
+    const noticesByDoc = {};
+    for (const n of notices) {
+      (noticesByDoc[n.document_id] ||= []).push(n);
+      const agg = perStage[n.stage_id];
+      if (agg) { agg.ccNotified += 1; if (n.viewed_at) agg.ccViewed += 1; }
+    }
     const out = [];
     for (const d of docs) {
       const moves = await query("SELECT * FROM ea_movements WHERE document_id = ? ORDER BY moved_at ASC, id ASC", [d.id]);
       const end = d.completed_at ? Number(d.completed_at) : now;
       const dwell = Object.fromEntries(stages.map((s) => [s.id, 0]));
+      const skipped = new Set();
       for (let i = 0; i < moves.length; i++) {
         const start = Number(moves[i].moved_at);
         const stop = i + 1 < moves.length ? Number(moves[i + 1].moved_at) : end;
@@ -414,20 +564,37 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
         if (dwell[moves[i].to_stage_id] !== undefined) dwell[moves[i].to_stage_id] += ms;
         const agg = perStage[moves[i].to_stage_id];
         if (agg) { agg.sumMs += ms; agg.spells += 1; agg.maxMs = Math.max(agg.maxMs, ms); }
+        for (const id of parseBoxes(moves[i].skipped_stage_ids)) {
+          if (typeof id === "string") skipped.add(id);
+        }
       }
+      // Counted per DOCUMENT, not per move: a card that skipped a stage twice
+      // is still one paper that went around it.
+      for (const id of skipped) { const agg = perStage[id]; if (agg) agg.skippedCount += 1; }
       const cur = perStage[d.stage_id];
       if (cur) { cur.count += 1; if (!d.completed_at) cur.oldestMs = Math.max(cur.oldestMs, now - Number(d.entered_stage_at)); }
       const rq = await requestFor(d);
       out.push({
         id: d.id, title: d.title, fileName: d.file_name, createdAt: Number(d.created_at), completedAt: d.completed_at ? Number(d.completed_at) : null,
         currentStageId: d.stage_id, enteredStageAt: Number(d.entered_stage_at), totalMs: Math.max(0, end - Number(d.created_at)),
-        stages: stages.map((s) => ({ stageId: s.id, ms: dwell[s.id] })),
+        stages: stages.map((s) => ({ stageId: s.id, ms: dwell[s.id], skipped: skipped.has(s.id) })),
+        skippedStageIds: [...skipped],
+        cc: (noticesByDoc[d.id] || []).map((n) => ({
+          stageId: n.stage_id, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
+        })),
         signerName: rq?.signerName || null, requestStatus: rq?.status || null,
       });
     }
     res.json({
       board: { id: b.id, name: b.name },
-      stages: stages.map((s) => { const a = perStage[s.id]; return { id: s.id, name: s.name, requiresSignature: a.requiresSignature, count: a.count, avgMs: a.spells ? Math.round(a.sumMs / a.spells) : 0, maxMs: a.maxMs, oldestMs: a.oldestMs }; }),
+      stages: stages.map((s) => {
+        const a = perStage[s.id];
+        return {
+          id: s.id, name: s.name, kind: a.kind, requiresSignature: a.requiresSignature,
+          count: a.count, avgMs: a.spells ? Math.round(a.sumMs / a.spells) : 0, maxMs: a.maxMs, oldestMs: a.oldestMs,
+          skippedCount: a.skippedCount, ccNotified: a.ccNotified, ccViewed: a.ccViewed,
+        };
+      }),
       documents: out,
     });
   } catch (e) { next(e); }

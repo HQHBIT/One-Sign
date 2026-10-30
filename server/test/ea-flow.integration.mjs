@@ -61,10 +61,14 @@ const call = (id, method, url, body) => fetch(`${BASE}${url}`, { method, headers
 const j = async (r) => { try { return await r.json(); } catch { return {}; } };
 
 const pdfBytes = await (async () => { const d = await PDFDocument.create(); d.addPage([595, 842]); return Buffer.from(await d.save()); })();
-const uploadDoc = (id, boardId, title, note = "") => {
+const uploadDoc = (id, boardId, title, note = "", { stageId, boxes } = {}) => {
   const fd = new FormData();
   fd.append("file", new Blob([pdfBytes], { type: "application/pdf" }), "Board paper.pdf");
   fd.append("title", title); if (note) fd.append("note", note);
+  // Filing straight into a stage other than the first; boxes come as JSON on a
+  // multipart body, the way the browser sends them.
+  if (stageId) fd.append("stageId", stageId);
+  if (boxes) fd.append("boxes", JSON.stringify(boxes));
   return fetch(`${BASE}/api/ea-flow/boards/${boardId}/documents`, { method: "POST", headers: hdr(id, false), body: fd });
 };
 
@@ -197,6 +201,97 @@ try {
   ck((await call(EA, "DELETE", `/api/ea-flow/documents/${DOC}`)).status === 200, "a finished document can be removed");
   ck((await call(EA, "DELETE", `/api/ea-flow/stages/${S_SIG}`)).status === 200, "an empty stage can be deleted");
   ck((await call(EA, "DELETE", `/api/ea-flow/boards/${BOARD}`)).status === 200, "an empty board can be deleted");
+
+  // ============================================================
+  //   filing into a stage · CC stages · skipped stages
+  //   Its own board, so the deletions above stay clean.
+  // ============================================================
+  r = await call(EA, "POST", "/api/ea-flow/boards", { name: "Kinds board" }); const B2 = (await j(r)).board?.id;
+  const add2 = (body) => call(EA, "POST", `/api/ea-flow/boards/${B2}/stages`, body);
+  const T_IN = (await j(await add2({ name: "In" }))).stage?.id;
+  const T_SIG = (await j(await add2({ name: "Signs", kind: "signature", signerId: EXEC }))).stage?.id;
+  r = await add2({ name: "Concern" });
+  ck(r.status === 200, "a stage can still be added the old way, with no kind");
+  await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
+  r = await add2({ name: "CC", kind: "cc" });
+  ck(r.status === 400, `a CC stage with nobody named is refused (${r.status})`);
+  r = await add2({ name: "CC", kind: "cc", signerId: EXEC }); const T_CC = (await j(r)).stage?.id;
+  ck(r.status === 200 && (await j(await call(EA, "GET", "/api/ea-flow/boards"))).boards.find((x) => x.id === B2)
+    ?.stages.find((s) => s.id === T_CC)?.kind === "cc", "a CC stage names someone and reports its kind");
+  const T_END = (await j(await add2({ name: "Done" }))).stage?.id;
+
+  // ---- a document filed straight into a stage ----
+  r = await uploadDoc(EA, B2, "Filed late", "", { stageId: T_END }); b = await j(r);
+  const D_LATE = b.document?.id;
+  ck(r.status === 200 && b.document?.stageId === T_END, `a document can be filed straight into a later stage (${r.status})`);
+  const lateTrail = await query("SELECT * FROM ea_movements WHERE document_id = ?", [D_LATE]);
+  ck(lateTrail.length === 1 && lateTrail[0].from_stage_id === null && !lateTrail[0].skipped_stage_ids,
+    "…and skips nothing on the way in — a card being created has passed over nothing");
+
+  r = await uploadDoc(EA, B2, "Straight to signing", "", { stageId: T_SIG });
+  ck(r.status === 400, `filing into a signature stage without a box is refused (${r.status})`);
+  ck((await query("SELECT * FROM ea_documents WHERE board_id = ? AND title = ?", [B2, "Straight to signing"])).length === 0,
+    "…and leaves no half-made card behind");
+  r = await uploadDoc(EA, B2, "Straight to signing", "", { stageId: T_SIG, boxes: [{ page: 1, x: 10, y: 70, w: 25, h: 8 }] });
+  b = await j(r); const D_SIG = b.document?.id;
+  ck(r.status === 200 && b.document?.stageId === T_SIG, `filing into a signature stage with a box works (${r.status} ${b.error || ""})`);
+  const rq2 = await queryOne("SELECT * FROM requests WHERE id = (SELECT request_id FROM ea_documents WHERE id = ?)", [D_SIG]);
+  ck(!!rq2 && rq2.status === "pending", "…and raises the request there and then, so nobody has to remember to ask");
+
+  // ---- a CC stage tells someone and lets go ----
+  r = await uploadDoc(EA, B2, "To be read", "", { stageId: T_IN }); const D_CC = (await j(r)).document?.id;
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/move`, { toStageId: T_CC }); b = await j(r);
+  ck(r.status === 200, `a card enters a CC stage with no signature box (${r.status} ${b.error || ""})`);
+  const notice = await queryOne("SELECT * FROM ea_cc_notices WHERE document_id = ? AND stage_id = ?", [D_CC, T_CC]);
+  ck(!!notice && notice.user_id === EXEC && !notice.viewed_at, "…a notice is recorded against the person, unread");
+  ck(b.document?.cc?.viewedAt === null && b.document?.cc?.name === "The Executive", "…and the card says who has it and that they have not opened it");
+  ck(!(await queryOne("SELECT request_id FROM ea_documents WHERE id = ?", [D_CC]))?.request_id, "…and nobody is asked to sign anything");
+
+  // ---- the person CC'd can read it, and only them ----
+  b = await j(await call(EXEC, "GET", "/api/ea-cc"));
+  ck(b.documents?.some((d) => d.id === D_CC), "the person CC'd sees it in their own list");
+  ck((await j(await call(REQR, "GET", "/api/ea-cc"))).documents?.length === 0, "someone never CC'd sees nothing");
+  ck((await fetch(`${BASE}/api/ea-cc/${D_CC}/file`, { headers: hdr(REQR, false) })).status === 404, "…and cannot read the file");
+  r = await fetch(`${BASE}/api/ea-cc/${D_CC}/file`, { headers: hdr(EXEC, false) });
+  ck(r.status === 200 && (await r.arrayBuffer()).byteLength === pdfBytes.length, `the person CC'd reads the document (${r.status})`);
+  const seen = await queryOne("SELECT viewed_at FROM ea_cc_notices WHERE document_id = ?", [D_CC]);
+  ck(!!seen?.viewed_at, "…and opening it is what records that they saw it");
+
+  // A CC stage is not a gate: the card leaves whenever the assistant says so.
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_CC}/move`, { toStageId: T_END });
+  ck(r.status === 200, `a CC stage never holds the card (${r.status})`);
+
+  // ---- stages jumped over ----
+  r = await uploadDoc(EA, B2, "Goes straight through", "", { stageId: T_IN }); const D_SKIP = (await j(r)).document?.id;
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_SKIP}/move`, { toStageId: T_END });
+  ck(r.status === 200, `a card may jump past the stages between (${r.status})`);
+  const jump = await queryOne("SELECT skipped_stage_ids FROM ea_movements WHERE document_id = ? ORDER BY moved_at DESC LIMIT 1", [D_SKIP]);
+  const jumped = jump?.skipped_stage_ids ? JSON.parse(jump.skipped_stage_ids) : [];
+  ck(jumped.includes(T_SIG) && jumped.includes(T_CC) && !jumped.includes(T_END),
+    `the stages passed over are recorded, and the destination is not one of them (${jumped.length})`);
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_SKIP}/move`, { toStageId: T_IN });
+  const back = await queryOne("SELECT skipped_stage_ids FROM ea_movements WHERE document_id = ? ORDER BY moved_at DESC LIMIT 1", [D_SKIP]);
+  ck(r.status === 200 && !back?.skipped_stage_ids, "going back skips nothing — that is revisiting, not skipping");
+
+  // ---- the dashboard reports both ----
+  b = await j(await call(EA, "GET", `/api/ea-flow/boards/${B2}/dashboard`));
+  const sSig = b.stages?.find((s) => s.id === T_SIG);
+  const sCc = b.stages?.find((s) => s.id === T_CC);
+  // TWO documents went around the signature stage — the CC'd one jumped it on
+  // its way to the CC stage, and the other jumped everything — while only the
+  // second went around the CC stage. Counting per stage rather than per move is
+  // what makes those two numbers differ.
+  ck(sSig?.skippedCount === 2, `the report counts both documents that went around the signature stage (${sSig?.skippedCount})`);
+  ck(sCc?.skippedCount === 1, `…and only the one that went around the CC stage (${sCc?.skippedCount})`);
+  ck(sCc?.kind === "cc" && sCc?.ccNotified === 1 && sCc?.ccViewed === 1, "…and how many CC'd people actually opened it");
+  const rowSkip = b.documents?.find((d) => d.id === D_SKIP);
+  ck(rowSkip?.stages.find((s) => s.stageId === T_SIG)?.skipped === true, "a skipped stage is marked on the document's own row");
+  const rowCc = b.documents?.find((d) => d.id === D_CC);
+  ck(rowCc?.cc?.[0]?.viewedAt > 0, "and the CC'd document carries when it was read");
 
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");

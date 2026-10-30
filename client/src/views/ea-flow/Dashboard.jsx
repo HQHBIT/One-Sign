@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Hourglass, PenLine, CircleCheck, Timer } from "lucide-react";
+import { Download, Hourglass, PenLine, CircleCheck, Timer, Eye } from "lucide-react";
 import { api } from "../../api.js";
 import { fmtDuration, fmtWhen, stageColour } from "./time.js";
 
@@ -60,10 +60,24 @@ export function Dashboard({ board, notify }) {
         <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(stages.length, 6)}, minmax(0, 1fr))` }}>
           {stages.map((s, i) => (
             <div key={s.id} className="rounded-lg p-3" style={{ backgroundColor: "rgba(15,26,46,.035)", borderTop: `3px solid ${stageColour(i)}` }}>
-              <div className="text-sm font-medium truncate flex items-center gap-1">{s.name}{s.requiresSignature && <PenLine size={11} className="opacity-50" />}</div>
+              <div className="text-sm font-medium truncate flex items-center gap-1">
+                {s.name}
+                {(s.kind === "signature" || (!s.kind && s.requiresSignature)) && <PenLine size={11} className="opacity-50" />}
+                {s.kind === "cc" && <Eye size={11} className="opacity-50" />}
+              </div>
               <div className="font-display text-2xl leading-tight mt-1">{s.count}<span className="text-xs opacity-50 font-sans ml-1">now</span></div>
               <div className="text-[11px] opacity-60 mt-1">avg {fmtDuration(s.avgMs)} · longest {fmtDuration(s.maxMs)}</div>
               {s.oldestMs > 0 && <div className="text-[11px] mt-0.5" style={{ color: "var(--c-rust)" }}>oldest waiting {fmtDuration(s.oldestMs)}</div>}
+              {/* A stage everybody goes around is a finding about the flow, not
+                  a gap in the data — so it is reported rather than left blank. */}
+              {s.skippedCount > 0 && (
+                <div className="text-[11px] opacity-60 mt-0.5">skipped by {s.skippedCount} document{s.skippedCount === 1 ? "" : "s"}</div>
+              )}
+              {s.kind === "cc" && s.ccNotified > 0 && (
+                <div className="text-[11px] mt-0.5" style={{ color: s.ccViewed === s.ccNotified ? undefined : "var(--c-rust)" }}>
+                  opened {s.ccViewed} of {s.ccNotified}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -112,6 +126,25 @@ export function Dashboard({ board, notify }) {
                       </div>
                       <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] opacity-70">
                         {d.stages.map((s, i) => s.ms > 0 && <span key={s.stageId}><span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: stageColour(i) }} />{stages[i].name} {fmtDuration(s.ms)}</span>)}
+                        {/* Named, not merely absent: a stage with no time on it
+                            is either still to come or was deliberately passed
+                            over, and the report has to say which. */}
+                        {d.stages.map((s, i) => s.skipped && (
+                          <span key={`sk_${s.stageId}`} className="line-through opacity-60" title={`${stages[i].name} was skipped`}>
+                            <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: stageColour(i), opacity: .35 }} />
+                            {stages[i].name} skipped
+                          </span>
+                        ))}
+                        {(d.cc || []).map((c) => {
+                          const i = stages.findIndex((s) => s.id === c.stageId);
+                          if (i < 0) return null;
+                          return (
+                            <span key={`cc_${c.stageId}`} style={c.viewedAt ? undefined : { color: "var(--c-rust)" }}>
+                              <Eye size={10} className="inline mr-1 align-middle" />
+                              {stages[i].name} {c.viewedAt ? `seen ${fmtWhen(c.viewedAt)}` : "not opened"}
+                            </span>
+                          );
+                        })}
                       </div>
                     </td>
                     <td className="px-2 py-3 align-top whitespace-nowrap">

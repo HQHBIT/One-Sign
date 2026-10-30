@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PenLine } from "lucide-react";
+import { PenLine, Eye } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { ROLE_LABELS } from "../../lib/constants.js";
 
@@ -8,18 +8,36 @@ import { ROLE_LABELS } from "../../lib/constants.js";
 // signature stage — every active Approver and Executive, not only the people
 // this assistant is linked to, and not only the Executive role. Entering the
 // stage raises an ordinary direct request to whoever is named.
+// What a stage can ask of the person it names. Kept here rather than inline so
+// the copy explaining each one lives next to the value it describes.
+const KINDS = [
+  ["plain", "Nothing — just a step", "A holding place on the board. Nobody is asked for anything."],
+  ["signature", "Needs a signature", "Moving a document here sends it to that person to sign, exactly like a normal request. It can move on once they have signed."],
+  ["cc", "For information only (CC)", "That person is shown the document and told it is for information. They do not sign, and the card is free to move on straight away."],
+];
+
 export function StageEditor({ stage, executives, onSave, onClose }) {
   const [name, setName] = useState(stage?.name || "");
-  const [needsSig, setNeedsSig] = useState(!!stage?.requiresSignature);
+  // An older board row has no kind; requiresSignature is what it had.
+  const [kind, setKind] = useState(stage?.kind || (stage?.requiresSignature ? "signature" : "plain"));
   const [signerId, setSignerId] = useState(stage?.signer?.id || executives[0]?.id || "");
   const [busy, setBusy] = useState(false);
-  const ok = name.trim().length > 0 && (!needsSig || !!signerId);
+  const namesSomeone = kind !== "plain";
+  const ok = name.trim().length > 0 && (!namesSomeone || !!signerId);
 
   const save = async () => {
     if (!ok || busy) return;
     setBusy(true);
-    try { await onSave({ name: name.trim(), requiresSignature: needsSig, signerId: needsSig ? signerId : null }); }
-    finally { setBusy(false); }
+    try {
+      await onSave({
+        name: name.trim(),
+        kind,
+        // Still sent so a server mid-deploy, which knows only this flag, cannot
+        // read a CC stage as one that demands a signature.
+        requiresSignature: kind === "signature",
+        signerId: namesSomeone ? signerId : null,
+      });
+    } finally { setBusy(false); }
   };
 
   return (
@@ -31,21 +49,40 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
             onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
         </label>
 
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input type="checkbox" className="mt-1" checked={needsSig} onChange={(e) => setNeedsSig(e.target.checked)}
-            disabled={executives.length === 0} style={{ accentColor: "var(--c-gold)" }} />
-          <span>
-            <span className="text-sm font-medium inline-flex items-center gap-1.5"><PenLine size={13} /> This stage needs a signature</span>
-            <span className="block text-xs opacity-60 mt-0.5">
-              Moving a document here sends it to that person to sign, exactly like a normal request. It can move on once they have signed.
-              {executives.length === 0 && " — nobody can be named yet: this needs an active Approver or Executive account."}
-            </span>
-          </span>
-        </label>
+        <div>
+          <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">What this stage asks for</div>
+          <div className="space-y-1.5">
+            {KINDS.map(([value, label, blurb]) => {
+              // Only "plain" works without somebody to name, so the other two
+              // are disabled rather than silently failing on save.
+              const blocked = value !== "plain" && executives.length === 0;
+              return (
+                <label key={value} className="flex items-start gap-3 cursor-pointer rounded-lg p-2"
+                  style={kind === value ? { backgroundColor: "rgba(184,137,74,.10)" } : undefined}>
+                  <input type="radio" name="stage-kind" className="mt-1" checked={kind === value} disabled={blocked}
+                    onChange={() => setKind(value)} style={{ accentColor: "var(--c-gold)" }} />
+                  <span>
+                    <span className="text-sm font-medium inline-flex items-center gap-1.5">
+                      {value === "signature" && <PenLine size={13} />}
+                      {value === "cc" && <Eye size={13} />}
+                      {label}
+                    </span>
+                    <span className="block text-xs opacity-60 mt-0.5">
+                      {blurb}
+                      {blocked && " — nobody can be named yet: this needs an active Approver or Executive account."}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
 
-        {needsSig && (
+        {namesSomeone && (
           <label className="block">
-            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Whose signature</div>
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
+              {kind === "cc" ? "Who should see it" : "Whose signature"}
+            </div>
             <select value={signerId} onChange={(e) => setSignerId(e.target.value)} className="w-full">
               {/* The role is shown because two signatories can share a name, and
                   because it explains why someone appears here at all. */}
