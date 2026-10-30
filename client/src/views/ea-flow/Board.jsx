@@ -18,7 +18,9 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   const confirm = useConfirmation();
   const [docs, setDocs] = useState(null);
   const [stageModal, setStageModal] = useState(null);   // { stage } | { stage: null }
-  const [adding, setAdding] = useState(false);
+  // null when closed; otherwise { stageId } saying which column opened it, so
+  // the dialog starts on the stage the assistant pointed at.
+  const [adding, setAdding] = useState(null);
   const [placing, setPlacing] = useState(null);         // { doc, stage }
   const [preview, setPreview] = useState(null);         // { doc, file }
   const [menuFor, setMenuFor] = useState(null);         // stage id with ⋯ open
@@ -63,7 +65,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
     const landing = stages.find((s) => s.id === stageId) || stages[0];
     try {
       await api.eaAddDocument(board.id, { file, title, note, stageId, boxes });
-      setAdding(false);
+      setAdding(null);
       notify(`${title || file.name} added to ${landing.name}`, "success");
       await load(); await onBoardChanged();
     } catch (e) { notify(e.message || "Could not add the document", "error"); }
@@ -122,7 +124,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
         <div className="text-xs opacity-50">{docs ? `${docs.length} document${docs.length === 1 ? "" : "s"} on this board` : "Loading…"} · drag a card onto a stage, or use Move to…</div>
         <div className="flex gap-2">
           <button className="btn-ghost text-xs" onClick={() => setStageModal({ stage: null })}><Plus size={12} /> Stage</button>
-          <button className="btn-primary text-xs" onClick={() => setAdding(true)}><Plus size={12} /> Add document</button>
+          <button className="btn-primary text-xs" onClick={() => setAdding({ stageId: stages[0]?.id })}><Plus size={12} /> Add document</button>
         </div>
       </div>
 
@@ -135,12 +137,15 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             onEdit={() => { setMenuFor(null); setStageModal({ stage: s }); }}
             onDelete={() => removeStage(s)} onShift={(dir) => shift(s, dir)}
             onDrop={(docId) => { const d = (docs || []).find((x) => x.id === docId); if (d) move(d, s); }}
+            // Papers arrive at whichever step they are actually at, so every
+            // column can start one — not only the first.
+            onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc} />
         ))}
       </div>
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
-      {adding && <AddDocument stages={stages} onAdd={addDoc} onClose={() => setAdding(false)} />}
+      {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
       {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => move(placing.doc, placing.stage, boxes)} onClose={() => setPlacing(null)} />}
       {preview && (
         <ModalShell title={preview.doc.title} onClose={() => { URL.revokeObjectURL(preview.file.base64); setPreview(null); }}>
@@ -152,7 +157,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onMove, onOpen, onDownload, onRemove }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -186,6 +191,10 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
               : null}
         </div>
         <span className="text-xs opacity-50 tabular-nums">{docs.length}</span>
+        {/* Every column can start a document, not only the first: a paper
+            arrives at whichever step it is actually at. */}
+        <button className="btn-ghost px-1 py-1 text-xs" title={`Add a document to ${stage.name}`}
+          aria-label={`Add a document to ${stage.name}`} onClick={onAddHere}><Plus size={13} /></button>
         <button className="btn-ghost px-1 py-1 text-xs" aria-label={`Options for ${stage.name}`} onClick={onMenu}><Ellipsis size={13} /></button>
         {menuOpen && (
           <div className="absolute right-2 top-full z-20 rounded-lg overflow-hidden text-sm" style={{ backgroundColor: "var(--c-paper)", border: "1px solid var(--c-ink-10)", boxShadow: "0 8px 24px rgba(15,26,46,.16)", minWidth: 170 }}>
@@ -198,7 +207,18 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
         {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} />)}
-        {!docs.length && <div className="text-xs opacity-40 text-center py-8">{index === 0 ? "Add a document to start" : "Drop a card here"}</div>}
+        {/* The empty state was a dead label on every column but the first,
+            which quietly said "documents begin over there". It is the same
+            invitation everywhere now, and it is clickable. */}
+        {!docs.length && (
+          <button onClick={onAddHere}
+            className="w-full text-xs opacity-50 hover:opacity-90 text-center py-8 rounded-lg transition-opacity"
+            style={{ border: "1px dashed var(--c-ink-18)" }}>
+            <Plus size={13} className="inline mr-1 align-middle" />
+            Add a document{index === 0 ? " to start" : ` to ${stage.name}`}
+            <span className="block mt-1 opacity-70">or drop a card here</span>
+          </button>
+        )}
       </div>
     </div>
   );

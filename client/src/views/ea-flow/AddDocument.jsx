@@ -10,11 +10,14 @@ import { ccNames } from "./time.js";
 //
 // Papers do not always arrive at the beginning — one may turn up already with
 // the CEO — so the stage is a choice rather than always the first.
-export function AddDocument({ stages, onAdd, onClose }) {
+export function AddDocument({ stages, initialStageId, onAdd, onClose }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
-  const [stageId, setStageId] = useState(stages?.[0]?.id || "");
+  // Opened from a column, it starts on THAT stage — the assistant has already
+  // said which step the paper is at by choosing where to click. Still a
+  // dropdown, so the choice can be changed without closing the dialog.
+  const [stageId, setStageId] = useState(initialStageId || stages?.[0]?.id || "");
   const [placing, setPlacing] = useState(false);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef(null);
