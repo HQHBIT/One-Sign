@@ -36,12 +36,15 @@ const noticeFor = (userId, documentId) => queryOne(
 router.get("/", async (req, res, next) => {
   try {
     const rows = await query(
-      `SELECT n.id, n.document_id, n.stage_id, n.notified_at, n.viewed_at,
+      // LEFT JOIN on the stage, not an inner one: a document sent for review by
+      // hand has NO stage, and an inner join would silently drop exactly those
+      // rows — the ask would be recorded, and the reader would never see it.
+      `SELECT n.id, n.document_id, n.stage_id, n.notified_at, n.viewed_at, n.source,
               d.title, d.file_name, d.file_type,
               s.name AS stage_name, b.name AS board_name, u.name AS from_name
          FROM ea_cc_notices n
          JOIN ea_documents d ON d.id = n.document_id
-         JOIN ea_stages    s ON s.id = n.stage_id
+         LEFT JOIN ea_stages s ON s.id = n.stage_id
          JOIN ea_boards    b ON b.id = d.board_id
          JOIN users        u ON u.id = b.owner_id
         WHERE n.user_id = ?
@@ -49,7 +52,9 @@ router.get("/", async (req, res, next) => {
     res.json({
       documents: rows.map((r) => ({
         id: r.document_id, title: r.title, fileName: r.file_name, fileType: r.file_type,
-        stageName: r.stage_name, boardName: r.board_name, fromName: r.from_name,
+        // A one-off review says so rather than naming a step it never had.
+        stageName: r.source === "adhoc" ? "Sent for review" : r.stage_name,
+        boardName: r.board_name, fromName: r.from_name,
         notifiedAt: Number(r.notified_at), viewedAt: r.viewed_at ? Number(r.viewed_at) : null,
       })),
     });

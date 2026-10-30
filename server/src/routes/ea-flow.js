@@ -136,6 +136,9 @@ async function docOut(d, stageById) {
     // On a CC stage the card is never held; what the assistant wants to see is
     // whether the person has actually opened it yet.
     cc: isCc(stage) ? await ccStateFor(d.id, stage.id) : null,
+    // Sent for review by hand, independent of any stage — it stays with the
+    // card as it moves, because the ask was about the paper, not the step.
+    review: await reviewStateFor(d.id),
   };
 }
 
@@ -148,18 +151,36 @@ async function docOut(d, stageById) {
 //
 // The email is deliberately not awaited: a card must still move when SendGrid
 // is slow or unconfigured, exactly as the rest of the app treats notification.
-async function noticeCc({ doc, stage, person, at }) {
-  await execute(
-    `INSERT INTO ea_cc_notices (id, document_id, stage_id, user_id, notified_at, viewed_at)
-     VALUES (?, ?, ?, ?, ?, NULL)
-     ON DUPLICATE KEY UPDATE notified_at = VALUES(notified_at), viewed_at = NULL`,
-    [uid("eacc"), doc.id, stage.id, person.id, at]);
+async function noticeCc({ doc, stage, person, at, source = "stage" }) {
+  if (source === "adhoc") {
+    // Belongs to the document rather than a stage, so the unique key cannot
+    // catch a repeat — refresh by hand, which is also what makes sending the
+    // same person a second time an "ask again" instead of a duplicate row.
+    const existing = await queryOne(
+      "SELECT id FROM ea_cc_notices WHERE document_id = ? AND user_id = ? AND stage_id IS NULL", [doc.id, person.id]);
+    if (existing) {
+      await execute("UPDATE ea_cc_notices SET notified_at = ?, viewed_at = NULL WHERE id = ?", [at, existing.id]);
+    } else {
+      await execute(
+        `INSERT INTO ea_cc_notices (id, document_id, stage_id, user_id, notified_at, viewed_at, source)
+         VALUES (?, ?, NULL, ?, ?, NULL, 'adhoc')`,
+        [uid("eacc"), doc.id, person.id, at]);
+    }
+  } else {
+    await execute(
+      `INSERT INTO ea_cc_notices (id, document_id, stage_id, user_id, notified_at, viewed_at, source)
+       VALUES (?, ?, ?, ?, ?, NULL, 'stage')
+       ON DUPLICATE KEY UPDATE notified_at = VALUES(notified_at), viewed_at = NULL`,
+      [uid("eacc"), doc.id, stage.id, person.id, at]);
+  }
   const to = await queryOne("SELECT email, name FROM users WHERE id = ?", [person.id]);
   if (!to?.email) return;
   sendEmail({
     to: to.email,
     template: "ea_cc_notice",
-    ctx: { name: to.name, title: doc.title, stageName: stage.name, documentId: doc.id },
+    // A one-off review has no stage to name; the email simply says it was
+    // shared to read, which is all the reader needs to know either way.
+    ctx: { name: to.name, title: doc.title, stageName: source === "adhoc" ? "" : stage?.name, documentId: doc.id },
   }).catch(() => {});
 }
 
@@ -171,11 +192,7 @@ const CC_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // Everyone told to look at this document at this stage, and whether they have.
 // A list because a CC stage copies several people, and "two of five have read
 // it" is the thing the assistant actually needs to know.
-async function ccStateFor(documentId, stageId) {
-  const rows = await query(
-    `SELECT n.notified_at, n.viewed_at, n.reminded_at, n.reminder_count, u.name
-       FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
-      WHERE n.document_id = ? AND n.stage_id = ? ORDER BY u.name`, [documentId, stageId]);
+function summariseNotices(rows) {
   if (!rows.length) return null;
   const people = rows.map((n) => ({
     name: n.name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
@@ -190,6 +207,25 @@ async function ccStateFor(documentId, stageId) {
     canRemind: unread.length > 0,
     remindableAt: lastReminder ? lastReminder + CC_REMINDER_COOLDOWN_MS : 0,
   };
+}
+
+const NOTICE_COLUMNS = `n.notified_at, n.viewed_at, n.reminded_at, n.reminder_count, u.name`;
+
+async function ccStateFor(documentId, stageId) {
+  // source = 'stage' only: a one-off review must not be counted as the CC
+  // stage having done its job.
+  return summariseNotices(await query(
+    `SELECT ${NOTICE_COLUMNS} FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+      WHERE n.document_id = ? AND n.stage_id = ? AND n.source = 'stage' ORDER BY u.name`,
+    [documentId, stageId]));
+}
+
+// One-off reviews follow the DOCUMENT, so they are read without a stage and
+// stay on the card wherever it goes.
+async function reviewStateFor(documentId) {
+  return summariseNotices(await query(
+    `SELECT ${NOTICE_COLUMNS} FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+      WHERE n.document_id = ? AND n.source = 'adhoc' ORDER BY u.name`, [documentId]));
 }
 
 // GET /executives — everyone a signature stage may name.
@@ -561,6 +597,33 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
   return null;
 }
 
+// ---------- send this one paper to someone to READ ----------
+// A CC stage copies everyone who passes through it, which is right for a step
+// that always needs an extra pair of eyes and wrong for "this particular paper
+// should be seen by Taha". Making a stage for a one-off distorts the board.
+//
+// Deliberately NOT tied to the stage the card happens to be on: the ask is
+// about the document, so it stays with it as it moves.
+router.post("/documents/:id/review", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const ids = [...new Set((Array.isArray(req.body?.userIds) ? req.body.userIds : []).map(String).filter(Boolean))];
+    if (!ids.length) return res.status(400).json({ error: "Choose who should review it" });
+
+    const people = [];
+    for (const id of ids) {
+      const person = await signableExecutive(id);
+      if (!person) return res.status(400).json({ error: "Choose one of the signatories" });
+      people.push(person);
+    }
+
+    const now = Date.now();
+    for (const person of people) await noticeCc({ doc: d, stage: null, person, at: now, source: "adhoc" });
+    res.json({ sent: people.length, document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
+  } catch (e) { next(e); }
+});
+
 // ---------- nudge whoever has not opened it ----------
 // A CC stage never holds the card, which is the point of it — and also why a
 // document can sit read by nobody while the board looks perfectly healthy. The
@@ -573,13 +636,20 @@ router.post("/documents/:id/cc-remind", async (req, res, next) => {
     const d = await myDoc(req.user.id, req.params.id);
     if (!d) return res.status(404).json({ error: "Not found" });
     const stage = await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
-    if (!isCc(stage)) return res.status(400).json({ error: "This document is not on a stage that shares it for information" });
 
+    // Everyone still owing a read on THIS card: the people its current CC
+    // stage copied, and anyone it was sent to for review by hand. One button,
+    // because an assistant chasing a document does not care which of the two
+    // routes asked them.
+    //
+    // Notices from a CC stage the card has since LEFT are not chased: that ask
+    // belonged to a step the paper has moved past.
     const unread = await query(
       `SELECT n.*, u.email, u.name FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
-        WHERE n.document_id = ? AND n.stage_id = ? AND n.viewed_at IS NULL AND u.active = 1`,
-      [d.id, stage.id]);
-    if (!unread.length) return res.status(400).json({ error: "Everyone has already opened it" });
+        WHERE n.document_id = ? AND n.viewed_at IS NULL AND u.active = 1
+          AND (n.source = 'adhoc' OR (n.source = 'stage' AND n.stage_id = ?))`,
+      [d.id, isCc(stage) ? stage.id : ""]);
+    if (!unread.length) return res.status(400).json({ error: "Nobody is waiting to read this one" });
 
     // Cooldown measured per NOTICE, so adding a sixth person to a stage does
     // not have to wait out a reminder the other five were sent.
@@ -599,7 +669,11 @@ router.post("/documents/:id/cc-remind", async (req, res, next) => {
         template: "ea_cc_notice",
         // The same template, told it is a second ask: one place holds the
         // wording for "please read this", whether it is the first time or not.
-        ctx: { name: n.name, title: d.title, stageName: stage.name, documentId: d.id, reminder: true },
+        // A one-off review has no stage to name, so it is not given one.
+        ctx: {
+          name: n.name, title: d.title, documentId: d.id, reminder: true,
+          stageName: n.source === "adhoc" ? "" : (stage?.name || ""),
+        },
       }).catch(() => {});
     }
     res.json({ reminded: due.length, document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
@@ -650,10 +724,13 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
     }]));
     // Every CC notice on this board, read once rather than per card.
     const notices = await query(
+      // Stage notices only. A one-off review is a decision about one paper, not
+      // evidence that a stage is doing its job — counting it under a stage
+      // would overstate how well the flow itself works.
       `SELECT n.*, u.name AS user_name FROM ea_cc_notices n
          JOIN ea_documents d ON d.id = n.document_id
          JOIN users u ON u.id = n.user_id
-        WHERE d.board_id = ? ORDER BY u.name`, [b.id]);
+        WHERE d.board_id = ? AND n.source = 'stage' ORDER BY u.name`, [b.id]);
     const noticesByDoc = {};
     for (const n of notices) {
       (noticesByDoc[n.document_id] ||= []).push(n);
