@@ -313,7 +313,43 @@ try {
   ck(r.status === 400, `a card that has left the CC stage cannot be reminded (${r.status})`);
   // And a document on a stage where everyone HAS read it has nobody to nudge.
   r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/cc-remind`);
-  ck(r.status === 400, `a document that is not on a CC stage at all is refused (${r.status})`);
+  ck(r.status === 400, `a document nobody owes a read is refused (${r.status})`);
+
+  // ---- sent for review by hand, with no CC stage involved ----
+  // D_LATE sits on a PLAIN stage. The point of this is that one paper can be
+  // shared for reading without reshaping the board to allow it.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/review`, { userIds: [] });
+  ck(r.status === 400, `sending for review with nobody chosen is refused (${r.status})`);
+  ck((await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/review`, { userIds: [REQR] })).status === 400,
+    "…and so is naming someone who never signs");
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/review`, { userIds: [EXEC, UNLINKED] });
+  b = await j(r);
+  ck(r.status === 200 && b.sent === 2, `a document on a plain stage can be sent for review (${r.status}, ${b.sent})`);
+  ck(b.document?.review?.notified === 2 && b.document?.review?.viewed === 0, "…and the card reports who owes it a read");
+  ck(b.document?.cc === null, "…without pretending its stage has become a CC stage");
+  const adhoc = await query("SELECT * FROM ea_cc_notices WHERE document_id = ? AND source = 'adhoc'", [D_LATE]);
+  ck(adhoc.length === 2 && adhoc.every((n) => n.stage_id === null),
+    "…recorded against the DOCUMENT, not a stage, so it survives the card moving");
+
+  // The reader should not have to care which route asked them.
+  b = await j(await call(EXEC, "GET", "/api/ea-cc"));
+  const forInfo = (b.documents || []).find((x) => x.id === D_LATE);
+  ck(!!forInfo, "the person it was sent to sees it in their own list");
+  ck(forInfo?.stageName === "Sent for review", `…labelled as a review, not as a step it never had (${forInfo?.stageName})`);
+  r = await fetch(`${BASE}/api/ea-cc/${D_LATE}/file`, { headers: hdr(EXEC, false) });
+  ck(r.status === 200, `…and can read it (${r.status})`);
+  ck((await fetch(`${BASE}/api/ea-cc/${D_LATE}/file`, { headers: hdr(OTHER_EA, false) })).status === 404,
+    "…while someone it was not sent to still cannot");
+
+  // Sending to the same person again re-asks rather than piling up a row.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/review`, { userIds: [EXEC] });
+  const again = await query("SELECT * FROM ea_cc_notices WHERE document_id = ? AND source = 'adhoc' AND user_id = ?", [D_LATE, EXEC]);
+  ck(r.status === 200 && again.length === 1 && !again[0].viewed_at,
+    "sending to the same person again re-asks, and does not duplicate the notice");
+
+  // The same button chases a review as chases a CC stage.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/cc-remind`);
+  ck(r.status === 200, `a document sent for review can be chased too (${r.status})`);
 
   // ---- stages jumped over ----
   r = await uploadDoc(EA, B2, "Goes straight through", "", { stageId: T_IN }); const D_SKIP = (await j(r)).document?.id;
@@ -339,6 +375,9 @@ try {
   // what makes those two numbers differ.
   ck(sSig?.skippedCount === 2, `the report counts both documents that went around the signature stage (${sSig?.skippedCount})`);
   ck(sCc?.skippedCount === 1, `…and only the one that went around the CC stage (${sCc?.skippedCount})`);
+  // Still 2, not 4: the two people D_LATE was sent to for review are NOT
+  // counted as the CC stage having copied them. Mixing the two would overstate
+  // how well the stage itself works.
   ck(sCc?.kind === "cc" && sCc?.ccNotified === 2 && sCc?.ccViewed === 1,
     `…and how many of the CC'd people actually opened it (${sCc?.ccViewed} of ${sCc?.ccNotified})`);
   const rowSkip = b.documents?.find((d) => d.id === D_SKIP);

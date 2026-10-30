@@ -661,6 +661,18 @@ async function runSchema() {
   await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminded_at BIGINT DEFAULT NULL");
   await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminder_count INT NOT NULL DEFAULT 0");
 
+  // Where the ask came from. A CC STAGE copies everyone who passes through it;
+  // a one-off REVIEW is somebody deciding that this particular paper needs
+  // another pair of eyes. Same notice, same access, same reminders — but told
+  // apart, so "did the CC stage work" is not quietly inflated by one-off sends.
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN source ENUM('stage','adhoc') NOT NULL DEFAULT 'stage'");
+  // A one-off review belongs to the DOCUMENT, not to whichever stage it
+  // happened to be sitting on, so it survives the card moving on. Hence a
+  // nullable stage_id. MySQL treats NULLs as distinct in a unique key, so the
+  // ON DUPLICATE KEY refresh no longer catches a repeated ad-hoc send to the
+  // same person — that is deduplicated in code instead, in sendForReview.
+  await tryExec("ALTER TABLE ea_cc_notices MODIFY COLUMN stage_id VARCHAR(64) NULL");
+
   // Who a CC stage copies. A list, not a column: a paper is routinely shown to
   // several people at once, and signer_id can only ever hold one. It stays the
   // single SIGNER of a signature stage, which really is one person — a request

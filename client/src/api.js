@@ -376,6 +376,8 @@ export const api = {
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
   // Nudges only the people on this card's CC stage who have not opened it.
   eaRemindCc(id) { return this.fetch(`/api/ea-flow/documents/${id}/cc-remind`, { method: "POST", body: "{}" }); },
+  // Share ONE document with people to read, without changing the board.
+  eaSendForReview(id, userIds) { return this.fetch(`/api/ea-flow/documents/${id}/review`, { method: "POST", body: JSON.stringify({ userIds }) }); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
 
   // -------- documents shared with ME for information (a CC stage) --------

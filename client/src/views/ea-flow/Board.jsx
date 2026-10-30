@@ -6,6 +6,7 @@ import { ModalShell } from "../../components/ModalShell.jsx";
 import { StageEditor } from "./StageEditor.jsx";
 import { AddDocument } from "./AddDocument.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
+import { SendForReview } from "./SendForReview.jsx";
 import { fmtDuration, fmtWhen, stageColour, ccNames } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
@@ -61,7 +62,19 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   };
 
   // ---- documents ----
-  // Ask again, for the people on this card's CC stage who have not opened it.
+  // Share ONE paper with people to read, without making a stage for it.
+  const [reviewing, setReviewing] = useState(null);
+  const sendForReview = async (doc, userIds) => {
+    try {
+      const r = await api.eaSendForReview(doc.id, userIds);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? r.document : d)));
+      setReviewing(null);
+      notify(`${doc.title} sent to ${r.sent} ${r.sent === 1 ? "person" : "people"} to read`, "success");
+    } catch (e) { notify(e.message || "Could not send it for review", "error"); }
+  };
+
+  // Ask again, for whoever still owes this card a read — the people its CC
+  // stage copied and anyone it was sent to for review.
   // The server decides who that is and whether the cooldown has passed; this
   // only reports what it did.
   const [reminding, setReminding] = useState(null);
@@ -155,12 +168,16 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             // column can start one — not only the first.
             onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
-            onRemind={remind} reminding={reminding} />
+            onRemind={remind} onReview={(d) => setReviewing(d)} reminding={reminding} />
         ))}
       </div>
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
       {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
+      {reviewing && (
+        <SendForReview doc={reviewing} executives={executives} already={reviewing.review?.people}
+          onSend={(ids) => sendForReview(reviewing, ids)} onClose={() => setReviewing(null)} />
+      )}
       {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => move(placing.doc, placing.stage, boxes)} onClose={() => setPlacing(null)} />}
       {preview && (
         <ModalShell title={preview.doc.title} onClose={() => { URL.revokeObjectURL(preview.file.base64); setPreview(null); }}>
@@ -172,7 +189,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, reminding }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, reminding }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -221,7 +238,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} reminding={reminding === d.id} />)}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} reminding={reminding === d.id} />)}
         {/* The empty state was a dead label on every column but the first,
             which quietly said "documents begin over there". It is the same
             invitation everywhere now, and it is clickable. */}
@@ -239,14 +256,22 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, reminding }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
   // `tick` already re-renders the card every minute for the dwell time, so the
   // reminder becomes available on its own when the cooldown passes rather than
   // staying greyed out until someone reloads the board.
   void tick;
-  const remindReady = !doc.cc?.remindableAt || Date.now() >= doc.cc.remindableAt;
+  // One button chases BOTH asks — the stage's readers and anyone the paper was
+  // sent to for review — because an assistant chasing a document does not care
+  // which of the two routes asked them.
+  const owing = (doc.cc?.canRemind ? doc.cc.notified - doc.cc.viewed : 0)
+    + (doc.review?.canRemind ? doc.review.notified - doc.review.viewed : 0);
+  const nextRemind = Math.max(
+    doc.cc?.canRemind ? (doc.cc.remindableAt || 0) : 0,
+    doc.review?.canRemind ? (doc.review.remindableAt || 0) : 0);
+  const remindReady = !nextRemind || Date.now() >= nextRemind;
   useEffect(() => {
     if (!menu) return;
     const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setMenu(false); };
@@ -308,6 +333,16 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
             </span>
           );
         })()}
+        {/* Shown separately from the stage's own readers: these people were
+            asked about this paper in particular, and lumping the two together
+            would make it impossible to tell which ask is outstanding. */}
+        {doc.review && (
+          <span className={`pill ${doc.review.viewed === doc.review.notified ? "pill-approved" : ""}`}
+            style={doc.review.viewed === doc.review.notified ? undefined : { backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }}
+            title={doc.review.people.map((p) => `${p.name} — ${p.viewedAt ? `read ${fmtWhen(p.viewedAt)}` : "not read"}`).join("\n")}>
+            <Eye size={10} /> Review: {doc.review.viewed} of {doc.review.notified} read
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
@@ -317,11 +352,15 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
             again — and it is offered only while somebody still has not opened
             it, because reminding a person who already read it is how reminders
             become noise. */}
-        {doc.cc?.canRemind && (
+        {/* A one-off: this paper needs another pair of eyes, without reshaping
+            the board to say so. */}
+        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onReview(doc)}
+          title="Share this document with someone to read — no signature"><Eye size={12} /> Review</button>
+        {(doc.cc?.canRemind || doc.review?.canRemind) && (
           <button className="btn-ghost text-xs px-2 py-1" disabled={reminding || !remindReady}
             title={remindReady
-              ? `Remind the ${doc.cc.notified - doc.cc.viewed} who have not opened it`
-              : `Already reminded — next reminder after ${fmtWhen(doc.cc.remindableAt)}`}
+              ? `Remind the ${owing} who have not opened it`
+              : `Already reminded — next reminder after ${fmtWhen(nextRemind)}`}
             onClick={() => onRemind(doc)}>
             <BellRing size={12} /> {reminding ? "…" : "Remind"}
           </button>
