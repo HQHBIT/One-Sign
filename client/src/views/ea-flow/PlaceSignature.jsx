@@ -5,10 +5,15 @@ import { ModalShell } from "../../components/ModalShell.jsx";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
 
-// Moving a card into a signature stage: the assistant marks where the
-// executive signs, on the card's CURRENT file (the already-signed copy when an
-// earlier stage collected a signature), then the move raises the request.
-export function PlaceSignature({ doc, stage, onConfirm, onClose }) {
+// Marking where someone signs. It takes either shape of document, because it
+// is now needed in two places:
+//
+//   doc        a card already on the board, whose CURRENT file is fetched — the
+//              already-signed copy when an earlier stage collected a signature
+//   localFile  a File chosen in the browser and NOT yet uploaded, because a
+//              document filed straight into a signature stage must have its box
+//              placed before there is anything on the server to point at
+export function PlaceSignature({ doc, localFile, stage, onConfirm, onClose }) {
   const [file, setFile] = useState(null);
   const [boxes, setBoxes] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -16,11 +21,17 @@ export function PlaceSignature({ doc, stage, onConfirm, onClose }) {
 
   useEffect(() => {
     let url = null;
-    api.eaDocumentFileUrl(doc.id)
-      .then((u) => { url = u; setFile({ name: doc.fileName, ext: doc.fileType === "pdf" ? "pdf" : "xlsx", base64: u }); })
+    let dead = false;
+    const name = doc?.fileName || localFile?.name || "document";
+    const ext = (doc ? doc.fileType : (localFile?.name || "").split(".").pop().toLowerCase()) === "pdf" ? "pdf" : "xlsx";
+    const load = localFile
+      ? Promise.resolve(URL.createObjectURL(localFile))
+      : api.eaDocumentFileUrl(doc.id);
+    Promise.resolve(load)
+      .then((u) => { if (dead) { URL.revokeObjectURL(u); return; } url = u; setFile({ name, ext, base64: u }); })
       .catch((e) => setErr(e.message || "Could not open the document"));
-    return () => { if (url) URL.revokeObjectURL(url); };
-  }, [doc.id]);
+    return () => { dead = true; if (url) URL.revokeObjectURL(url); };
+  }, [doc?.id, localFile]);
 
   const markers = boxes.map((b, i) => ({ ...b, id: `b${i}`, color: "#B8894A", label: boxes.length > 1 ? `${stage.signer?.name} #${i + 1}` : `${stage.signer?.name} signs here` }));
   const onAddMarker = (page, x, y, w, h) => setBoxes((bs) => [...bs, { page, x, y, w, h }]);
@@ -39,7 +50,7 @@ export function PlaceSignature({ doc, stage, onConfirm, onClose }) {
       <div className="space-y-4">
         <div className="text-sm opacity-70">
           Click-drag (or press and hold on a phone) where <span className="font-medium">{stage.signer?.name}</span> should sign
-          <span className="font-medium"> {doc.title}</span>. {doc.currentFile === "signed" ? "This is the already-signed copy from the earlier stage." : ""}
+          <span className="font-medium"> {doc?.title || localFile?.name}</span>. {doc?.currentFile === "signed" ? "This is the already-signed copy from the earlier stage." : ""}
         </div>
         <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--c-ink-10)", minHeight: 320 }}>
           {file ? (

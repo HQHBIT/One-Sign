@@ -59,18 +59,29 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   };
 
   // ---- documents ----
-  const addDoc = async ({ file, title, note }) => {
-    try { await api.eaAddDocument(board.id, { file, title, note }); setAdding(false); notify(`${title || file.name} added to ${stages[0].name}`, "success"); await load(); await onBoardChanged(); }
-    catch (e) { notify(e.message || "Could not add the document", "error"); }
+  const addDoc = async ({ file, title, note, stageId, boxes }) => {
+    const landing = stages.find((s) => s.id === stageId) || stages[0];
+    try {
+      await api.eaAddDocument(board.id, { file, title, note, stageId, boxes });
+      setAdding(false);
+      notify(`${title || file.name} added to ${landing.name}`, "success");
+      await load(); await onBoardChanged();
+    } catch (e) { notify(e.message || "Could not add the document", "error"); }
   };
   const move = async (doc, stage, boxes) => {
     if (stage.id === doc.stageId) return;
-    if (stage.requiresSignature && !boxes) { setPlacing({ doc, stage }); return; }
+    // Only a signature stage needs a box. A CC stage notifies and lets go.
+    const signs = stage.kind === "signature" || (!stage.kind && stage.requiresSignature);
+    if (signs && !boxes) { setPlacing({ doc, stage }); return; }
     try {
       const updated = await api.eaMove(doc.id, { toStageId: stage.id, boxes });
       setDocs((ds) => ds.map((d) => (d.id === doc.id ? updated : d)));
       setPlacing(null);
-      notify(stage.requiresSignature ? `Sent to ${stage.signer?.name} to sign` : `${doc.title} moved to ${stage.name}`, "success");
+      notify(
+        signs ? `Sent to ${stage.signer?.name} to sign`
+          : stage.kind === "cc" ? `${stage.signer?.name} has been told to read ${doc.title}`
+            : `${doc.title} moved to ${stage.name}`,
+        "success");
       await onBoardChanged();
     } catch (e) {
       if (placing) throw e; // the placement modal shows it inline
@@ -129,7 +140,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
       </div>
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
-      {adding && <AddDocument firstStageName={stages[0].name} onAdd={addDoc} onClose={() => setAdding(false)} />}
+      {adding && <AddDocument stages={stages} onAdd={addDoc} onClose={() => setAdding(false)} />}
       {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => move(placing.doc, placing.stage, boxes)} onClose={() => setPlacing(null)} />}
       {preview && (
         <ModalShell title={preview.doc.title} onClose={() => { URL.revokeObjectURL(preview.file.base64); setPreview(null); }}>
@@ -165,7 +176,14 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
       <div className="px-3 pt-3 pb-2 flex items-center gap-2 relative" ref={menuRef}>
         <div className="min-w-0 flex-1">
           <div className="font-medium text-sm truncate">{stage.name}</div>
-          {stage.requiresSignature && <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>}
+          {/* What the stage asks for, in the words the stage editor used. A CC
+              stage looked identical to a plain one before, which made a stage
+              that notifies somebody indistinguishable from one that does not. */}
+          {stage.kind === "cc"
+            ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><Eye size={10} /> {stage.signer?.name} is shown it</div>
+            : (stage.kind === "signature" || stage.requiresSignature)
+              ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>
+              : null}
         </div>
         <span className="text-xs opacity-50 tabular-nums">{docs.length}</span>
         <button className="btn-ghost px-1 py-1 text-xs" aria-label={`Options for ${stage.name}`} onClick={onMenu}><Ellipsis size={13} /></button>
@@ -227,6 +245,14 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
         {status === "waiting" && <span className="pill pill-pending"><Hourglass size={10} /> Awaiting {rq.signerName?.split(" ")[0]}</span>}
         {status === "signed" && <span className="pill pill-approved"><CircleCheck size={10} /> Signed by {rq.signerName?.split(" ")[0]}</span>}
         {status === "rejected" && <span className="pill pill-rejected" title={rq.rejectReason || ""}><CircleAlert size={10} /> Rejected{rq.rejectReason ? ` — ${rq.rejectReason}` : ""}</span>}
+        {/* A CC stage never holds the card, so the only thing worth showing is
+            whether the person has actually opened it — "sent" on its own tells
+            the assistant nothing they did not already know. */}
+        {doc.cc && (
+          doc.cc.viewedAt
+            ? <span className="pill pill-approved" title={`Opened ${fmtWhen(doc.cc.viewedAt)}`}><Eye size={10} /> Seen by {doc.cc.name?.split(" ")[0]}</span>
+            : <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={`Told ${fmtWhen(doc.cc.notifiedAt)}`}><Eye size={10} /> Not opened yet</span>
+        )}
       </div>
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>

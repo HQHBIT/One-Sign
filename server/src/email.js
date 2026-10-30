@@ -246,6 +246,34 @@ const templates = {
     ].join("\n"),
   }),
 
+  // A CC stage: someone is asked to READ a document, not sign it. The wording
+  // has to be unmistakable about that, or a careful executive sits waiting for
+  // a signature box that is never coming.
+  ea_cc_notice: (c) => ({
+    subject: `For your information: ${c.title}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `${c.title} has been shared with you to read — no signature needed`,
+      pillHtml: pill("For information", "neutral"),
+      heading: "A document has been shared with you",
+      contentHtml:
+        greet(c.name) +
+        p(`<strong>${esc(c.title)}</strong> has been shared with you to read. <strong>No signature is needed</strong> — this is for your information only.`) +
+        details([
+          { label: "Document", value: c.title },
+          { label: "Stage", value: c.stageName },
+        ]) +
+        button("Open the document", requestUrl(c), "navy") +
+        caption("You will also find it under “For your information” when you sign in."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `"${c.title}" has been shared with you to read. No signature is needed.`,
+      c.stageName ? `Stage: ${c.stageName}` : null, ``,
+      `Open it: ${requestUrl(c)}`, ``,
+      `— ${BRAND.fromName}`,
+    ].filter((x) => x !== null).join("\n"),
+  }),
+
   // To the EXECUTIVE when their assistant acts on their behalf — names the
   // assistant and the action so delegation is never invisible to the owner.
   ea_action: (c) => ({

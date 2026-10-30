@@ -1854,6 +1854,14 @@ function ApproverView(props) {
   // the up-front popup was removed at the owner's request (2026-08-12).
   const openNew = (type = null) => { setNewType(type); setTab("new"); };
   useBackHandler(tab !== "home", () => { setNewType(null); setPresetTpl(null); setTab("home"); });
+  // Documents an assistant's CC stage has sent here to be READ. A separate API
+  // from everything else on this screen, because these are not requests —
+  // nobody is being asked to sign one. The route 404s outside HQHB, so a
+  // failure is silence rather than an error shown to someone it cannot concern.
+  const [forInfo, setForInfo] = useState([]);
+  const loadForInfo = () => api.ccForMe().then(setForInfo).catch(() => setForInfo([]));
+  useEffect(() => { loadForInfo(); }, [user.id]);
+  const unopenedForInfo = forInfo.filter(d => !d.viewedAt).length;
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSigned = r => iSignedInWorkflow(r, user.id);
   // Requests routed to me to SIGN — never my own (I don't approve what I raised).
@@ -1891,9 +1899,13 @@ function ApproverView(props) {
   if (tab === "rejected") return <ApproverRejected {...props} items={rejected} back={() => setTab("home")} />;
   if (tab === "authority") return <ApproverAuthority {...props} back={() => setTab("home")} />;
   if (tab === "shz-hod") return <HodDashboard user={user} users={users} teams={teams} notify={notify} back={() => setTab("home")} />;
+  if (tab === "for-info") return <ForInformationList items={forInfo} notify={notify} onChanged={loadForInfo} back={() => setTab("home")} />;
 
   const tiles = [
     ...(user.isHod ? [{ key: "shz-hod", icon: Building2, title: "Shz Saab Approvals", desc: "Documents sent to the HOD for Shz Saab approval.", color: "var(--c-gold)" }] : []),
+    // Only when something has actually been shared — an empty tile on every
+    // signer's home would be noise on the deployments that never use CC stages.
+    ...(forInfo.length ? [{ key: "for-info", icon: Eye, title: "For your information", desc: "Documents shared with you to read. No signature needed.", badge: unopenedForInfo, color: "var(--c-gold)" }] : []),
     { key: "pending", icon: Stamp, title: "Pending approvals", desc: "Review and sign documents requiring your authority.", badge: pending.length + pendingApproved.length, color: "var(--c-gold)" },
     { key: "new", icon: FilePlus, title: "Make a new request", desc: "Upload a document, pick the type, place the signature boxes.", color: "var(--c-gold)" },
     { key: "workflows", icon: GitBranch, title: "My Workflows", desc: "Save your signing routes once — reuse with any document.", color: "var(--c-gold)" },
@@ -1956,6 +1968,71 @@ function ApproverView(props) {
 
 // Requestor-facing list of direct requests waiting for THIS user's signature.
 // Reuses the role-agnostic ApproveDrawer for the actual review + sign.
+// Documents a CC stage shared with this person to READ. Everything else on
+// this screen is a request waiting on them; these are not, and the screen says
+// so plainly — the whole point of a CC stage is that nobody is blocked on it.
+//
+// Opening one marks it seen on the server, which is what lets the assistant's
+// report say "seen" rather than only "sent". "Mark as read" exists for the
+// person who has already read the paper on someone's desk.
+function ForInformationList({ items, notify, onChanged, back }) {
+  const [busyId, setBusyId] = useState(null);
+  const unopened = items.filter(d => !d.viewedAt).length;
+
+  const openDoc = async (d) => {
+    setBusyId(d.id);
+    try {
+      const url = await api.ccFileUrl(d.id);
+      window.open(url, "_blank", "noopener");
+      // Revoked late: the new tab still needs the blob while it loads.
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      await onChanged();
+    } catch (e) { notify(e.message || "Could not open the document", "error"); }
+    finally { setBusyId(null); }
+  };
+
+  const markSeen = async (d) => {
+    setBusyId(d.id);
+    try { await api.ccMarkSeen(d.id); await onChanged(); }
+    catch (e) { notify(e.message || "Could not update it", "error"); }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <div>
+      <BackHeader back={back} title="For your information" step={unopened ? `${unopened} not opened` : "all opened"} />
+      <div className="card p-4 mt-5 text-sm opacity-70">
+        These were shared with you to read. <span className="font-medium">No signature is needed</span> — nothing here is waiting on you.
+      </div>
+      {items.length === 0 ? (
+        <Empty icon={Eye} text="Nothing has been shared with you." />
+      ) : (
+        <div className="card divide-y mt-4" style={{ borderColor: "var(--c-ink-08)" }}>
+          {items.map(d => (
+            <div key={d.id} className="p-4 flex items-center gap-3 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate">{d.title}</div>
+                <div className="text-xs opacity-60 truncate">
+                  {d.fromName ? `from ${d.fromName}` : ""}{d.stageName ? ` · ${d.stageName}` : ""} · shared {fmtWhen(d.notifiedAt)}
+                </div>
+              </div>
+              {d.viewedAt
+                ? <span className="pill pill-approved shrink-0"><CheckCircle size={10} /> Opened {fmtWhen(d.viewedAt)}</span>
+                : <span className="pill pill-pending shrink-0">New</span>}
+              <button className="btn-primary text-xs shrink-0" disabled={busyId === d.id} onClick={() => openDoc(d)}>
+                <Eye size={13} /> {busyId === d.id ? "…" : "Open"}
+              </button>
+              {!d.viewedAt && (
+                <button className="btn-ghost text-xs shrink-0" disabled={busyId === d.id} onClick={() => markSeen(d)}>Mark as read</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, back, notify }) {
   const [openId, setOpenId] = useState(null);
   const open = items.find(r => r.id === openId);
