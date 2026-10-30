@@ -52,6 +52,10 @@ const ck = (ok, label) => (ok ? pass : fail).push(label);
 const T = Date.now().toString(36);
 const now = Date.now();
 const EA = `u_ef_ea_${T}`, EXEC = `u_ef_exec_${T}`, OTHER_EA = `u_ef_oea_${T}`, REQR = `u_ef_req_${T}`, UNLINKED = `u_ef_unl_${T}`;
+// An Approver signs a direct request exactly as an Executive does, so a
+// signature stage must be able to name one; GONE is deactivated and must not be
+// offered, however senior the role.
+const APPROVER = `u_ef_apr_${T}`, GONE = `u_ef_gone_${T}`;
 const hdr = (id, json = true) => ({ Authorization: "Bearer " + signToken(id), ...(json ? { "Content-Type": "application/json" } : {}) });
 const call = (id, method, url, body) => fetch(`${BASE}${url}`, { method, headers: hdr(id), body: body === undefined ? undefined : JSON.stringify(body) });
 const j = async (r) => { try { return await r.json(); } catch { return {}; } };
@@ -68,16 +72,17 @@ const cleanup = async () => {
   await execute("DELETE FROM ea_boards WHERE owner_id IN (?, ?)", [EA, OTHER_EA]);
   await execute("DELETE FROM requests WHERE requestor_id = ?", [EA]);
   await execute("DELETE FROM executive_assistants WHERE assistant_id IN (?, ?)", [EA, OTHER_EA]);
-  await execute("DELETE FROM users WHERE id IN (?, ?, ?, ?, ?)", [EA, EXEC, OTHER_EA, REQR, UNLINKED]);
+  await execute("DELETE FROM users WHERE id IN (?, ?, ?, ?, ?, ?, ?)", [EA, EXEC, OTHER_EA, REQR, UNLINKED, APPROVER, GONE]);
 };
 
 let waqf = null;
 try {
   await cleanup();
   const hash = bcrypt.hashSync("x", 4);
-  for (const [id, role, name] of [[EA, "executive_assistant", "Flow Assistant"], [EXEC, "executive", "The Executive"], [OTHER_EA, "executive_assistant", "Other Assistant"], [REQR, "requestor", "A Requestor"], [UNLINKED, "executive", "Unlinked Executive"]]) {
+  for (const [id, role, name] of [[EA, "executive_assistant", "Flow Assistant"], [EXEC, "executive", "The Executive"], [OTHER_EA, "executive_assistant", "Other Assistant"], [REQR, "requestor", "A Requestor"], [UNLINKED, "executive", "Unlinked Executive"], [APPROVER, "approver", "An Approver"]]) {
     await execute("INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, active, org_id) VALUES (?, ?, ?, ?, ?, NULL, ?, 1, 'hqhb')", [id, `${id}@flow.test`, hash, name, role, now]);
   }
+  await execute("INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, active, org_id) VALUES (?, ?, ?, ?, 'executive', NULL, ?, 0, 'hqhb')", [GONE, `${GONE}@flow.test`, hash, "Departed Executive", now]);
   await execute("INSERT INTO executive_assistants (id, executive_id, assistant_id, can_approve, signature_source, created_at, created_by) VALUES (?, ?, ?, 0, 'executive', ?, ?)", [`ea_${T}`, EXEC, EA, now, EA]);
 
   // ---- access ----
@@ -99,9 +104,20 @@ try {
   r = await addStage({ name: "Received" }); const S_IN = (await j(r)).stage?.id;
   ck(r.status === 200 && !!S_IN, "stage added");
   b = await j(await call(EA, "GET", "/api/ea-flow/executives"));
-  ck(b.executives?.some((x) => x.id === UNLINKED) && b.executives?.some((x) => x.id === EXEC) && !b.executives?.some((x) => x.id === REQR), "every active executive is offered, linked or not; non-executives are not");
+  ck(b.executives?.some((x) => x.id === UNLINKED) && b.executives?.some((x) => x.id === EXEC) && !b.executives?.some((x) => x.id === REQR), "every active executive is offered, linked or not; non-signers are not");
+  // The bug this guards: the list was role='executive' only, so on a deployment
+  // whose signatories are Approvers it came back EMPTY — which disables the
+  // "needs a signature" checkbox entirely and reads as the feature missing.
+  ck(b.executives?.some((x) => x.id === APPROVER), "an approver is offered too — they sign a direct request exactly as an executive does");
+  ck(b.executives?.find((x) => x.id === APPROVER)?.role === "approver", "…and the picker is told their role, so two similar names are tellable apart");
+  ck(!b.executives?.some((x) => x.id === GONE), "a deactivated signatory is never offered");
+  r = await addStage({ name: "Approver signs", requiresSignature: true, signerId: APPROVER });
+  ck(r.status === 200, `a signature stage may name an approver (${r.status})`);
+  await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
+  r = await addStage({ name: "Also signs", requiresSignature: true, signerId: GONE });
+  ck(r.status === 400, `a signature stage naming a deactivated user is refused (${r.status})`);
   r = await addStage({ name: "Also signs", requiresSignature: true, signerId: REQR });
-  ck(r.status === 400, `a signature stage naming a non-executive is refused (${r.status})`);
+  ck(r.status === 400, `a signature stage naming someone who never signs is refused (${r.status})`);
   r = await addStage({ name: "Also signs", requiresSignature: true, signerId: UNLINKED });
   ck(r.status === 200, `a signature stage may name an executive the assistant is not linked to (${r.status})`);
   await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
