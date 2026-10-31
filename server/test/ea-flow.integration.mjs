@@ -564,6 +564,22 @@ try {
   ck(stillPending?.status === "pending" && stillPending?.user_id === EXEC, "the employee's request is untouched — still with the executive to sign");
   r = await call(OTHER_EA, "POST", `/api/ea-flow/inbox/${empReq}/board`, { boardId: B2, stageId: plainStage?.id });
   ck(r.status === 400, `another assistant cannot put it on someone else's board (${r.status})`);
+  // ---- an assistant sees what their executive was sent to READ (owner, 2026-10-31) ----
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_FIRST}/review`, { userIds: [EXEC] });
+  ck(r.status === 200, `a card is sent to the executive for review (${r.status})`);
+  const execReads = await j(await call(EXEC, "GET", "/api/ea-cc"));
+  ck(execReads.documents?.some((d) => d.id === D_FIRST), "…and is in the executive's own For your information");
+  let assistReads = await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/for-info`));
+  const shared = assistReads.documents?.find((d) => d.id === D_FIRST);
+  ck(!!shared && shared.viewedAt === null && shared.stageName === "Sent for review",
+    "a linked assistant sees it under the executive's For review, not yet opened");
+  r = await fetch(`${BASE}/api/assist/${EXEC}/for-info/${D_FIRST}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 200 && (await r.arrayBuffer()).byteLength > 100, `…and can open the file (${r.status})`);
+  assistReads = await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/for-info`));
+  ck(assistReads.documents?.find((d) => d.id === D_FIRST)?.viewedAt === null,
+    "the assistant opening it does NOT count as the executive having read it");
+  r = await call(UNLINKED, "GET", `/api/assist/${EXEC}/for-info`);
+  ck(r.status === 403, `someone not assisting the executive cannot see it (${r.status})`);
 
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");

@@ -130,6 +130,12 @@ export const api = {
     const res = await this.fetch(`/api/assist/${executiveId}/signature-image`, { raw: true });
     return URL.createObjectURL(await res.blob());
   },
+  // What the executive was sent to read (Document flow review / CC), and the file.
+  assistForInfo(executiveId) { return this.fetch(`/api/assist/${executiveId}/for-info`).then(r => r.documents); },
+  async assistForInfoFileUrl(executiveId, documentId) {
+    const res = await this.fetch(`/api/assist/${executiveId}/for-info/${documentId}/file`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
   assistSetSignature(executiveId, dataUrl) { return this.fetch(`/api/assist/${executiveId}/signature`, { method: "PUT", body: JSON.stringify({ dataUrl }) }); },
   // -------- approve directly from the email (token-authenticated) --------
   emailApprovePreview(token) { return this.fetch("/api/email-approve/preview", { method: "POST", body: JSON.stringify({ token }) }); },

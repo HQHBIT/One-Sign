@@ -18,6 +18,7 @@ import { recommendHandler } from "./recommendations.js";
 import { deploymentOrg } from "../org.js";
 import { readImageSize, sendSignature } from "./users.js";
 import { writeStored } from "../filestore.js";
+import { currentBytes } from "./ea-flow.js";
 
 const router = Router();
 
@@ -176,6 +177,54 @@ router.post("/:executiveId/requests/:id/recommend", ...onBehalf, async (req, res
     if (!ctx) return;
     await runAsExecutive(req, res, next, ctx, recommendHandler,
       { action: "sent back for changes", body: { recommendation: req.body?.recommendation } });
+  } catch (e) { next(e); }
+});
+
+// ---------- what the executive was sent to READ (Document flow review / CC) ----------
+// The assistant sees what lands in the executive's "For your information", and
+// whether the executive has opened it (owner, 2026-10-31: "as an EA I should be
+// able to review the document if it has been sent for review"). Read-only, and
+// the assistant opening it does NOT count as the executive reading it.
+router.get("/:executiveId/for-info", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
+  try {
+    const link = await linkFor(req.user.id, req.params.executiveId);
+    if (!link) return res.status(403).json({ error: "You don't assist this executive" });
+    if (!canView(link) && !link.can_dashboard) return res.status(403).json({ error: "This executive hasn't granted you document access" });
+    if (deploymentOrg() !== "hqhb") return res.json({ documents: [] });
+    const rows = await query(
+      `SELECT n.document_id, n.notified_at, n.viewed_at, n.source,
+              d.title, d.file_name, d.file_type, s.name AS stage_name, b.name AS board_name, u.name AS from_name
+         FROM ea_cc_notices n
+         JOIN ea_documents d ON d.id = n.document_id
+         LEFT JOIN ea_stages s ON s.id = n.stage_id
+         JOIN ea_boards b ON b.id = d.board_id
+         JOIN users u ON u.id = b.owner_id
+        WHERE n.user_id = ?
+        ORDER BY n.notified_at DESC`, [req.params.executiveId]);
+    res.json({
+      documents: rows.map((r) => ({
+        id: r.document_id, title: r.title, fileName: r.file_name, fileType: r.file_type,
+        stageName: r.source === "adhoc" ? "Sent for review" : r.stage_name,
+        boardName: r.board_name, fromName: r.from_name,
+        notifiedAt: Number(r.notified_at), viewedAt: r.viewed_at ? Number(r.viewed_at) : null,
+      })),
+    });
+  } catch (e) { next(e); }
+});
+
+router.get("/:executiveId/for-info/:documentId/file", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
+  try {
+    const link = await linkFor(req.user.id, req.params.executiveId);
+    if (!link || (!canView(link) && !link.can_dashboard)) return res.status(403).end();
+    const n = await queryOne("SELECT id FROM ea_cc_notices WHERE user_id = ? AND document_id = ? LIMIT 1",
+      [req.params.executiveId, req.params.documentId]);
+    if (!n) return res.status(404).json({ error: "Not found" });
+    const d = await queryOne("SELECT * FROM ea_documents WHERE id = ?", [req.params.documentId]);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const { bytes } = await currentBytes(d);
+    res.setHeader("Content-Type", d.file_type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(d.file_name)}`);
+    res.send(bytes);
   } catch (e) { next(e); }
 });
 

@@ -1,8 +1,13 @@
 import { useState, useEffect, lazy, Suspense } from "react";
-import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, Clock, XCircle, KanbanSquare } from "lucide-react";
+import { Eye, CheckCircle, ShieldCheck, EyeOff, X, PenTool, User, Briefcase, XCircle, KanbanSquare, Stamp, Hourglass, Inbox } from "lucide-react";
 import { api } from "../api.js";
 import { RequestRow } from "../components/RequestRow.jsx";
 import { SignatureModal } from "../components/SignatureModal.jsx";
+import { Tile } from "../components/Tile.jsx";
+import { BackHeader } from "../components/BackHeader.jsx";
+import { FolderedList } from "../components/FolderedList.jsx";
+import { ModalShell } from "../components/ModalShell.jsx";
+import { nextPendingSigner } from "../lib/turn.js";
 import { FlowTab } from "./ea-flow/FlowTab.jsx";
 
 // Pulls in pdfjs only when a document is actually opened.
@@ -67,11 +72,16 @@ function SwitchTab({ active, onClick, icon: Icon, label }) {
   );
 }
 
-// One executive's workspace, scoped by the rights they granted.
+// One executive's workspace, scoped by the rights they granted — laid out like
+// the approver's own dashboard: what is waiting for the executive first, then a
+// tile per list, each opening on its own page (owner, 2026-10-31: one long page
+// "breaks the UI"; "the same UI/UX as our dashboard … and approved requests").
 function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
   const [data, setData] = useState(null); // { requests, scope }
-  const [tab, setTab] = useState("pending");
+  const [forInfo, setForInfo] = useState([]); // sent to the executive to read
+  const [view, setView] = useState("home"); // home | awaiting | others | for-review | approved | rejected
   const [preview, setPreview] = useState(null);
+  const [readPreview, setReadPreview] = useState(null);
   const [sigOpen, setSigOpen] = useState(false);
   // The document open in the review drawer — the approver's own drawer
   // (Preview & approve, Go to signature, Approve, Recommend changes, Reject),
@@ -81,7 +91,8 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
   const load = () => api.assistRequests(ex.id)
     .then(setData)
     .catch(e => { notify(e.message || "Could not load documents", "error"); setData({ requests: [], scope: "pending" }); });
-  useEffect(() => { load(); }, [ex.id]);
+  const loadForInfo = () => api.assistForInfo(ex.id).then(setForInfo).catch(() => setForInfo([]));
+  useEffect(() => { load(); loadForInfo(); setView("home"); }, [ex.id]);
 
   // The three decisions, each on the executive's behalf. Same signatures as the
   // approver's own handlers, so the drawer cannot tell the difference.
@@ -119,17 +130,85 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
     );
   }
 
+  const first = String(ex.name || "").split(" ")[0];
   const rs = data?.requests || [];
-  const pending = rs.filter(r => r.status === "pending");
+  // Whose turn: a workflow's next pending signer; a single-team request is the
+  // executive's as soon as it is pending.
+  const theirTurn = (r) => r.status === "pending" && (!(r.workflow?.length) || nextPendingSigner(r)?.userId === ex.id);
+  const awaiting = rs.filter(theirTurn);
+  const others = rs.filter((r) => r.status === "pending" && !theirTurn(r));
   const approved = rs.filter(r => r.status === "approved" || r.status === "approved_pending");
   const rejected = rs.filter(r => r.status === "rejected");
-  const list = ex.canDashboard ? ({ pending, approved, rejected }[tab] || pending) : pending;
+  const unreadForInfo = forInfo.filter((d) => !d.viewedAt).length;
+
+  const actionsFor = (r) => (
+    <div className="flex items-center gap-2">
+      {/* Approving opens the approver's own drawer: read it, Go to signature,
+          preview the stamp, then Approve — or Recommend changes / Reject. */}
+      {ex.canApprove && theirTurn(r) && ReviewDrawer && !r.confidential ? (
+        <button className="btn-primary text-xs" onClick={() => setReviewing(r)}>
+          <Eye size={14} /> Preview & approve
+        </button>
+      ) : (
+        <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> View</button>
+      )}
+    </div>
+  );
+  const listPage = (items, title, countLabel, emptyText) => (
+    <FolderedList items={items} title={`${title} — ${ex.name}`} back={() => setView("home")} notify={notify}
+      emptyIcon={Inbox} emptyText={emptyText} countLabel={countLabel}
+      renderRow={(r, i, moveMenu, rowProps) => (
+        <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
+          actions={<div className="flex flex-wrap gap-2">{actionsFor(r)}{moveMenu}</div>} />
+      )} />
+  );
+
+  const drawers = (
+    <>
+      {preview && <AssistPreview req={preview} onClose={() => setPreview(null)} />}
+      {readPreview && <ForInfoPreview ex={ex} doc={readPreview} onClose={() => setReadPreview(null)} />}
+      {reviewing && ReviewDrawer && (
+        <ReviewDrawer req={reviewing}
+          // The drawer works out whose turn it is from `user`: here, the executive.
+          user={{ ...user, id: ex.id, name: ex.name }}
+          users={users} teams={teams} notify={notify}
+          approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges}
+          onClose={() => setReviewing(null)}
+          actingFor={{ name: ex.name, canAct: !!ex.canApprove, signatureBlob: () => api.assistSignatureBlob(ex.id) }} />
+      )}
+      {sigOpen && <SigModal ex={ex} notify={notify} onClose={() => setSigOpen(false)} />}
+    </>
+  );
+
+  // ---- a list, on its own page ----
+  if (view !== "home") {
+    let page = null;
+    if (view === "awaiting") page = listPage(awaiting, `Awaiting ${first}`, "waiting", `Nothing is waiting for ${ex.name}.`);
+    if (view === "others") page = listPage(others, "With others first", "waiting", "Nothing is waiting on someone else first.");
+    if (view === "approved" && ex.canDashboard) page = listPage(approved, "Approved", "approved", "Nothing approved yet.");
+    if (view === "rejected" && ex.canDashboard) page = listPage(rejected, "Rejected", "rejected", "Nothing rejected.");
+    if (view === "for-review") page = (
+      <ForInfoList ex={ex} items={forInfo} back={() => setView("home")} onOpen={setReadPreview} />
+    );
+    return <div>{page}{drawers}</div>;
+  }
+
+  // ---- home ----
+  const tiles = [
+    { key: "awaiting", icon: Stamp, title: `Awaiting ${first}`, desc: `Documents whose turn it is for ${ex.name} to sign.`, badge: awaiting.length, color: "var(--c-gold)" },
+    { key: "others", icon: Hourglass, title: "With others first", desc: `${ex.name} signs later — someone earlier in the route signs first.`, badge: others.length },
+    { key: "for-review", icon: Eye, title: "For review", desc: `Documents shared with ${ex.name} to read — and whether they have opened them.`, badge: unreadForInfo, color: "var(--c-gold)" },
+    ...(ex.canDashboard ? [
+      { key: "approved", icon: CheckCircle, title: "Approved", desc: `Documents ${ex.name} has signed.`, badge: approved.length },
+      { key: "rejected", icon: XCircle, title: "Rejected", desc: `Documents ${ex.name} has rejected.`, badge: rejected.length },
+    ] : []),
+  ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-display text-xl truncate">{ex.name}</div>
+          <div className="font-display text-2xl truncate">{ex.name}</div>
           <div className="text-xs opacity-50 truncate">{ex.email}</div>
         </div>
         <div className="flex items-center gap-2">
@@ -160,65 +239,87 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
         ))}
       </div>
 
-      {/* Stats + tabs — only with the dashboard right (the executive's entire data) */}
-      {ex.canDashboard && (
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
-          <StatTile icon={Clock} label="Pending" n={pending.length} active={tab === "pending"} onClick={() => setTab("pending")} />
-          <StatTile icon={CheckCircle} label="Approved" n={approved.length} active={tab === "approved"} onClick={() => setTab("approved")} />
-          <StatTile icon={XCircle} label="Rejected" n={rejected.length} active={tab === "rejected"} onClick={() => setTab("rejected")} />
+      {/* What is waiting for the executive — first, never buried; at most five. */}
+      <div>
+        <div className="flex items-baseline justify-between mb-3">
+          <h3 className="font-display text-xl">Awaiting {first}</h3>
+          {awaiting.length > 5 && (
+            <button className="text-xs tracking-wider uppercase opacity-60 hover:opacity-100 underline" onClick={() => setView("awaiting")}>
+              See all {awaiting.length}
+            </button>
+          )}
         </div>
-      )}
-
-      <div className="card p-4 sm:p-5">
         {data === null ? (
-          <div className="text-sm opacity-40 py-4 text-center">Loading…</div>
-        ) : list.length === 0 ? (
-          <div className="text-sm opacity-40 py-4 text-center">No {ex.canDashboard ? tab : "pending"} documents.</div>
+          <div className="card p-5 text-sm opacity-40">Loading…</div>
+        ) : awaiting.length === 0 ? (
+          <div className="card p-5 text-sm opacity-50 flex items-center gap-2"><CheckCircle size={15} /> Nothing waiting for {ex.name}.</div>
         ) : (
-          list.map((r, i) => (
-            <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={
-                <div className="flex items-center gap-2">
-                  {/* Approving opens the approver's own drawer: read it, Go to
-                      signature, preview the stamp, then Approve — or Recommend
-                      changes / Reject — exactly as the executive would. */}
-                  {ex.canApprove && r.status === "pending" && ReviewDrawer && !r.confidential ? (
-                    <button className="btn-primary text-xs" onClick={() => setReviewing(r)}>
-                      <Eye size={14} /> Preview & approve
-                    </button>
-                  ) : (
-                    <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> View</button>
-                  )}
-                </div>
-              }
-            />
-          ))
+          <div className="card overflow-hidden">
+            {awaiting.slice(0, 5).map((r, i) => (
+              <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} actions={actionsFor(r)} />
+            ))}
+          </div>
         )}
       </div>
 
-      {preview && <AssistPreview req={preview} onClose={() => setPreview(null)} />}
-      {reviewing && ReviewDrawer && (
-        <ReviewDrawer req={reviewing}
-          // The drawer works out whose turn it is from `user`: here, the executive.
-          user={{ ...user, id: ex.id, name: ex.name }}
-          users={users} teams={teams} notify={notify}
-          approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges}
-          onClose={() => setReviewing(null)}
-          actingFor={{ name: ex.name, canAct: !!ex.canApprove, signatureBlob: () => api.assistSignatureBlob(ex.id) }} />
-      )}
-      {sigOpen && <SigModal ex={ex} notify={notify} onClose={() => setSigOpen(false)} />}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+        {tiles.map((t) => <Tile key={t.key} {...t} onClick={() => setView(t.key)} />)}
+      </div>
+
+      {drawers}
     </div>
   );
 }
 
-function StatTile({ icon: Icon, label, n, active, onClick }) {
+// What the executive was sent to read — and whether THEY have opened it. The
+// assistant opening it here does not mark it read for the executive.
+function ForInfoList({ ex, items, back, onOpen }) {
+  const unread = items.filter((d) => !d.viewedAt).length;
   return (
-    <button onClick={onClick} className={`card p-3 text-left tile-hover ${active ? "ring-2" : ""}`}
-      style={active ? { borderColor: "#B8894A", backgroundColor: "rgba(184,137,74,.08)" } : undefined}>
-      <Icon size={14} className="opacity-60 mb-1" />
-      <div className="font-display text-xl leading-none">{n}</div>
-      <div className="text-[10px] tracking-wider uppercase opacity-50 mt-1">{label}</div>
-    </button>
+    <div>
+      <BackHeader back={back} title={`For review — ${ex.name}`} step={items.length ? `${unread} not opened by ${String(ex.name).split(" ")[0]}` : "nothing shared"} />
+      <div className="card overflow-hidden mt-5">
+        {items.length === 0 ? (
+          <div className="p-8 text-sm opacity-50 text-center">Nothing has been shared with {ex.name} to read.</div>
+        ) : items.map((d) => (
+          <div key={d.id + d.notifiedAt} className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 sm:px-5 py-4 border-b last:border-0" style={{ borderColor: "var(--c-ink-08)" }}>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-sm" style={{ overflowWrap: "anywhere" }}>{d.title}</div>
+              <div className="text-xs opacity-60 mt-0.5">
+                {d.stageName} · {d.boardName} · from {d.fromName} · {new Date(d.notifiedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {d.viewedAt
+                ? <span className="pill pill-approved" title={new Date(d.viewedAt).toLocaleString("en-IN")}><Eye size={10} /> Opened by {String(ex.name).split(" ")[0]}</span>
+                : <span className="pill pill-pending"><Hourglass size={10} /> Not opened yet</span>}
+              <button className="btn-ghost text-xs" onClick={() => onOpen(d)}><Eye size={14} /> Open</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ForInfoPreview({ ex, doc, onClose }) {
+  const [file, setFile] = useState(null);
+  const [failed, setFailed] = useState(null);
+  useEffect(() => {
+    let url;
+    api.assistForInfoFileUrl(ex.id, doc.id)
+      .then((u) => { url = u; setFile({ name: doc.fileName, base64: u, ext: doc.fileType === "pdf" ? "pdf" : "xlsx" }); })
+      .catch((e) => setFailed(e?.message || "This document could not be opened"));
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [doc.id]);
+  return (
+    <ModalShell title={doc.title} subtitle={`Shared with ${ex.name} · from ${doc.fromName}`} size="xl" onClose={onClose}>
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--c-ink-10)", minHeight: 320 }}>
+        {file
+          ? <Suspense fallback={<div className="p-10 text-sm opacity-50 text-center">Opening…</div>}><DocPreview file={file} /></Suspense>
+          : <div className="p-10 text-sm text-center" style={failed ? { color: "var(--c-rust)" } : { opacity: 0.5 }}>{failed || "Opening the document…"}</div>}
+      </div>
+    </ModalShell>
   );
 }
 
