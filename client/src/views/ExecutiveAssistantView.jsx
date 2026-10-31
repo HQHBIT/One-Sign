@@ -217,9 +217,12 @@ function SigModal({ ex, notify, onClose }) {
 // Read-only, full-screen document preview.
 function AssistPreview({ req, onClose }) {
   const [fileUrl, setFileUrl] = useState(null);
+  const [failed, setFailed] = useState(null);
   useEffect(() => {
     let url;
-    api.getRequestFileBlob(req.id).then(u => { url = u; setFileUrl(u); }).catch(() => {});
+    // A refusal used to be swallowed, leaving "Loading document…" for ever.
+    api.getRequestFileBlob(req.id).then(u => { url = u; setFileUrl(u); })
+      .catch((e) => setFailed(e?.message || "This document could not be opened"));
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [req.id]);
 
@@ -235,7 +238,7 @@ function AssistPreview({ req, onClose }) {
             ? <Suspense fallback={<div className="p-10 text-sm opacity-50 text-center">Loading viewer…</div>}>
                 <DocPreview file={fileUrl} fill />
               </Suspense>
-            : <div className="p-10 text-sm opacity-50 text-center">Loading document…</div>}
+            : <div className="p-10 text-sm text-center" style={failed ? { color: "var(--c-rust)" } : { opacity: 0.5 }}>{failed || "Loading document…"}</div>}
         </div>
       </div>
     </div>

@@ -894,6 +894,35 @@ export async function authoriseAccess(user, row) {
     const fwd = await queryOne("SELECT 1 AS ok FROM shz_forwards WHERE request_id = ?", [row.id]);
     if (fwd) return true;
   }
+  // An executive assistant may open what the executives they assist have been
+  // sent — the same documents their executive tab already LISTS (assist.js):
+  // the pending queue with "view", everything with "dashboard". Without this the
+  // tab listed a document and then refused to open it (owner, 2026-10-31).
+  // Never a confidential one: those stay with the people named on them.
+  if (user.role === "executive_assistant" && !row.confidential) {
+    const links = await query(
+      "SELECT executive_id, can_view, can_dashboard FROM executive_assistants WHERE assistant_id = ?", [user.id]);
+    for (const l of links) {
+      const allowed = Number(l.can_dashboard) === 1
+        || ((l.can_view == null || Number(l.can_view) === 1) && row.status === "pending");
+      if (allowed && await isExecutiveOn(l.executive_id, row)) return true;
+    }
+  }
+  return false;
+}
+
+// Is this person one of the document's signers — the same test the assistant's
+// executive tab uses to list it (assist.js GET /:executiveId/requests).
+async function isExecutiveOn(userId, row) {
+  if (row.approver_id === userId) return true;
+  const sg = await queryOne(
+    `SELECT 1 AS ok FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id
+      WHERE st.request_id = ? AND sg.user_id = ?`, [row.id, userId]);
+  if (sg) return true;
+  if (row.status === "pending" && row.target_team_id) {
+    const auth = await queryOne("SELECT 1 AS ok FROM signing_authority WHERE user_id = ? AND team_id = ?", [userId, row.target_team_id]);
+    if (auth) return true;
+  }
   return false;
 }
 

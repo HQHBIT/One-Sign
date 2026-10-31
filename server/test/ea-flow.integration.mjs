@@ -450,6 +450,46 @@ try {
   ck(rowCc?.cc?.length === 2 && rowCc.cc.filter((c) => c.viewedAt).length === 1 && rowCc.cc.every((c) => c.name),
     "and the CC'd document carries each person, named, with who has read it");
 
+  // ---- a card already IN a stage that is then set to "Signs" (owner, 2026-10-31) ----
+  // Entering a stage was the only trigger, so this card sat there and nobody
+  // was ever asked to sign it.
+  const lateStage = await j(await call(EA, "POST", `/api/ea-flow/boards/${B2}/stages`, { name: `Switched later ${T}`, kind: "plain" }));
+  const S_LATE = lateStage.stage?.id;
+  const D_FIRST = (await j(await uploadDoc(EA, B2, "Sat there first", "", { stageId: S_LATE }))).document?.id;
+  r = await call(EA, "PUT", `/api/ea-flow/stages/${S_LATE}`, { name: `Switched later ${T}`, kind: "signature", signerId: EXEC });
+  ck(r.status === 200, `the stage it sits in is switched to Signs (${r.status})`);
+  let lateCard = (await j(await call(EA, "GET", `/api/ea-flow/boards/${B2}/documents`))).documents?.find((d) => d.id === D_FIRST);
+  ck(lateCard?.notSent === true && !lateCard?.request && !lateCard?.waitingForSignature, "the card says it has NOT been sent — rather than looking as if it had");
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_FIRST}/send`, {});
+  ck(r.status === 400, `send with no box placed asks for the box first (${r.status})`);
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_FIRST}/send`, { boxes: [{ page: 1, x: 10, y: 70, w: 25, h: 8 }] });
+  lateCard = (await j(r)).document;
+  ck(r.status === 200 && lateCard?.waitingForSignature === true && lateCard?.notSent === false, `send puts it with the executive and the card now waits (${r.status})`);
+  const sentReq = (await queryOne("SELECT request_id FROM ea_documents WHERE id = ?", [D_FIRST]))?.request_id;
+  ck(!!(await queryOne(
+    `SELECT 1 AS ok FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id JOIN requests r ON r.id = st.request_id
+      WHERE st.request_id = ? AND sg.user_id = ? AND r.status = 'pending'`, [sentReq, EXEC])),
+    "…as an ordinary pending request in the executive's own queue");
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_FIRST}/send`, { boxes: [{ page: 1, x: 10, y: 70, w: 25, h: 8 }] });
+  ck(r.status === 409, `sending it twice is refused (${r.status})`);
+
+  // ---- an assistant can OPEN what their executive was sent (owner, 2026-10-31) ----
+  // The executive tab listed these documents and then refused to open them.
+  // OTHER_EA did not raise this request, so only the link can let them in.
+  r = await fetch(`${BASE}/api/requests/${sentReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 403, `an assistant NOT linked to the executive cannot open it (${r.status})`);
+  await execute("INSERT INTO executive_assistants (id, executive_id, assistant_id, can_approve, signature_source, created_at, created_by) VALUES (?, ?, ?, 0, 'executive', ?, ?)", [`ea2_${T}`, EXEC, OTHER_EA, Date.now(), OTHER_EA]);
+  r = await fetch(`${BASE}/api/requests/${sentReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 200, `a linked assistant with view access opens the executive's pending document (${r.status})`);
+  await execute("UPDATE executive_assistants SET can_view = 0, can_dashboard = 0 WHERE id = ?", [`ea2_${T}`]);
+  r = await fetch(`${BASE}/api/requests/${sentReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 403, `…and not once that access is withdrawn (${r.status})`);
+  await execute("UPDATE requests SET confidential = 1 WHERE id = ?", [sentReq]);
+  await execute("UPDATE executive_assistants SET can_view = 1, can_dashboard = 1 WHERE id = ?", [`ea2_${T}`]);
+  r = await fetch(`${BASE}/api/requests/${sentReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 403, `a confidential document stays closed to an assistant, whatever their access (${r.status})`);
+  await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [sentReq]);
+
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");
   await waitFor(`http://127.0.0.1:${PORT + 10}`, waqf);
