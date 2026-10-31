@@ -378,6 +378,8 @@ export const api = {
   eaRemindCc(id) { return this.fetch(`/api/ea-flow/documents/${id}/cc-remind`, { method: "POST", body: "{}" }); },
   // Share ONE document with people to read, without changing the board.
   eaSendForReview(id, userIds) { return this.fetch(`/api/ea-flow/documents/${id}/review`, { method: "POST", body: JSON.stringify({ userIds }) }); },
+  // Replaces the whole signature layout: { stageId: [box, …] }.
+  eaPlanBoxes(id, boxesByStage) { return this.fetch(`/api/ea-flow/documents/${id}/planned-boxes`, { method: "PUT", body: JSON.stringify({ boxesByStage }) }); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
 
   // -------- documents shared with ME for information (a CC stage) --------

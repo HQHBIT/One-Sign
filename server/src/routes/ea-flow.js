@@ -42,6 +42,22 @@ function parseBoxes(v) {
   try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
 }
 
+// Boxes laid out ahead of time, as { stageId: [box, …] }. Always an object, so
+// callers can index it without checking — a document with no plan simply has
+// nothing under any stage.
+function plannedBoxesFor(doc) {
+  if (!doc?.planned_boxes_json) return {};
+  try {
+    const p = JSON.parse(doc.planned_boxes_json);
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  } catch { return {}; }
+}
+
+// One box is only a box if it carries four numbers. Checked on the way IN, so a
+// plan can never be stored in a shape that would fail days later, at the moment
+// the card finally reaches the stage.
+const validBox = (b) => ["x", "y", "w", "h"].every((k) => typeof b?.[k] === "number");
+
 // The feature exists on HQHB deployments only. Checked before authentication
 // so a WAQF box does not even reveal that the routes are there.
 const hqhbOnly = (req, res, next) => (deploymentOrg() === "hqhb" ? next() : res.status(404).end());
@@ -139,6 +155,9 @@ async function docOut(d, stageById) {
     // Sent for review by hand, independent of any stage — it stays with the
     // card as it moves, because the ask was about the paper, not the step.
     review: await reviewStateFor(d.id),
+    // Boxes laid out ahead of time, so the board can show how much of the
+    // paper is already prepared and the editor can reopen the same layout.
+    plannedBoxes: plannedBoxesFor(d),
   };
 }
 
@@ -541,7 +560,12 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
   let raised = null;
 
   if (needsSignature(to)) {
-    const list = Array.isArray(boxes) ? boxes : [];
+    // Boxes supplied now win; otherwise fall back to ones planned in advance
+    // for this stage. That fallback IS the point of planning them: the card
+    // reaches the stage and simply goes, without stopping to ask again.
+    const planned = plannedBoxesFor(doc)[to.id];
+    const list = Array.isArray(boxes) && boxes.length ? boxes
+      : (Array.isArray(planned) ? planned : []);
     if (!list.length || list.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
       return { status: 400, error: "Place the signature box on the document first" };
     const signer = to.signer_id && await signableExecutive(to.signer_id);
@@ -596,6 +620,48 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
       skipped.length ? JSON.stringify(skipped) : null]);
   return null;
 }
+
+// ---------- lay out every signature box up front ----------
+// A paper that three people must sign has three boxes to place. Asked for one
+// at a time, days apart, the assistant never sees them together and cannot tell
+// whether the third will land on top of the second. This places them all on one
+// view of the page, and each stage uses its own when the card arrives.
+//
+// The whole plan is replaced on every save: it is a layout, and a layout is
+// stated as a whole rather than accumulated.
+router.put("/documents/:id/planned-boxes", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const body = req.body?.boxesByStage;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return res.status(400).json({ error: "Send the boxes for each stage" });
+    }
+
+    const stages = await boardStages(d.board_id);
+    const out = {};
+    for (const [stageId, boxes] of Object.entries(body)) {
+      const stage = stages.find((s) => s.id === stageId);
+      // Only a signature stage has anything to do with a box. Refusing rather
+      // than ignoring, so a plan can never silently lose part of itself.
+      if (!stage) return res.status(400).json({ error: "Choose a stage on this board" });
+      if (!needsSignature(stage)) return res.status(400).json({ error: `"${stage.name}" does not ask for a signature` });
+      const list = Array.isArray(boxes) ? boxes : [];
+      if (list.some((b) => !validBox(b))) return res.status(400).json({ error: "A signature box is missing its position" });
+      // An empty list means "no plan for this stage" — the card will ask when
+      // it gets there, exactly as before.
+      if (list.length) {
+        out[stageId] = list.map((b) => ({
+          page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h,
+        }));
+      }
+    }
+
+    await execute("UPDATE ea_documents SET planned_boxes_json = ? WHERE id = ?",
+      [Object.keys(out).length ? JSON.stringify(out) : null, d.id]);
+    res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
+  } catch (e) { next(e); }
+});
 
 // ---------- send this one paper to someone to READ ----------
 // A CC stage copies everyone who passes through it, which is right for a step

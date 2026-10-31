@@ -655,6 +655,16 @@ async function runSchema() {
   // needs to tell a deliberate skip from work still to come.
   await tryExec("ALTER TABLE ea_movements ADD COLUMN skipped_stage_ids TEXT DEFAULT NULL");
 
+  // Signature boxes placed BEFORE the card reaches the stage that needs them,
+  // as { stageId: [box, …] }. An assistant preparing a paper that three people
+  // must sign wants to lay out all three boxes once, on one view of the page,
+  // and see them together — rather than being asked for one box at a time, days
+  // apart, with no sight of where the others went.
+  //
+  // A plan, not a promise: the stage still raises its own request in its own
+  // turn, and the boxes are simply already known by then.
+  await tryExec("ALTER TABLE ea_documents ADD COLUMN planned_boxes_json TEXT DEFAULT NULL");
+
   // Nudging someone who has not opened a document they were copied on. Kept on
   // the notice rather than in the `reminders` table, which hangs off a
   // request_id — a CC notice deliberately has no request behind it.

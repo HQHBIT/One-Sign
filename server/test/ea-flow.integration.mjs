@@ -257,6 +257,65 @@ try {
   const rq2 = await queryOne("SELECT * FROM requests WHERE id = (SELECT request_id FROM ea_documents WHERE id = ?)", [D_SIG]);
   ck(!!rq2 && rq2.status === "pending", "…and raises the request there and then, so nobody has to remember to ask");
 
+  // ---- signature boxes placed in advance ----
+  // The order of asking is unchanged; all that moves earlier is WHERE each
+  // signature goes, so the whole page can be laid out in one sitting.
+  r = await uploadDoc(EA, B2, "Laid out first", "", { stageId: T_IN }); const D_PLAN = (await j(r)).document?.id;
+  await new Promise((res) => setTimeout(res, 30));
+  ck((await call(EA, "POST", `/api/ea-flow/documents/${D_PLAN}/move`, { toStageId: T_SIG })).status === 400,
+    "with nothing planned, a card still cannot enter a signature stage without a box");
+
+  // A plan for a stage that asks nobody to sign is refused rather than quietly
+  // dropped — silently ignoring half a plan is how boxes go missing.
+  r = await call(EA, "PUT", `/api/ea-flow/documents/${D_PLAN}/planned-boxes`,
+    { boxesByStage: { [T_IN]: [{ page: 1, x: 12, y: 60, w: 25, h: 8 }] } });
+  ck(r.status === 400, `a box planned for a stage that never signs is refused (${r.status})`);
+  r = await call(EA, "PUT", `/api/ea-flow/documents/${D_PLAN}/planned-boxes`,
+    { boxesByStage: { [S_SIG]: [{ page: 1, x: 12, y: 60, w: 25, h: 8 }] } });
+  ck(r.status === 400, `…as is one for a stage on somebody else's board (${r.status})`);
+  r = await call(EA, "PUT", `/api/ea-flow/documents/${D_PLAN}/planned-boxes`,
+    { boxesByStage: { [T_SIG]: [{ page: 1, x: 12, y: 60, w: "25", h: 8 }] } });
+  ck(r.status === 400, `…and so is a box with a side that is not a number (${r.status})`);
+
+  r = await call(EA, "PUT", `/api/ea-flow/documents/${D_PLAN}/planned-boxes`,
+    { boxesByStage: { [T_SIG]: [{ page: 1, x: 12, y: 60, w: 25, h: 8 }] } });
+  b = await j(r);
+  ck(r.status === 200 && b.document?.plannedBoxes?.[T_SIG]?.length === 1,
+    `a layout can be saved ahead of the card arriving (${r.status} ${b.error || ""})`);
+
+  // The whole point: the card reaches the stage and the request goes out with
+  // the box already on it, nobody being asked to place one a second time.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_PLAN}/move`, { toStageId: T_SIG });
+  b = await j(r);
+  ck(r.status === 200 && b.document?.stageId === T_SIG,
+    `a planned stage admits the card with no box supplied (${r.status} ${b.error || ""})`);
+  const planSg = await queryOne(`SELECT s.* FROM request_step_signers s
+      JOIN request_steps st ON st.id = s.step_id
+      WHERE st.request_id = (SELECT request_id FROM ea_documents WHERE id = ?)`, [D_PLAN]);
+  ck(planSg?.user_id === EXEC && Math.abs(Number(planSg?.marker_x) - 12) < 1,
+    `…and the request carries the box that was planned, not a new one (${planSg?.marker_x})`);
+
+  // A box handed over at the moment of the move still wins — the plan is a
+  // fallback, not a lock on where the signature may go.
+  r = await uploadDoc(EA, B2, "Laid out then moved", "", { stageId: T_IN }); const D_OVER = (await j(r)).document?.id;
+  await call(EA, "PUT", `/api/ea-flow/documents/${D_OVER}/planned-boxes`,
+    { boxesByStage: { [T_SIG]: [{ page: 1, x: 12, y: 60, w: 25, h: 8 }] } });
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_OVER}/move`,
+    { toStageId: T_SIG, boxes: [{ page: 1, x: 44, y: 20, w: 25, h: 8 }] });
+  const overSg = await queryOne(`SELECT s.* FROM request_step_signers s
+      JOIN request_steps st ON st.id = s.step_id
+      WHERE st.request_id = (SELECT request_id FROM ea_documents WHERE id = ?)`, [D_OVER]);
+  ck(r.status === 200 && Math.abs(Number(overSg?.marker_x) - 44) < 1,
+    `a box placed at the moment of the move overrides the plan (${overSg?.marker_x})`);
+
+  // Clearing the layout puts the board back exactly where it was.
+  r = await call(EA, "PUT", `/api/ea-flow/documents/${D_OVER}/planned-boxes`, { boxesByStage: {} });
+  b = await j(r);
+  const cleared = await queryOne("SELECT planned_boxes_json FROM ea_documents WHERE id = ?", [D_OVER]);
+  ck(r.status === 200 && cleared?.planned_boxes_json === null && !Object.keys(b.document?.plannedBoxes || {}).length,
+    "a layout can be cleared, leaving no empty plan behind");
+
   // ---- a CC stage tells someone and lets go ----
   r = await uploadDoc(EA, B2, "To be read", "", { stageId: T_IN }); const D_CC = (await j(r)).document?.id;
   await new Promise((res) => setTimeout(res, 30));
