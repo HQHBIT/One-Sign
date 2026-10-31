@@ -490,6 +490,36 @@ try {
   ck(r.status === 403, `a confidential document stays closed to an assistant, whatever their access (${r.status})`);
   await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [sentReq]);
 
+  // ---- an assistant decides ON BEHALF: approve / recommend changes / reject (owner, 2026-10-31) ----
+  // OTHER_EA is linked to EXEC (view + dashboard) but may not act yet.
+  const asOther = (path, body) => call(OTHER_EA, "POST", `/api/assist/${EXEC}/requests/${path}`, body);
+  r = await asOther(`${sentReq}/reject`, { reason: "no" });
+  ck(r.status === 403, `without "approve on behalf" the assistant cannot reject for the executive (${r.status})`);
+  await execute("UPDATE executive_assistants SET can_approve = 1 WHERE id = ?", [`ea2_${T}`]);
+  r = await asOther(`${sentReq}/approve`, { instant: true });
+  ck(r.status === 400 && /signature/i.test((await j(r)).error || ""), `approving needs a signature on file to stamp (${r.status})`);
+  r = await call(OTHER_EA, "GET", `/api/assist/${EXEC}/signature-image`);
+  ck(r.status === 404, `…and the preview says so rather than showing a blank (${r.status})`);
+  r = await asOther(`${sentReq}/recommend`, { recommendation: "Please add the annexure." });
+  ck(r.status === 200, `recommend changes on the executive's behalf (${r.status})`);
+  let behalfRow = await queryOne("SELECT status, acted_by_assistant_id FROM requests WHERE id = ?", [sentReq]);
+  const rec = await queryOne("SELECT requested_by FROM request_recommendations WHERE request_id = ? ORDER BY round DESC LIMIT 1", [sentReq]);
+  ck(behalfRow?.status === "changes_requested" && rec?.requested_by === EXEC && behalfRow?.acted_by_assistant_id === OTHER_EA,
+    "…recorded as the executive's recommendation, with the assistant noted as who acted");
+  // A second paper for the executive, to reject.
+  const D_REJ = (await j(await uploadDoc(EA, B2, "To be rejected", "", { stageId: S_LATE, boxes: [{ page: 1, x: 10, y: 70, w: 25, h: 8 }] }))).document?.id;
+  const rejReq = (await queryOne("SELECT request_id FROM ea_documents WHERE id = ?", [D_REJ]))?.request_id;
+  await execute("UPDATE requests SET confidential = 1 WHERE id = ?", [rejReq]);
+  r = await asOther(`${rejReq}/reject`, { reason: "x" });
+  ck(r.status === 403, `a confidential document cannot be decided on the executive's behalf (${r.status})`);
+  await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [rejReq]);
+  r = await asOther(`${rejReq}/reject`, { reason: "Wrong vendor" });
+  behalfRow = await queryOne("SELECT status, approver_id, reject_reason, acted_by_assistant_id FROM requests WHERE id = ?", [rejReq]);
+  ck(r.status === 200 && behalfRow?.status === "rejected" && behalfRow?.approver_id === EXEC && behalfRow?.reject_reason === "Wrong vendor" && behalfRow?.acted_by_assistant_id === OTHER_EA,
+    `reject on the executive's behalf — as the executive, with the reason, the assistant noted (${r.status})`);
+  r = await call(REQR, "POST", `/api/assist/${EXEC}/requests/${rejReq}/reject`, { reason: "x" });
+  ck(r.status === 403, `someone who is not an assistant cannot use these routes (${r.status})`);
+
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");
   await waitFor(`http://127.0.0.1:${PORT + 10}`, waqf);

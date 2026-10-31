@@ -1549,7 +1549,11 @@ async function approveWorkflowStepInline({ req, row, signer }) {
 // read as authority over the whole route, so a step-1 signer who was named on
 // no step could reject at step 2 — or after everyone had signed — and drop the
 // signed document (audit 2026-09, finding reject-accepts-first-step-team-authority).
-router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res, next) => {
+// Exported, like approveRequestHandler, so an executive assistant can reject ON
+// BEHALF of an executive through the very same code (routes/assist.js).
+export const voiceUpload = upload.single("voice");
+router.post("/:id/reject", authRequired, voiceUpload, (req, res, next) => rejectRequestHandler(req, res, next));
+export async function rejectRequestHandler(req, res, next) {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -1588,7 +1592,7 @@ router.post("/:id/reject", authRequired, upload.single("voice"), async (req, res
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });
   } catch (e) { next(e); }
-});
+}
 
 // Play back the rejection voice note — participants only (requestor, the
 // request's signers, admin), same rule as the document itself. Anyone else gets

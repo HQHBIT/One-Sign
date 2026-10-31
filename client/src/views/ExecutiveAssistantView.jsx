@@ -18,7 +18,7 @@ const DocPreview = lazy(() => import("../viewer.jsx").then(m => ({ default: m.Do
 // standard requestor dashboard) so both experiences stay identical by
 // construction rather than by copy.
 export function ExecutiveAssistantView(props) {
-  const { user, users, teams, notify, PersonalView, orgId } = props;
+  const { user, users, teams, notify, PersonalView, ReviewDrawer, orgId } = props;
   const [execs, setExecs] = useState(null);
   const [active, setActive] = useState("me"); // "me" | executiveId | "flow"
   // The document flow (boards of stages, dashboard) exists on HQHB only; the
@@ -50,7 +50,7 @@ export function ExecutiveAssistantView(props) {
         ? (PersonalView ? <PersonalView {...props} /> : null)
         : active === "flow" && flowOn
           ? <FlowTab notify={notify} />
-          : current ? <ExecutivePanel key={current.id} ex={current} users={users} teams={teams} notify={notify} /> : null}
+          : current ? <ExecutivePanel key={current.id} ex={current} user={user} users={users} teams={teams} notify={notify} ReviewDrawer={ReviewDrawer} /> : null}
     </div>
   );
 }
@@ -68,26 +68,44 @@ function SwitchTab({ active, onClick, icon: Icon, label }) {
 }
 
 // One executive's workspace, scoped by the rights they granted.
-function ExecutivePanel({ ex, users, teams, notify }) {
+function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
   const [data, setData] = useState(null); // { requests, scope }
   const [tab, setTab] = useState("pending");
   const [preview, setPreview] = useState(null);
-  const [busyId, setBusyId] = useState(null);
   const [sigOpen, setSigOpen] = useState(false);
+  // The document open in the review drawer — the approver's own drawer
+  // (Preview & approve, Go to signature, Approve, Recommend changes, Reject),
+  // acting for this executive.
+  const [reviewing, setReviewing] = useState(null);
 
   const load = () => api.assistRequests(ex.id)
     .then(setData)
     .catch(e => { notify(e.message || "Could not load documents", "error"); setData({ requests: [], scope: "pending" }); });
   useEffect(() => { load(); }, [ex.id]);
 
-  const approve = async (reqId) => {
-    setBusyId(reqId);
+  // The three decisions, each on the executive's behalf. Same signatures as the
+  // approver's own handlers, so the drawer cannot tell the difference.
+  const approveRequest = async (reqId, instant, _sigId, addDate) => {
     try {
-      await api.assistApprove(ex.id, reqId);
+      await api.assistApprove(ex.id, reqId, { instant, addDate });
       notify(`Approved on behalf of ${ex.name}. They've been notified.`, "success");
       await load();
     } catch (e) { notify(e.message || "Approval failed", "error"); }
-    finally { setBusyId(null); }
+  };
+  const rejectRequest = async (reqId, reason, voice) => {
+    try {
+      await api.assistReject(ex.id, reqId, reason, voice);
+      notify(`Rejected on behalf of ${ex.name}. They've been notified.`, "success");
+      await load();
+    } catch (e) { notify(e.message || "Could not reject", "error"); throw e; }
+  };
+  const recommendChanges = async (reqId, text) => {
+    try {
+      await api.assistRecommend(ex.id, reqId, text);
+      notify(`Sent back for changes on behalf of ${ex.name}. They've been notified.`, "success");
+      await load();
+      return true;
+    } catch (e) { notify(e.message || "Could not send it back", "error"); return false; }
   };
 
   if (!ex.canView && !ex.canDashboard) {
@@ -161,11 +179,15 @@ function ExecutivePanel({ ex, users, teams, notify }) {
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={
                 <div className="flex items-center gap-2">
-                  <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> View</button>
-                  {ex.canApprove && r.status === "pending" && (
-                    <button className="btn-primary text-xs" disabled={busyId === r.id} onClick={() => approve(r.id)}>
-                      <CheckCircle size={14} /> {busyId === r.id ? "Signing…" : "Approve"}
+                  {/* Approving opens the approver's own drawer: read it, Go to
+                      signature, preview the stamp, then Approve — or Recommend
+                      changes / Reject — exactly as the executive would. */}
+                  {ex.canApprove && r.status === "pending" && ReviewDrawer && !r.confidential ? (
+                    <button className="btn-primary text-xs" onClick={() => setReviewing(r)}>
+                      <Eye size={14} /> Preview & approve
                     </button>
+                  ) : (
+                    <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> View</button>
                   )}
                 </div>
               }
@@ -175,6 +197,15 @@ function ExecutivePanel({ ex, users, teams, notify }) {
       </div>
 
       {preview && <AssistPreview req={preview} onClose={() => setPreview(null)} />}
+      {reviewing && ReviewDrawer && (
+        <ReviewDrawer req={reviewing}
+          // The drawer works out whose turn it is from `user`: here, the executive.
+          user={{ ...user, id: ex.id, name: ex.name }}
+          users={users} teams={teams} notify={notify}
+          approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges}
+          onClose={() => setReviewing(null)}
+          actingFor={{ name: ex.name, canAct: !!ex.canApprove, signatureBlob: () => api.assistSignatureBlob(ex.id) }} />
+      )}
       {sigOpen && <SigModal ex={ex} notify={notify} onClose={() => setSigOpen(false)} />}
     </div>
   );

@@ -108,7 +108,28 @@ export const api = {
   // -------- assistant acting on behalf --------
   assistExecutives() { return this.fetch("/api/assist/executives").then(r => r.executives); },
   assistRequests(executiveId) { return this.fetch(`/api/assist/${executiveId}/requests`); }, // { requests, scope }
-  assistApprove(executiveId, id) { return this.fetch(`/api/assist/${executiveId}/requests/${id}/approve`, { method: "POST" }); },
+  // instant / addDate: the same choices an approver makes in their own drawer.
+  assistApprove(executiveId, id, { instant, addDate } = {}) {
+    return this.fetch(`/api/assist/${executiveId}/requests/${id}/approve`, { method: "POST", body: JSON.stringify({ instant: !!instant, addDate: !!addDate }) });
+  },
+  assistReject(executiveId, id, reason, voice) {
+    const url = `/api/assist/${executiveId}/requests/${id}/reject`;
+    if (voice) {
+      const fd = new FormData();
+      fd.append("reason", reason || "");
+      fd.append("voice", voice, "voice-note");
+      return this.fetch(url, { method: "POST", body: fd });
+    }
+    return this.fetch(url, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+  assistRecommend(executiveId, id, recommendation) {
+    return this.fetch(`/api/assist/${executiveId}/requests/${id}/recommend`, { method: "POST", body: JSON.stringify({ recommendation }) });
+  },
+  // The signature that would be stamped on the executive's behalf, for the preview.
+  async assistSignatureBlob(executiveId) {
+    const res = await this.fetch(`/api/assist/${executiveId}/signature-image`, { raw: true });
+    return URL.createObjectURL(await res.blob());
+  },
   assistSetSignature(executiveId, dataUrl) { return this.fetch(`/api/assist/${executiveId}/signature`, { method: "PUT", body: JSON.stringify({ dataUrl }) }); },
   // -------- approve directly from the email (token-authenticated) --------
   emailApprovePreview(token) { return this.fetch("/api/email-approve/preview", { method: "POST", body: JSON.stringify({ token }) }); },

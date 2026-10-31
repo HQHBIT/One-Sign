@@ -13,8 +13,10 @@ import { Router } from "express";
 import { query, queryOne, execute, hydrateUser, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { approveRequestHandler } from "./requests.js";
-import { readImageSize } from "./users.js";
+import { approveRequestHandler, rejectRequestHandler, voiceUpload } from "./requests.js";
+import { recommendHandler } from "./recommendations.js";
+import { deploymentOrg } from "../org.js";
+import { readImageSize, sendSignature } from "./users.js";
 import { writeStored } from "../filestore.js";
 
 const router = Router();
@@ -78,59 +80,114 @@ router.get("/:executiveId/requests", authRequired, requireRole("executive_assist
   } catch (e) { next(e); }
 });
 
-// ---------- approve / sign on behalf ----------
-router.post("/:executiveId/requests/:id/approve", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
+// ---------- act on behalf: approve, reject, recommend changes ----------
+// All three run the SAME handler an approver's own click runs, with an
+// executive-shaped request — so every rule (whose turn it is, confidential
+// unlock, workflow order) applies unchanged. Each needs can_approve: deciding
+// a document is the right the executive granted, whichever way it goes.
+// Confidential documents are refused outright: they stay with the people named
+// on them (the same rule the file routes apply to assistants).
+async function asExecutive(req, res, { needSignature = false } = {}) {
+  const link = await linkFor(req.user.id, req.params.executiveId);
+  if (!link) { res.status(403).json({ error: "You don't assist this executive" }); return null; }
+  if (!link.can_approve) { res.status(403).json({ error: "This executive hasn't allowed you to act on their behalf yet" }); return null; }
+  const execRow = await queryOne("SELECT * FROM users WHERE id = ? AND role = 'executive'", [req.params.executiveId]);
+  if (!execRow) { res.status(400).json({ error: "Executive not found" }); return null; }
+  const doc = await queryOne("SELECT confidential FROM requests WHERE id = ?", [req.params.id]);
+  if (doc?.confidential) { res.status(403).json({ error: "Confidential documents can only be decided by the executive themselves" }); return null; }
+
+  // Which signature image gets stamped. The executive's NAME is always on the
+  // document (they are the approver of record); only the image differs.
+  const sigPath = link.signature_source === "assistant" ? req.userRow.signature_path : execRow.signature_path;
+  if (needSignature && !sigPath) {
+    const who = link.signature_source === "assistant" ? "Your" : "The executive's";
+    res.status(400).json({ error: `${who} signature isn't on file yet — add it before signing.` });
+    return null;
+  }
+  const execHydrated = await hydrateUser(execRow);
+  return { link, execRow, execHydrated, sigPath };
+}
+
+// Runs `handler` as the executive; on success records the real actor and tells
+// the executive who did what.
+async function runAsExecutive(req, res, next, ctx, handler, { action, body }) {
+  const pseudoReq = {
+    user: { ...ctx.execHydrated, hasSignature: !!ctx.sigPath },
+    userRow: { ...ctx.execRow, signature_path: ctx.sigPath || ctx.execRow.signature_path },
+    params: { id: req.params.id },
+    body,
+    file: req.file,
+    headers: req.headers,
+  };
+  let afterOk = Promise.resolve();
+  const sendJson = res.json.bind(res);
+  res.json = (payload) => {
+    if (payload && payload.request) {
+      // Who acted is written BEFORE the reply goes out: the screen reloads the
+      // moment it hears success, and must not read the row a beat too early.
+      const recorded = execute("UPDATE requests SET acted_by_assistant_id = ? WHERE id = ?", [req.user.id, req.params.id]).catch(() => {});
+      afterOk = Promise.allSettled([
+        recorded.then(() => sendJson(payload)),
+        sendEmail({
+          to: ctx.execRow.email,
+          template: "ea_action",
+          ctx: {
+            executiveName: ctx.execRow.name,
+            assistantName: req.user.name,
+            action,
+            fileName: payload.request.fileName || payload.request.file_name || "document",
+            requestId: req.params.id,
+          },
+        }),
+      ]);
+      return res;
+    }
+    return sendJson(payload);
+  };
+  await handler(pseudoReq, res, next);
+  await afterOk;
+}
+
+const onBehalf = [authRequired, requireRole("executive_assistant")];
+
+router.post("/:executiveId/requests/:id/approve", ...onBehalf, async (req, res, next) => {
+  try {
+    const ctx = await asExecutive(req, res, { needSignature: true });
+    if (!ctx) return;
+    // The approver's own choices travel through (finalise now, add today's
+    // date). Never signatureId: which image is stamped is the link's setting.
+    const body = { instant: req.body?.instant, addDate: req.body?.addDate };
+    await runAsExecutive(req, res, next, ctx, approveRequestHandler, { action: "approved", body });
+  } catch (e) { next(e); }
+});
+
+router.post("/:executiveId/requests/:id/reject", ...onBehalf, voiceUpload, async (req, res, next) => {
+  try {
+    const ctx = await asExecutive(req, res);
+    if (!ctx) return;
+    await runAsExecutive(req, res, next, ctx, rejectRequestHandler, { action: "rejected", body: { reason: req.body?.reason || "" } });
+  } catch (e) { next(e); }
+});
+
+router.post("/:executiveId/requests/:id/recommend", ...onBehalf, async (req, res, next) => {
+  try {
+    if (deploymentOrg() !== "hqhb") return res.status(404).end();
+    const ctx = await asExecutive(req, res);
+    if (!ctx) return;
+    await runAsExecutive(req, res, next, ctx, recommendHandler,
+      { action: "sent back for changes", body: { recommendation: req.body?.recommendation } });
+  } catch (e) { next(e); }
+});
+
+// ---------- the signature that would be stamped (for the preview) ----------
+router.get("/:executiveId/signature-image", ...onBehalf, async (req, res, next) => {
   try {
     const link = await linkFor(req.user.id, req.params.executiveId);
-    if (!link) return res.status(403).json({ error: "You don't assist this executive" });
-    if (!link.can_approve) return res.status(403).json({ error: "This executive hasn't allowed you to approve on their behalf yet" });
-
-    const execRow = await queryOne("SELECT * FROM users WHERE id = ? AND role = 'executive'", [req.params.executiveId]);
-    if (!execRow) return res.status(400).json({ error: "Executive not found" });
-
-    // Which signature image gets stamped. The executive's NAME is always on the
-    // document (they are the approver of record); only the image differs.
-    const sigPath = link.signature_source === "assistant" ? req.userRow.signature_path : execRow.signature_path;
-    if (!sigPath) {
-      const who = link.signature_source === "assistant" ? "Your" : "The executive's";
-      return res.status(400).json({ error: `${who} signature isn't on file yet — add it before signing.` });
-    }
-
-    // Build an executive-shaped request and reuse the one signing code path.
-    const execHydrated = await hydrateUser(execRow);
-    const pseudoReq = {
-      user: { ...execHydrated, hasSignature: true },
-      userRow: { ...execRow, signature_path: sigPath },
-      params: { id: req.params.id },
-      body: {},
-      headers: req.headers,
-    };
-
-    // On success: record the real actor, and tell the executive who did what.
-    let afterOk = Promise.resolve();
-    const sendJson = res.json.bind(res);
-    res.json = (payload) => {
-      if (payload && payload.request) {
-        afterOk = Promise.allSettled([
-          execute("UPDATE requests SET acted_by_assistant_id = ? WHERE id = ?", [req.user.id, req.params.id]),
-          sendEmail({
-            to: execRow.email,
-            template: "ea_action",
-            ctx: {
-              executiveName: execRow.name,
-              assistantName: req.user.name,
-              action: "approved",
-              fileName: payload.request.fileName || payload.request.file_name || "document",
-              requestId: req.params.id,
-            },
-          }),
-        ]);
-      }
-      return sendJson(payload);
-    };
-
-    await approveRequestHandler(pseudoReq, res, next);
-    await afterOk;
+    if (!link || !link.can_approve) return res.status(403).end();
+    const execRow = await queryOne("SELECT signature_path FROM users WHERE id = ?", [req.params.executiveId]);
+    const sigPath = link.signature_source === "assistant" ? req.userRow.signature_path : execRow?.signature_path;
+    if (!sigPath) return res.status(404).json({ error: "No signature on file yet" });
+    await sendSignature(res, sigPath);
   } catch (e) { next(e); }
 });
 
