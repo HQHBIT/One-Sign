@@ -1,5 +1,6 @@
 import { query, execute, queryOne } from "./db.js";
 import { notifyUser } from "./notify.js";
+import { notifyRouteOfCompletion } from "./workflowComplete.js";
 
 const WINDOW_MS = parseInt(process.env.APPROVAL_WINDOW_MS || "3600000", 10);
 
@@ -29,6 +30,7 @@ async function tick() {
         }
       });
     } catch (e) { console.error("[scheduler] email failure", e); }
+    notifyRouteOfCompletion(r.id).catch((e) => console.error("[scheduler] route email failure", e));
     console.log(`[scheduler] Finalised request ${r.id}`);
   }
 }

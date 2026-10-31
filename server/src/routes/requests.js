@@ -7,6 +7,7 @@ import { getPool, query, queryOne, execute, hydrateRequest } from "../db.js";
 import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { notifyUser } from "../notify.js";
+import { notifyRouteOfCompletion } from "../workflowComplete.js";
 import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { signXlsxBuffer } from "../xlsx-sign.js";
 import {
@@ -1233,6 +1234,7 @@ export async function approveRequestHandler(req, res, next) {
         user: requestor, requestId: row.id, template: "approved",
         ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
       }).catch(() => {});
+      notifyRouteOfCompletion(row.id).catch(() => {}); // HQHB: everyone on the route, with the signed copy
     } else {
       await execute(`
         UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -1360,6 +1362,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
           user: requestor, requestId: row.id, template: "approved",
           ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
+        notifyRouteOfCompletion(row.id).catch(() => {}); // HQHB: everyone on the route, with the signed copy
       } else {
         await execute(`
           UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?,
@@ -1440,6 +1443,7 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
               user: requestor, requestId: row.id, template: "approved",
               ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
             }).catch(() => {});
+            notifyRouteOfCompletion(row.id).catch(() => {}); // HQHB: everyone on the route, with the signed copy
           } else {
             await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
               [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
@@ -1525,6 +1529,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
           user: requestor, requestId: row.id, template: "approved",
           ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: req.user.name, requestId: row.id }
         }).catch(() => {});
+        notifyRouteOfCompletion(row.id).catch(() => {}); // HQHB: everyone on the route, with the signed copy
       } else {
         await execute(`UPDATE requests SET status = 'approved_pending', approver_id = ?, approved_at = ?, applied_signature_path = ?, signed_file_path = ? WHERE id = ?`,
           [req.user.id, Date.now(), req.userRow.signature_path, signedPath, row.id]);
@@ -1762,6 +1767,7 @@ router.post("/:id/force-finalize", authRequired, requireRole("admin"), async (re
       user: requestor, requestId: row.id, template: "approved",
       ctx: { requestorName: requestor?.name, fileName: row.file_name, confidential: !!row.confidential, approverName: approver?.name, requestId: row.id }
     }).catch(() => {});
+    notifyRouteOfCompletion(row.id).catch(() => {}); // HQHB: everyone on the route, with the signed copy
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });
   } catch (e) { next(e); }

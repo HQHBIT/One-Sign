@@ -246,6 +246,35 @@ const templates = {
     ].join("\n"),
   }),
 
+  // HQHB: a multi-signer route is fully signed — to everyone who signed it,
+  // with the signed copy attached when it fits (workflowComplete.js).
+  workflow_complete: (c) => ({
+    subject: `Fully signed: ${c.fileName}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `"${c.fileName}" has been signed by everyone on its route`,
+      pillHtml: pill("Fully signed", "approved"),
+      heading: "Signed by everyone",
+      contentHtml:
+        greet(c.name) +
+        p(`<strong>${esc(c.fileName)}</strong>, which you signed, has now been signed by everyone on its route.` +
+          (c.attached ? " The signed copy is attached." : " The signed copy is in SignFlow.")) +
+        details([
+          { label: "Document", value: c.fileName },
+          { label: "Sent by", value: c.requestorName },
+          { label: "Signed by", value: (c.signers || []).join(", ") },
+        ]) +
+        button("View in SignFlow", requestUrl(c), "gold"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `"${c.fileName}", which you signed, has now been signed by everyone on its route.`,
+      c.attached ? `The signed copy is attached.` : `The signed copy is in SignFlow.`, ``,
+      `Sent by: ${c.requestorName}`,
+      `Signed by: ${(c.signers || []).join(", ")}`, ``,
+      `View it: ${requestUrl(c)}`, ``, `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   // A CC stage: someone is asked to READ a document, not sign it. The wording
   // has to be unmistakable about that, or a careful executive sits waiting for
   // a signature box that is never coming.
@@ -626,6 +655,28 @@ const templates = {
     ].join("\n"),
   }),
 
+  // HQHB: a multi-signer route is fully signed — to everyone who signed it,
+  // with the signed copy attached when it fits (workflowComplete.js).
+  confidential_workflow_complete: (c) => ({
+    subject: `A confidential document you signed is now fully signed`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: "A confidential document is fully signed",
+      pillHtml: pill("Confidential", "approved"),
+      heading: "Fully signed",
+      contentHtml:
+        greet(c.name) +
+        p(`A confidential document you signed has now been signed by everyone on its route.`) +
+        p(`Open ${esc(BRAND.fromName)} and request an unlock code to view it.`) +
+        button("Open SignFlow", requestUrl(c), "green"),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `A confidential document you signed has now been signed by everyone on its route.`, ``,
+      requestUrl(c), ``,
+      `— ${BRAND.fromName}`,
+    ].join("\n"),
+  }),
+
   confidential_approved: (c) => ({
     subject: `Your confidential document has been signed`,
     html: layout({ appUrl: c.appUrl,
@@ -778,6 +829,7 @@ export function confidentialTemplate(template) {
     new_request: "confidential_new_request",
     your_turn: "confidential_your_turn",
     approved: "confidential_approved",
+    workflow_complete: "confidential_workflow_complete",
     rejected: "confidential_rejected",
     changes_requested: "confidential_changes_requested",
     resubmitted: "confidential_resubmitted",
