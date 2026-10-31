@@ -7,6 +7,7 @@ import { StageEditor } from "./StageEditor.jsx";
 import { AddDocument } from "./AddDocument.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
 import { SendForReview } from "./SendForReview.jsx";
+import { PlanSignatures } from "./PlanSignatures.jsx";
 import { fmtDuration, fmtWhen, stageColour, ccNames } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
@@ -62,6 +63,9 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   };
 
   // ---- documents ----
+  // Lay out every signature box up front, on one view of the page.
+  const [planning, setPlanning] = useState(null);
+
   // Share ONE paper with people to read, without making a stage for it.
   const [reviewing, setReviewing] = useState(null);
   const sendForReview = async (doc, userIds) => {
@@ -101,7 +105,10 @@ export function Board({ board, executives, notify, onBoardChanged }) {
     if (stage.id === doc.stageId) return;
     // Only a signature stage needs a box. A CC stage notifies and lets go.
     const signs = stage.kind === "signature" || (!stage.kind && stage.requiresSignature);
-    if (signs && !boxes) { setPlacing({ doc, stage }); return; }
+    // Already laid out for this stage? Then the card just goes. Asking again
+    // for a box that has been decided is the thing pre-placing them removes.
+    const planned = doc.plannedBoxes?.[stage.id]?.length > 0;
+    if (signs && !boxes && !planned) { setPlacing({ doc, stage }); return; }
     try {
       const updated = await api.eaMove(doc.id, { toStageId: stage.id, boxes });
       setDocs((ds) => ds.map((d) => (d.id === doc.id ? updated : d)));
@@ -168,12 +175,17 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             // column can start one — not only the first.
             onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
-            onRemind={remind} onReview={(d) => setReviewing(d)} reminding={reminding} />
+            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} reminding={reminding} />
         ))}
       </div>
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
       {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
+      {planning && (
+        <PlanSignatures doc={planning} stages={stages}
+          onSaved={(updated) => { setDocs((ds) => ds.map((d) => (d.id === updated.id ? updated : d))); setPlanning(null); notify("Signature layout saved", "success"); }}
+          onClose={() => setPlanning(null)} />
+      )}
       {reviewing && (
         <SendForReview doc={reviewing} executives={executives} already={reviewing.review?.people}
           onSend={(ids) => sendForReview(reviewing, ids)} onClose={() => setReviewing(null)} />
@@ -189,7 +201,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, reminding }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -238,7 +250,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} reminding={reminding === d.id} />)}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} reminding={reminding === d.id} />)}
         {/* The empty state was a dead label on every column but the first,
             which quietly said "documents begin over there". It is the same
             invitation everywhere now, and it is clickable. */}
@@ -256,9 +268,12 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, reminding }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
+  // How many signatories already have a box waiting for them. On the button, so
+  // a prepared paper can be told from an unprepared one without opening it.
+  const plannedCount = Object.values(doc.plannedBoxes || {}).filter((b) => b?.length).length;
   // `tick` already re-renders the card every minute for the dwell time, so the
   // reminder becomes available on its own when the cooldown passes rather than
   // staying greyed out until someone reloads the board.
@@ -347,15 +362,19 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onDownload(doc)} title="Download"><Download size={12} /></button>
+        {/* Every signature box for this paper, on one view of the page, before
+            any of them is needed. */}
+        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onPlan(doc)}
+          title={plannedCount ? `${plannedCount} signature box set — open the layout` : "Place every signature box now, on one view of the page"}><PenLine size={12} /> Boxes{plannedCount ? ` (${plannedCount})` : ""}</button>
+        {/* A one-off: this paper needs another pair of eyes, without reshaping
+            the board to say so. */}
+        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onReview(doc)}
+          title="Share this document with someone to read — no signature"><Eye size={12} /> Review</button>
         {/* Nothing holds a card on a CC stage, so a document can sit unread
             while the board looks perfectly healthy. This is the only way to ask
             again — and it is offered only while somebody still has not opened
             it, because reminding a person who already read it is how reminders
             become noise. */}
-        {/* A one-off: this paper needs another pair of eyes, without reshaping
-            the board to say so. */}
-        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onReview(doc)}
-          title="Share this document with someone to read — no signature"><Eye size={12} /> Review</button>
         {(doc.cc?.canRemind || doc.review?.canRemind) && (
           <button className="btn-ghost text-xs px-2 py-1" disabled={reminding || !remindReady}
             title={remindReady
