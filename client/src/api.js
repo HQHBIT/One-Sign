@@ -395,6 +395,11 @@ export const api = {
   eaDeleteDocument(id) { return this.fetch(`/api/ea-flow/documents/${id}`, { method: "DELETE" }); },
   // boxes are required when the destination is a signature stage
   eaMove(id, { toStageId, boxes }) { return this.fetch(`/api/ea-flow/documents/${id}/move`, { method: "POST", body: JSON.stringify({ toStageId, boxes }) }).then(r => r.document); },
+  // Files for Senior Executive Management: what employees sent to my executives.
+  eaInbox() { return this.fetch("/api/ea-flow/inbox"); }, // { executives, items }
+  eaInboxToBoard(requestId, { boardId, stageId }) {
+    return this.fetch(`/api/ea-flow/inbox/${requestId}/board`, { method: "POST", body: JSON.stringify({ boardId, stageId }) }).then(r => r.document);
+  },
   // Ask the signatory of the stage the card is already in.
   eaSend(id, { boxes } = {}) { return this.fetch(`/api/ea-flow/documents/${id}/send`, { method: "POST", body: JSON.stringify({ boxes }) }).then(r => r.document); },
   // Nudges only the people on this card's CC stage who have not opened it.
