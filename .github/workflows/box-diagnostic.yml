@@ -407,3 +407,46 @@ jobs:
             sudo du -xsh /var/cache/apt /var/lib/snapd /snap /tmp /var/tmp 2>/dev/null
             echo "--- deleted-but-still-open files holding space ---"
             sudo lsof -nP +L1 2>/dev/null | awk 'NR>1{print $7, $1, $2, $9}' | sort -n | tail -8
+
+            echo
+            echo "=============== 15. does a signature stage actually ask anyone? ==============="
+            # Counts and opaque ids only — this repository is public and so are
+            # these logs. No document titles, no names, no email addresses.
+            cd /home/ubuntu/OneSign/server || exit 0
+            node -e '
+              const mysql = require("mysql2/promise");
+              require("dotenv").config();
+              (async () => {
+                const cfg = {
+                  host: process.env.DB_HOST || "localhost",
+                  port: parseInt(process.env.DB_PORT || "3306", 10),
+                  user: process.env.DB_USER || "root",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME || "signflow"
+                };
+                if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
+                const c = await mysql.createConnection(cfg);
+                const rows = async (sql, p) => (await c.execute(sql, p || []))[0];
+                const one = async (sql, p) => (await rows(sql, p))[0];
+                console.log("ea documents: " + JSON.stringify(await rows(
+                  "SELECT s.stage_kind, COUNT(*) AS n, SUM(d.request_id IS NULL) AS no_request" +
+                  " FROM ea_documents d JOIN ea_stages s ON s.id = d.stage_id GROUP BY s.stage_kind")));
+                console.log("their requests by status: " + JSON.stringify(await rows(
+                  "SELECT r.status, COUNT(*) AS n FROM ea_documents d JOIN requests r ON r.id = d.request_id GROUP BY r.status")));
+                // The row that makes a request appear in a signer list at all.
+                console.log("requests with no assigned signer: " + (await one(
+                  "SELECT COUNT(*) AS n FROM ea_documents d JOIN requests r ON r.id = d.request_id" +
+                  " WHERE NOT EXISTS (SELECT 1 FROM request_steps st JOIN request_step_signers sg ON sg.step_id = st.id WHERE st.request_id = r.id)")).n);
+                console.log("signers on those requests, by their account state: " + JSON.stringify(await rows(
+                  "SELECT u.role, u.active, sg.status, COUNT(*) AS n" +
+                  " FROM ea_documents d JOIN request_steps st ON st.request_id = d.request_id" +
+                  " JOIN request_step_signers sg ON sg.step_id = st.id JOIN users u ON u.id = sg.user_id" +
+                  " GROUP BY u.role, u.active, sg.status")));
+                console.log("step state on those requests: " + JSON.stringify(await rows(
+                  "SELECT st.status, st.team_id IS NULL AS no_team, COUNT(*) AS n" +
+                  " FROM ea_documents d JOIN request_steps st ON st.request_id = d.request_id GROUP BY st.status, no_team")));
+                console.log("current_step on those requests: " + JSON.stringify(await rows(
+                  "SELECT r.current_step, COUNT(*) AS n FROM ea_documents d JOIN requests r ON r.id = d.request_id GROUP BY r.current_step")));
+                await c.end();
+              })().catch(e => console.log("DB ERROR: " + e.code + " - " + e.message));
+            ' 2>&1 | tail -12
