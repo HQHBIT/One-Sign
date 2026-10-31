@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, KanbanSquare, BarChart3, Check, X, Inbox } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, KanbanSquare, BarChart3, Check, X, Inbox, Columns3 } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { Board } from "./Board.jsx";
@@ -19,7 +19,8 @@ export function FlowTab({ notify }) {
   useEffect(() => { api.eaExecutives().then(setExecutives).catch(() => setExecutives([])); }, []);
   // Opens on "Files for Senior Executive Management": that is where new work arrives.
   const [current, setCurrent] = useState(INBOX);
-  const [view, setView] = useState("board");        // board | dashboard
+  // board = stage tiles (like the main dashboard) | columns = drag view | dashboard = times
+  const [view, setView] = useState("board");
   const [naming, setNaming] = useState(false);       // creating a board
   const [renaming, setRenaming] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -113,7 +114,7 @@ export function FlowTab({ notify }) {
               )}
             </div>
             <div className="inline-flex rounded-lg p-0.5" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
-              {[["board", KanbanSquare, "Board"], ["dashboard", BarChart3, "Dashboard"]].map(([k, Icon, label]) => (
+              {[["board", KanbanSquare, "Board"], ["columns", Columns3, "Columns"], ["dashboard", BarChart3, "Dashboard"]].map(([k, Icon, label]) => (
                 <button key={k} onClick={() => setView(k)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm"
                   style={view === k ? { backgroundColor: "var(--c-paper)", boxShadow: "0 1px 3px rgba(15,26,46,.12)" } : { opacity: 0.7 }}>
                   <Icon size={14} /> {label}
@@ -121,8 +122,8 @@ export function FlowTab({ notify }) {
               ))}
             </div>
           </div>
-          {view === "board"
-            ? <Board key={board.id} board={board} executives={executives} notify={notify} onBoardChanged={load} />
+          {view !== "dashboard"
+            ? <Board key={board.id} board={board} executives={executives} notify={notify} onBoardChanged={load} layout={view === "columns" ? "columns" : "tiles"} />
             : <Dashboard key={board.id} board={board} notify={notify} />}
         </>
       )}

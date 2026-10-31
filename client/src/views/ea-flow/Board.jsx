@@ -3,6 +3,8 @@ import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clo
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
+import { Tile } from "../../components/Tile.jsx";
+import { BackHeader } from "../../components/BackHeader.jsx";
 import { StageEditor } from "./StageEditor.jsx";
 import { AddDocument } from "./AddDocument.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
@@ -17,7 +19,12 @@ const DRAG = "text/x-ea-document";
 // One board: a column per stage, a card per document. Drag a card onto a
 // column, or use Move to… (the only way on a phone). Every move goes through
 // `move`, which knows when a destination needs a signature first.
-export function Board({ board, executives, notify, onBoardChanged }) {
+// `layout`: "tiles" (the default) opens the board like the main dashboard — a
+// tile per stage, each opening its documents on their own page — so the board
+// never grows into long side-by-side columns (owner, 2026-10-31). "columns" is
+// the drag-and-drop path view.
+export function Board({ board, executives, notify, onBoardChanged, layout = "tiles" }) {
+  const [openStageId, setOpenStageId] = useState(null);
   const confirm = useConfirmation();
   const [docs, setDocs] = useState(null);
   const [stageModal, setStageModal] = useState(null);   // { stage } | { stage: null }
@@ -171,19 +178,70 @@ export function Board({ board, executives, notify, onBoardChanged }) {
     );
   }
 
+  const cardProps = {
+    stages, tick, onMove: move, onOpen: open, onDownload: download, onRemove: removeDoc,
+    onRemind: remind, onReview: (d) => setReviewing(d), onPlan: (d) => setPlanning(d), onSend: send,
+  };
+  const docsIn = (s) => (docs || []).filter((d) => d.stageId === s.id);
+  // What a stage asks for, in the same words as the stage editor.
+  const asks = (s) => (s.kind === "cc" ? `${ccNames(s)} ${(s.ccPeople?.length ?? 1) > 1 ? "are" : "is"} shown it`
+    : (s.kind === "signature" || s.requiresSignature) ? `${s.signer?.name || "Someone"} signs` : "A step on the way");
+  const openStage = layout === "tiles" ? stages.find((s) => s.id === openStageId) : null;
+
   return (
     <div>
+      {layout === "tiles" && openStage ? (
+        // ---- one stage, on its own page (as Approved requests is) ----
+        (() => {
+          const i = stages.indexOf(openStage);
+          const list = docsIn(openStage);
+          return (
+            <div>
+              <BackHeader back={() => setOpenStageId(null)} title={`${i + 1}. ${openStage.name}`}
+                step={`${list.length} document${list.length === 1 ? "" : "s"} · ${asks(openStage)}`}
+                actions={<button className="btn-primary text-xs" onClick={() => setAdding({ stageId: openStage.id })}><Plus size={12} /> Add document</button>} />
+              <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                {list.length === 0 && (
+                  <div className="card p-8 text-sm opacity-50 text-center lg:col-span-2">Nothing in this stage right now.</div>
+                )}
+                {list.map((d) => <Card key={d.id} doc={d} stage={openStage} {...cardProps} reminding={reminding === d.id} />)}
+              </div>
+            </div>
+          );
+        })()
+      ) : (
+      <>
       <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
-        <div className="text-xs opacity-50">{docs ? `${docs.length} document${docs.length === 1 ? "" : "s"} on this board` : "Loading…"} · drag a card onto a stage, or use Move to…</div>
+        <div className="text-xs opacity-50">
+          {docs ? `${docs.length} document${docs.length === 1 ? "" : "s"} on this board` : "Loading…"}
+          {layout === "tiles" ? " · open a stage to see its documents" : " · drag a card onto a stage, or use Move to…"}
+        </div>
         <div className="flex gap-2">
           <button className="btn-ghost text-xs" onClick={() => setStageModal({ stage: null })}><Plus size={12} /> Stage</button>
           <button className="btn-primary text-xs" onClick={() => setAdding({ stageId: stages[0]?.id })}><Plus size={12} /> Add document</button>
         </div>
       </div>
 
-      {/* The stages as a path: three to a row with → between them, ↓ at the end
-          of a row, the next row running back the other way (flowLayout.js).
-          It replaced a strip that scrolled sideways and hid half the board. */}
+      {layout === "tiles" ? (
+        // ---- the board as a dashboard: a tile per stage, in order ----
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+          {stages.map((s, i) => {
+            const list = docsIn(s);
+            const waiting = list.filter((d) => d.waitingForSignature || d.notSent).length;
+            return (
+              <Tile key={s.id} color={stageColour(i)}
+                icon={s.kind === "cc" ? Eye : (s.kind === "signature" || s.requiresSignature) ? PenLine : FileText}
+                title={`${i + 1}. ${s.name}`}
+                desc={`${asks(s)}${waiting ? ` · ${waiting} awaiting a signature` : ""}`}
+                badge={list.length}
+                onClick={() => setOpenStageId(s.id)} />
+            );
+          })}
+        </div>
+      ) : (
+      /* The stages as a path: three to a row with → between them, ↓ at the end
+         of a row, the next row running back the other way (flowLayout.js).
+         It replaced a strip that scrolled sideways and hid half the board. */
       <FlowGrid count={stages.length} renderStage={(i) => {
         const s = stages[i];
         return (
@@ -201,6 +259,9 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} onSend={send} reminding={reminding} />
         );
       }} />
+      )}
+      </>
+      )}
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
       {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
