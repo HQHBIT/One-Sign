@@ -182,7 +182,10 @@ export function Board({ board, executives, notify, onBoardChanged }) {
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
       {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
       {planning && (
-        <PlanSignatures doc={planning} stages={stages}
+        <PlanSignatures doc={planning} stages={stages} executives={executives}
+          // Changing what a stage asks for changes the board itself, so the
+          // columns behind the dialog have to catch up straight away.
+          onStagesChanged={onBoardChanged}
           onSaved={(updated) => { setDocs((ds) => ds.map((d) => (d.id === updated.id ? updated : d))); setPlanning(null); notify("Signature layout saved", "success"); }}
           onClose={() => setPlanning(null)} />
       )}
