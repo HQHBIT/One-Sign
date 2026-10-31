@@ -10,13 +10,13 @@ router.get("/", authRequired, async (req, res, next) => {
   try {
     const rows = await query("SELECT id, name FROM teams ORDER BY name");
     // A requestor needs a signer's id (to route to them), name, and signature
-    // aspect (to size the box); email disambiguates duplicate names in the
-    // picker. `role` is org-structure detail with no role in that decision, so
-    // it is sent to admins only — least privilege on the directory.
+    // aspect (to size the box) — nothing more. Email addresses and `role` are
+    // directory detail for admins only: this list goes to every signed-in user
+    // and is readable in the browser's network tab (see privacy.js).
     const isAdmin = req.user.role === "admin";
     const shape = (u) => ({
-      id: u.user_id, name: u.name, email: u.email,
-      ...(isAdmin ? { role: u.role } : {}),
+      id: u.user_id, name: u.name,
+      ...(isAdmin ? { email: u.email, role: u.role } : {}),
       hasSignature: !!u.signature_path,
       signatureAspect: u.signature_aspect != null ? Number(u.signature_aspect) : null
     });
@@ -50,7 +50,11 @@ router.get("/", authRequired, async (req, res, next) => {
       // or — when none are set — the team's own members.
       const usingMembers = approvers.length === 0 && members.length > 0;
       return {
-        ...t, approvers, members,
+        ...t,
+        // The full approver and member lists are for the admin's team screen;
+        // a requestor only ever picks from `signers`, and needs just the counts.
+        ...(isAdmin ? { approvers, members } : {}),
+        approverCount: approvers.length, memberCount: members.length,
         signers: approvers.length ? approvers : members,
         signerSource: usingMembers ? "members" : "approvers",
       };

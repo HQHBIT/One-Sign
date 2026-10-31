@@ -29,6 +29,15 @@ export function ccNames(stage) {
   return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 === 1 ? "" : "s"}`;
 }
 
+// The picker list: Executive Management, plus anyone ALREADY on the stage who
+// is not in it (chosen before the list was narrowed). Without them a dropdown
+// would silently show someone else, and an untick-only reader would vanish.
+export function withCurrent(executives, current) {
+  const ids = new Set(executives.map((x) => x.id));
+  const extra = (current || []).filter((p) => p?.id && !ids.has(p.id)).map((p) => ({ ...p, earlier: true }));
+  return [...executives, ...extra];
+}
+
 // One colour per stage on the dashboard strips, cycling if a board has more.
 export const STAGE_COLOURS = ["#B8894A", "#5E7E98", "#5C8A5C", "#9A6B8C", "#C27C4A", "#6B8E9E", "#8C7A5C", "#7A6B9A"];
 export const stageColour = (i) => STAGE_COLOURS[i % STAGE_COLOURS.length];

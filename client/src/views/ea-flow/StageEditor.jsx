@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { PenLine, Eye } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
-import { ROLE_LABELS } from "../../lib/constants.js";
+import { withCurrent } from "./time.js";
 
 // Add or edit one stage: its name, and whether entering it should ask someone
 // to sign. `executives` (a historical name) is everyone who may be NAMED by a
-// signature stage — every active Approver and Executive, not only the people
-// this assistant is linked to, and not only the Executive role. Entering the
+// signature stage — the Executive Management (Executive role), not every
+// Approver and not only the people this assistant is linked to. Entering the
 // stage raises an ordinary direct request to whoever is named.
 // What a stage can ask of the person it names. Kept here rather than inline so
 // the copy explaining each one lives next to the value it describes.
@@ -84,7 +84,7 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
                     </span>
                     <span className="block text-xs opacity-60 mt-0.5">
                       {blurb}
-                      {blocked && " — nobody can be named yet: this needs an active Approver or Executive account."}
+                      {blocked && " — nobody can be named yet: this needs an active Executive account."}
                     </span>
                   </span>
                 </label>
@@ -99,11 +99,11 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
           <label className="block">
             <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Whose signature</div>
             <select value={signerId} onChange={(e) => setSignerId(e.target.value)} className="w-full">
-              {/* The role is shown because two signatories can share a name, and
-                  because it explains why someone appears here at all. */}
-              {executives.map((x) => (
+              {/* Executive Management, plus this stage's signer if they were
+                  chosen before the list was narrowed (so it never shows someone else). */}
+              {withCurrent(executives, stage?.kind !== "cc" && stage?.signer ? [stage.signer] : []).map((x) => (
                 <option key={x.id} value={x.id}>
-                  {x.name}{x.role && x.role !== "executive" ? ` · ${ROLE_LABELS[x.role] || x.role}` : ""}
+                  {x.name}{x.earlier ? " · chosen earlier" : ""}
                 </option>
               ))}
             </select>
@@ -119,14 +119,14 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
               Who should see it {ccIds.size > 0 && <span className="opacity-70">· {ccIds.size} chosen</span>}
             </div>
             <div className="rounded-lg max-h-56 overflow-auto" style={{ border: "1px solid var(--c-ink-10)" }}>
-              {executives.map((x) => (
+              {withCurrent(executives, stage?.ccPeople || []).map((x) => (
                 <label key={x.id} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer text-sm border-b last:border-0"
                   style={{ borderColor: "var(--c-ink-08)" }}>
                   <input type="checkbox" checked={ccIds.has(x.id)} onChange={() => toggleCc(x.id)}
                     style={{ accentColor: "var(--c-gold)" }} />
                   <span className="truncate">
                     {x.name}
-                    {x.role && x.role !== "executive" && <span className="opacity-50"> · {ROLE_LABELS[x.role] || x.role}</span>}
+                    {x.earlier && <span className="opacity-50"> · chosen earlier</span>}
                   </span>
                 </label>
               ))}

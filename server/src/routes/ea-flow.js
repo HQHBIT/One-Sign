@@ -70,29 +70,25 @@ const myStage = (uid_, id) => queryOne(
 const myDoc = (uid_, id) => queryOne(
   "SELECT d.* FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id WHERE d.id = ? AND b.owner_id = ?", [id, uid_]);
 const boardStages = (boardId) => query("SELECT * FROM ea_stages WHERE board_id = ? ORDER BY position ASC", [boardId]);
-// Who a signature stage may name. NOT only the executives this assistant is
-// linked to — being linked is what lets an assistant act ON BEHALF of someone,
-// which is a separate right from simply being sent a document to sign.
+// Who the Document flow may name — to sign, to be copied, or to review: the
+// Executive Management, i.e. users with the Executive role. Not every Approver
+// (owner, 2026-10-31: "only the executive management names and not all the
+// staff"), and not only the executives this assistant is linked to (being
+// linked is the separate right to act ON BEHALF of someone).
 //
-// Nor only the Executive role, which is what this used to be. A signature stage
-// raises an ordinary direct request to the person named, and raiseDirectRequest
-// asks nothing of their role — so an Approver signs one exactly as an Executive
-// does. Restricting the list to role='executive' therefore hid most of the
-// people who actually sign: on a deployment whose signatories are Approvers the
-// list came back empty, which DISABLES the "needs a signature" checkbox
-// outright and reads as the feature being missing.
-//
-// SIGNER_ROLES is the existing answer to "who signs" (approver + executive), so
-// this defers to it rather than inventing a second rule that can drift from it.
-// `role` is returned so the picker can tell two similar names apart.
+// A stage set up before this rule may still name an Approver. It keeps working
+// — `stillSignable` below admits any signer role for a person ALREADY on the
+// stage — but nobody new outside Executive Management can be chosen.
+// No email on the wire: the pickers show names only (privacy.js).
 // (The wire name stays `executives` — historical, and the client reads it.)
-const ROLE_PLACEHOLDERS = SIGNER_ROLES.map(() => "?").join(",");
 const signableExecutives = () => query(
-  `SELECT id, name, email, role FROM users WHERE role IN (${ROLE_PLACEHOLDERS}) AND active = 1 ORDER BY name`,
-  SIGNER_ROLES);
+  "SELECT id, name, role FROM users WHERE role = 'executive' AND active = 1 ORDER BY name");
 const signableExecutive = (execId) => queryOne(
+  "SELECT id, name, role FROM users WHERE id = ? AND role = 'executive' AND active = 1", [execId]);
+const ROLE_PLACEHOLDERS = SIGNER_ROLES.map(() => "?").join(",");
+const stillSignable = (id) => queryOne(
   `SELECT id, name, role FROM users WHERE id = ? AND role IN (${ROLE_PLACEHOLDERS}) AND active = 1`,
-  [execId, ...SIGNER_ROLES]);
+  [id, ...SIGNER_ROLES]);
 
 // What a stage asks of its person. stage_kind is authoritative; the fallback to
 // requires_signature covers a row written by the previous build during a deploy,
@@ -355,15 +351,20 @@ async function signatureSettings(req, body, current = null) {
     }
     const unique = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
     if (!unique.length) return "Choose who should see the document at this stage";
+    // Someone already copied here may stay; anyone added must be an executive.
+    const already = new Set(current ? (await ccRecipients(current.id)).map((u) => u.id) : []);
     for (const id of unique) {
-      if (!(await signableExecutive(id))) return "Choose one of the signatories";
+      const ok = already.has(id) ? await stillSignable(id) : await signableExecutive(id);
+      if (!ok) return "Choose from the Executive Management";
     }
     return { kind, requiresSignature: 0, signerId: null, ccUserIds: unique };
   }
 
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
   if (!signerId) return "Choose whose signature this stage needs";
-  if (!(await signableExecutive(signerId))) return "Choose one of the signatories";
+  // The stage's existing signer may stay; a new one must be an executive.
+  const ok = signerId === current?.signer_id ? await stillSignable(signerId) : await signableExecutive(signerId);
+  if (!ok) return "Choose from the Executive Management";
   return { kind, requiresSignature: 1, signerId, ccUserIds: [] };
 }
 
@@ -568,7 +569,9 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
       : (Array.isArray(planned) ? planned : []);
     if (!list.length || list.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
       return { status: 400, error: "Place the signature box on the document first" };
-    const signer = to.signer_id && await signableExecutive(to.signer_id);
+    // A stage already set up keeps its signer, even one chosen before the
+    // signatory list was narrowed to Executive Management.
+    const signer = to.signer_id && await stillSignable(to.signer_id);
     if (!signer) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
     const { bytes } = await currentBytes(doc);
     const ext = doc.file_type === "pdf" ? "pdf" : "xlsx";
@@ -680,7 +683,7 @@ router.post("/documents/:id/review", async (req, res, next) => {
     const people = [];
     for (const id of ids) {
       const person = await signableExecutive(id);
-      if (!person) return res.status(400).json({ error: "Choose one of the signatories" });
+      if (!person) return res.status(400).json({ error: "Choose from the Executive Management" });
       people.push(person);
     }
 

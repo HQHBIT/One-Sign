@@ -1055,10 +1055,21 @@ export async function hydrateUser(row) {
     // WAQF HOD tracking board: true when this user sits on the "HOD" team.
     isHod,
     hodTeamId,
-    // Plaintext most-recent temp password — only meaningful right after reset
-    // / invite / forgot-password. Falls back to null otherwise.
+    // No temp password here: this shape goes to the user themselves (/me, login,
+    // settings), where it showed in the browser's network tab. The IT Admin's
+    // user screen gets it from hydrateUserForAdmin below.
+  };
+}
+
+// The admin's view of an account: everything above plus the plaintext
+// most-recent temp password (reset / invite / forgot-password; null otherwise),
+// which IT Admin is meant to see. Only admin-only routes may send this.
+export async function hydrateUserForAdmin(row) {
+  if (!row) return null;
+  return {
+    ...(await hydrateUser(row)),
     lastTempPassword: row.last_temp_password || null,
-    lastTempPasswordAt: row.last_temp_password_at != null ? Number(row.last_temp_password_at) : null
+    lastTempPasswordAt: row.last_temp_password_at != null ? Number(row.last_temp_password_at) : null,
   };
 }
 

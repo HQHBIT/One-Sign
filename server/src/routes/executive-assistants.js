@@ -19,8 +19,9 @@ function canManage(user, executiveId) {
 router.get("/assistant-candidates", authRequired, async (req, res, next) => {
   try {
     if (req.user.role !== "admin" && req.user.role !== "executive") return res.status(403).json({ error: "Forbidden" });
+    // Names only for an executive's picker; addresses stay with admins (privacy.js).
     const rows = await query("SELECT id, name, email FROM users WHERE role = 'executive_assistant' AND active = 1 ORDER BY name");
-    res.json({ candidates: rows });
+    res.json({ candidates: req.user.role === "admin" ? rows : rows.map(({ id, name }) => ({ id, name })) });
   } catch (e) { next(e); }
 });
 

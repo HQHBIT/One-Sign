@@ -62,9 +62,34 @@ if (anySigner) {
   ck(!("role" in anySigner), "*** a requestor sees NO role field on directory entries ***");
   ck(!("its" in anySigner) && !("itsId" in anySigner), "…and no ITS id (never was in this payload)");
 }
+// 2026-10-27 (owner, WAQF): every signer's email was readable in the network tab.
+ck(!/@/.test(JSON.stringify(r.body)), "*** a requestor's teams list carries NO email address anywhere ***");
+ck((r.body.teams || []).every(t => !("approvers" in t) && !("members" in t)), "…and no full approver/member lists, only signers");
+ck((r.body.teams || []).every(t => Number.isInteger(t.approverCount) && Number.isInteger(t.memberCount)), "…with the counts the screens need");
 r = await J(await fetch(B + "/api/teams", { headers: { Authorization: "Bearer " + signToken("u_sec_adm") } }));
 const adminSigner = (r.body.teams || []).flatMap(t => [...(t.approvers || []), ...(t.members || [])])[0];
 if (adminSigner) ck("role" in adminSigner, "an admin still receives role (they run the Teams page)");
+if (adminSigner) ck("email" in adminSigner, "an admin still receives email");
+
+// ---------- the temp password never reaches the user's own browser ----------
+// 2026-10-27 (owner, WAQF): /me carried lastTempPassword in plain text.
+await execute("UPDATE users SET last_temp_password = 'Probe@1234', last_temp_password_at = ? WHERE id = 'u_sec_r'", [Date.now()]);
+for (const path of ["/api/auth/me"]) {
+  r = await J(await fetch(B + path, { headers: { Authorization: "Bearer " + signToken("u_sec_r") } }));
+  ck(r.status === 200 && !JSON.stringify(r.body).includes("Probe@1234") && !/lastTempPassword/.test(JSON.stringify(r.body)),
+     `*** ${path} carries no temp password ***`);
+}
+r = await J(await fetch(B + "/api/users", { headers: { Authorization: "Bearer " + signToken("u_sec_adm") } }));
+ck((r.body.users || []).find(u => u.id === "u_sec_r")?.lastTempPassword === "Probe@1234", "IT Admin's user list still shows it (intended)");
+
+// ---------- user search: matches by email, but only an admin gets it back ----------
+r = await J(await fetch(B + "/api/users/search?q=u_sec_adm", { headers: { Authorization: "Bearer " + signToken("u_sec_r") } }));
+const hit = (r.body.users || []).find(u => u.id === "u_sec_adm");
+ck(!!hit, "a requestor can still find someone by their email");
+ck(hit && !("email" in hit), "*** …without the address coming back ***");
+ck(hit?.hint === "u•••@hqhb.in", `…only a masked hint (${hit?.hint})`);
+r = await J(await fetch(B + "/api/users/search?q=u_sec_r", { headers: { Authorization: "Bearer " + signToken("u_sec_adm") } }));
+ck((r.body.users || []).find(u => u.id === "u_sec_r")?.email === "u_sec_r@hqhb.in", "an admin's search still shows the address");
 
 // ---------- LOW-003 / LOW-004: headers ----------
 r = await fetch(B + "/api/health");

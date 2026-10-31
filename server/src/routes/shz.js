@@ -96,7 +96,7 @@ router.get("/forwards", async (req, res, next) => {
       SELECT f.id, f.request_id, f.comment, f.forwarded_at,
              f.manzuri_received_at, f.manzuri_note, f.manzuri_file_name, f.manzuri_uploaded_at,
              r.file_name, r.status,
-             u.name AS requestor_name, u.email AS requestor_email
+             u.name AS requestor_name
       FROM shz_forwards f
       JOIN requests r ON r.id = f.request_id
       JOIN users u ON u.id = f.requestor_id
@@ -112,7 +112,6 @@ router.get("/forwards", async (req, res, next) => {
         comment: x.comment,
         forwardedAt: Number(x.forwarded_at),
         requestorName: x.requestor_name,
-        requestorEmail: x.requestor_email,
         manzuri: manzuriOut(x),
       })),
     });

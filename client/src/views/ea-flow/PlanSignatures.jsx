@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { PenLine, Check, Eye, Minus, ChevronDown } from "lucide-react";
 import { api } from "../../api.js";
 import { ModalShell } from "../../components/ModalShell.jsx";
-import { ROLE_LABELS } from "../../lib/constants.js";
-import { stageColour } from "./time.js";
+import { stageColour, withCurrent } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then((m) => ({ default: m.DocPreview })));
 
@@ -187,7 +186,7 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                       const on = kind === value;
                       return (
                         <button key={value} disabled={saving || blocked}
-                          title={blocked ? "No active Approver or Executive to name" : undefined}
+                          title={blocked ? "No active Executive to name" : undefined}
                           onClick={() => (on ? value === "cc" && setOpenCc(openCc === s.id ? null : s.id) : setAsk(s, value))}
                           className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] disabled:opacity-40"
                           style={on
@@ -207,9 +206,9 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                     <select className="w-full text-sm" disabled={saving} value={s.signer?.id || ""}
                       onChange={(e) => setAsk(s, "signature", { signerId: e.target.value })}>
                       {!s.signer?.id && <option value="">Choose whose signature</option>}
-                      {executives.map((x) => (
+                      {withCurrent(executives, s.signer ? [s.signer] : []).map((x) => (
                         <option key={x.id} value={x.id}>
-                          {x.name}{x.role && x.role !== "executive" ? ` · ${ROLE_LABELS[x.role] || x.role}` : ""}
+                          {x.name}{x.earlier ? " · chosen earlier" : ""}
                         </option>
                       ))}
                     </select>
@@ -224,12 +223,12 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                     </button>
                     {openCc === s.id && (
                       <div className="rounded-lg mt-1.5 max-h-40 overflow-auto" style={{ border: "1px solid var(--c-ink-10)" }}>
-                        {executives.map((x) => (
+                        {withCurrent(executives, readers).map((x) => (
                           <label key={x.id} className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer text-sm border-b last:border-0"
                             style={{ borderColor: "var(--c-ink-08)" }}>
                             <input type="checkbox" disabled={saving} checked={readers.some((p) => p.id === x.id)}
                               onChange={() => toggleReader(s, x.id)} style={{ accentColor: "var(--c-gold)" }} />
-                            <span className="truncate">{x.name}</span>
+                            <span className="truncate">{x.name}{x.earlier && <span className="opacity-50"> · chosen earlier</span>}</span>
                           </label>
                         ))}
                       </div>

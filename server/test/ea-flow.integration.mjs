@@ -109,15 +109,20 @@ try {
   ck(r.status === 200 && !!S_IN, "stage added");
   b = await j(await call(EA, "GET", "/api/ea-flow/executives"));
   ck(b.executives?.some((x) => x.id === UNLINKED) && b.executives?.some((x) => x.id === EXEC) && !b.executives?.some((x) => x.id === REQR), "every active executive is offered, linked or not; non-signers are not");
-  // The bug this guards: the list was role='executive' only, so on a deployment
-  // whose signatories are Approvers it came back EMPTY — which disables the
-  // "needs a signature" checkbox entirely and reads as the feature missing.
-  ck(b.executives?.some((x) => x.id === APPROVER), "an approver is offered too — they sign a direct request exactly as an executive does");
-  ck(b.executives?.find((x) => x.id === APPROVER)?.role === "approver", "…and the picker is told their role, so two similar names are tellable apart");
+  // 2026-10-31 (owner): the list is the Executive Management only — "not all
+  // the staff". It briefly offered every Approver too (PR #46).
+  ck(!b.executives?.some((x) => x.id === APPROVER), "an approver is NOT offered — only the Executive Management");
+  ck(!/@/.test(JSON.stringify(b)), "…and the list carries no email addresses");
   ck(!b.executives?.some((x) => x.id === GONE), "a deactivated signatory is never offered");
   r = await addStage({ name: "Approver signs", requiresSignature: true, signerId: APPROVER });
-  ck(r.status === 200, `a signature stage may name an approver (${r.status})`);
-  await call(EA, "DELETE", `/api/ea-flow/stages/${(await j(r)).stage?.id}`);
+  ck(r.status === 400, `a NEW signature stage naming an approver is refused (${r.status})`);
+  // A stage set up before the list was narrowed keeps its Approver signer.
+  r = await addStage({ name: "Set up earlier", requiresSignature: true, signerId: EXEC });
+  const EARLIER = (await j(r)).stage?.id;
+  await execute("UPDATE ea_stages SET signer_id = ? WHERE id = ?", [APPROVER, EARLIER]);
+  r = await call(EA, "PUT", `/api/ea-flow/stages/${EARLIER}`, { name: "Set up earlier (renamed)", kind: "signature", signerId: APPROVER });
+  ck(r.status === 200, `…but a stage that ALREADY names an approver can still be edited and kept (${r.status})`);
+  await call(EA, "DELETE", `/api/ea-flow/stages/${EARLIER}`);
   r = await addStage({ name: "Also signs", requiresSignature: true, signerId: GONE });
   ck(r.status === 400, `a signature stage naming a deactivated user is refused (${r.status})`);
   r = await addStage({ name: "Also signs", requiresSignature: true, signerId: REQR });

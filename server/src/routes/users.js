@@ -2,11 +2,12 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import path from "path";
-import { query, queryOne, execute, hydrateUser, getPool } from "../db.js";
+import { query, queryOne, execute, hydrateUserForAdmin, getPool } from "../db.js";
 import { authRequired, requireRole, isSigner } from "../auth.js";
 import { sendEmail } from "../email.js";
 import { deploymentOrg } from "../org.js";
 import { readStored, writeStored, deleteStored } from "../filestore.js";
+import { maskEmail } from "../privacy.js";
 
 // Roles an admin may assign when creating users.
 const ASSIGNABLE_ROLES = ["admin", "requestor", "approver", "executive", "executive_assistant"];
@@ -91,7 +92,7 @@ export function readImageSize(buf) {
 router.get("/", authRequired, requireRole("admin"), async (req, res, next) => {
   try {
     const rows = await query("SELECT * FROM users ORDER BY created_at DESC");
-    const users = await Promise.all(rows.map(hydrateUser));
+    const users = await Promise.all(rows.map(hydrateUserForAdmin));
     res.json({ users });
   } catch (e) { next(e); }
 });
@@ -112,7 +113,15 @@ router.get("/search", authRequired, async (req, res, next) => {
        ORDER BY name ASC LIMIT 10`,
       [req.user.id, like, like]
     );
-    res.json({ users: rows.map(r => ({ id: r.id, name: r.name, email: r.email, hasSignature: !!r.signature_path })) });
+    // Matching by email still works (someone who knows the address can find the
+    // person), but only an admin gets the address back; everyone else gets a
+    // masked hint to tell two people of the same name apart (privacy.js).
+    const isAdmin = req.user.role === "admin";
+    res.json({ users: rows.map(r => ({
+      id: r.id, name: r.name,
+      ...(isAdmin ? { email: r.email } : { hint: maskEmail(r.email) }),
+      hasSignature: !!r.signature_path,
+    })) });
   } catch (e) { next(e); }
 });
 
@@ -146,7 +155,7 @@ router.post("/", authRequired, requireRole("admin"), async (req, res, next) => {
     }
 
     const row = await queryOne("SELECT * FROM users WHERE id = ?", [id]);
-    res.json({ user: await hydrateUser(row) });
+    res.json({ user: await hydrateUserForAdmin(row) });
   } catch (e) { next(e); }
 });
 
@@ -910,7 +919,7 @@ export async function mergeUsers(survivorId, loserId, performedBy = null) {
   } finally {
     conn.release();
   }
-  return { moved, survivor: await hydrateUser(await queryOne("SELECT * FROM users WHERE id = ?", [survivorId])) };
+  return { moved, survivor: await hydrateUserForAdmin(await queryOne("SELECT * FROM users WHERE id = ?", [survivorId])) };
 }
 
 // ---------- admin: set/clear a user's ITS id ----------
@@ -949,7 +958,7 @@ router.put("/:id/email", authRequired, requireRole("admin"), async (req, res, ne
     if (clash) return res.status(409).json({ error: emailClashMessage(clash) });
     await execute("UPDATE users SET email = ? WHERE id = ?", [email, req.params.id]);
     const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
-    res.json({ user: await hydrateUser(row) });
+    res.json({ user: await hydrateUserForAdmin(row) });
   } catch (e) { next(e); }
 });
 
@@ -968,7 +977,7 @@ router.put("/:id/role", authRequired, requireRole("admin"), async (req, res, nex
     if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't change your own role" });
     const target = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
     if (!target) return res.status(404).json({ error: "User not found" });
-    if (target.role === role) return res.json({ user: await hydrateUser(target) });
+    if (target.role === role) return res.json({ user: await hydrateUserForAdmin(target) });
 
     await execute("UPDATE users SET role = ? WHERE id = ?", [role, req.params.id]);
 
@@ -984,7 +993,7 @@ router.put("/:id/role", authRequired, requireRole("admin"), async (req, res, nex
     }
 
     const row = await queryOne("SELECT * FROM users WHERE id = ?", [req.params.id]);
-    res.json({ user: await hydrateUser(row) });
+    res.json({ user: await hydrateUserForAdmin(row) });
   } catch (e) { next(e); }
 });
 
