@@ -220,8 +220,15 @@ function AssistPreview({ req, onClose }) {
   const [failed, setFailed] = useState(null);
   useEffect(() => {
     let url;
+    // The signed copy once there is one, as the approver's own preview does.
+    const isPdf = req.fileType === "pdf";
+    const kind = req.hasSignedFile && isPdf ? "signed" : "file";
     // A refusal used to be swallowed, leaving "Loading document…" for ever.
-    api.getRequestFileBlob(req.id).then(u => { url = u; setFileUrl(u); })
+    // DocPreview needs a file DESCRIPTION — name, type, data — not a bare
+    // link: given only a link it could not tell a PDF from a spreadsheet and
+    // drew an empty page (owner, 2026-10-31).
+    api.getRequestFileBlob(req.id, kind)
+      .then(u => { url = u; setFileUrl({ name: req.fileName, base64: u, ext: isPdf ? "pdf" : "xlsx" }); })
       .catch((e) => setFailed(e?.message || "This document could not be opened"));
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [req.id]);
