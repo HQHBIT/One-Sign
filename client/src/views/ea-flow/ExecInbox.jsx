@@ -1,10 +1,13 @@
 import { useEffect, useState, lazy, Suspense } from "react";
-import { Inbox, Eye, KanbanSquare, ArrowRight, FileText, FileSpreadsheet, Clock, CircleCheck, User } from "lucide-react";
+import { Inbox, Eye, KanbanSquare, ArrowRight, FileText, FileSpreadsheet, Clock, CircleCheck, User, Briefcase, Layers } from "lucide-react";
 import { api } from "../../api.js";
 import { ModalShell } from "../../components/ModalShell.jsx";
+import { Tile } from "../../components/Tile.jsx";
+import { BackHeader } from "../../components/BackHeader.jsx";
 import { fmtWhen } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
+const PAGE = 20;
 
 // ============================================================
 //   FILES FOR SENIOR EXECUTIVE MANAGEMENT
@@ -12,12 +15,17 @@ const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m
 //   Every document an employee has sent for signature to an executive this
 //   assistant supports (their Delegation links). The request still goes to the
 //   executive exactly as before; from here the assistant reviews it, sees whom
-//   the employee asked, and puts it on one of their boards — where it moves
-//   through stages, can be sent for review, or on to another executive to sign.
+//   the employee asked, and puts it on one of their boards.
+//
+//   Opens as a DASHBOARD — a tile per executive and per state — never one long
+//   list; each tile opens its own page, as Approved requests does on the main
+//   dashboard (owner, 2026-10-31: "remove this list … I should get the page as
+//   what I receive under the main dashboard").
 // ============================================================
 export function ExecInbox({ boards, notify, onPlaced, onOpenBoard }) {
   const [data, setData] = useState(null);       // { executives, items }
-  const [who, setWho] = useState("all");        // executive filter
+  const [view, setView] = useState(null);       // null = dashboard | { key, title, filter }
+  const [shownCount, setShownCount] = useState(PAGE);
   const [preview, setPreview] = useState(null); // item
   const [placing, setPlacing] = useState(null); // item
 
@@ -25,82 +33,8 @@ export function ExecInbox({ boards, notify, onPlaced, onOpenBoard }) {
     .catch((e) => { notify(e.message || "Could not load the files", "error"); setData({ executives: [], items: [] }); });
   useEffect(() => { load(); }, []);
 
-  if (data === null) return <div className="card p-10 text-sm opacity-50 text-center">Loading…</div>;
-  const { executives, items } = data;
-  const forWho = (it) => it.steps.flatMap((st) => st.signers).filter((s) => s.mine).map((s) => s.name);
-  const shown = who === "all" ? items : items.filter((it) => forWho(it).includes(who));
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <div className="font-display text-2xl">Files for Senior Executive Management</div>
-          <div className="text-xs opacity-60 mt-0.5">
-            Documents employees have sent for signature to {executives.length ? executives.map((e) => e.name).join(", ") : "your executives"}.
-            They still reach the executive as usual — put one on a board to route it from here.
-          </div>
-        </div>
-      </div>
-
-      {executives.length === 0 ? (
-        <div className="card p-8 text-center text-sm opacity-70">
-          <User size={18} className="mx-auto mb-2 opacity-50" />
-          No executives are linked to you with document access yet. The executive (or IT Admin) can add you under <span className="font-medium">Delegation</span>, with “View documents” on.
-        </div>
-      ) : (
-        <>
-          {/* Filter by executive — counts say where the work is. */}
-          <div className="flex flex-wrap gap-1.5">
-            {[["all", `All · ${items.length}`], ...executives.map((e) => [e.name, `${e.name} · ${items.filter((it) => forWho(it).includes(e.name)).length}`])].map(([k, label]) => (
-              <button key={k} onClick={() => setWho(k)} className="rounded-full px-3 py-1.5 text-xs"
-                style={who === k ? { backgroundColor: "var(--c-ink)", color: "var(--c-cream)" } : { backgroundColor: "rgba(15,26,46,.06)" }}>
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="card p-2 sm:p-3">
-            {shown.length === 0 ? (
-              <div className="text-sm opacity-50 py-8 text-center">
-                <Inbox size={20} className="mx-auto mb-2 opacity-40" />
-                Nothing waiting for {who === "all" ? "your executives" : who} right now.
-              </div>
-            ) : shown.map((it) => (
-              <div key={it.requestId} className="flex flex-col sm:flex-row sm:items-center gap-3 px-3 py-3 border-b last:border-0" style={{ borderColor: "var(--c-ink-08)" }}>
-                <div className="flex items-start gap-3 min-w-0 flex-1">
-                  <div className="w-8 h-8 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
-                    {it.fileType === "pdf" ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-medium text-sm" style={{ overflowWrap: "anywhere" }}>{it.fileName}</div>
-                    <div className="text-xs opacity-60 mt-0.5">
-                      From <span className="font-medium">{it.requestorName || "—"}</span> · {fmtWhen(it.createdAt)}
-                      {it.teamName ? ` · ${it.teamName}` : ""}
-                    </div>
-                    <Asked item={it} />
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap shrink-0 sm:justify-end">
-                  {it.onBoard ? (
-                    <button className="pill pill-approved" style={{ textTransform: "none", letterSpacing: 0 }}
-                      onClick={() => onOpenBoard(it.onBoard.boardId)} title="Open that board">
-                      <KanbanSquare size={10} /> {it.onBoard.boardName} · {it.onBoard.stageName}
-                    </button>
-                  ) : null}
-                  <button className="btn-ghost text-xs" onClick={() => setPreview(it)}><Eye size={13} /> Open</button>
-                  {!it.onBoard && (
-                    <button className="btn-primary text-xs" onClick={() => setPlacing(it)} disabled={!boards.length}
-                      title={boards.length ? "Put it on one of your boards" : "Create a board first"}>
-                      <KanbanSquare size={13} /> Put on a board
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
+  const modals = (
+    <>
       {preview && <InboxPreview item={preview} onClose={() => setPreview(null)} />}
       {placing && (
         <PutOnBoard item={placing} boards={boards} onClose={() => setPlacing(null)}
@@ -111,6 +45,130 @@ export function ExecInbox({ boards, notify, onPlaced, onOpenBoard }) {
             onPlaced?.(board.id, doc);
           }} />
       )}
+    </>
+  );
+
+  if (data === null) return <div className="card p-10 text-sm opacity-50 text-center">Loading…</div>;
+  const { executives, items } = data;
+  const forWho = (it) => it.steps.flatMap((st) => st.signers).filter((s) => s.mine).map((s) => s.name);
+  // Whose turn it is right now — the executive, or someone before them.
+  const theirTurn = (it, name) => it.awaiting === name;
+
+  // ---- a list, on its own page ----
+  if (view) {
+    const list = items.filter(view.filter);
+    const page = list.slice(0, shownCount);
+    return (
+      <div>
+        <BackHeader back={() => { setView(null); setShownCount(PAGE); }} title={view.title}
+          step={`${list.length} document${list.length === 1 ? "" : "s"}`} />
+        <div className="card p-2 sm:p-3 mt-5">
+          {list.length === 0 ? (
+            <div className="text-sm opacity-50 py-8 text-center">
+              <Inbox size={20} className="mx-auto mb-2 opacity-40" />Nothing here right now.
+            </div>
+          ) : page.map((it) => (
+            <InboxRow key={it.requestId} it={it} boards={boards}
+              onOpen={() => setPreview(it)} onPlace={() => setPlacing(it)} onOpenBoard={onOpenBoard} />
+          ))}
+          {list.length > page.length && (
+            <div className="text-center py-3">
+              <button className="btn-ghost text-xs" onClick={() => setShownCount((n) => n + PAGE)}>
+                Show {Math.min(PAGE, list.length - page.length)} more of {list.length - page.length}
+              </button>
+            </div>
+          )}
+        </div>
+        {modals}
+      </div>
+    );
+  }
+
+  // ---- the dashboard ----
+  const notOnBoard = items.filter((it) => !it.onBoard).length;
+  const onBoard = items.length - notOnBoard;
+  const tiles = [
+    ...executives.map((e) => {
+      const mine = items.filter((it) => forWho(it).includes(e.name));
+      const now = mine.filter((it) => theirTurn(it, e.name)).length;
+      return {
+        key: `ex:${e.id}`, icon: Briefcase, color: "var(--c-gold)", badge: mine.length,
+        title: e.name,
+        desc: mine.length ? `${now} awaiting ${e.name.split(" ")[0]} now · ${mine.length - now} with others first` : "Nothing sent to them right now.",
+        view: { key: `ex:${e.id}`, title: e.name, filter: (it) => forWho(it).includes(e.name) },
+      };
+    }),
+    { key: "not-on-board", icon: Inbox, badge: notOnBoard, title: "Not on a board yet",
+      desc: "Files you have not routed yet — review them and put them on a board.",
+      view: { key: "not-on-board", title: "Not on a board yet", filter: (it) => !it.onBoard } },
+    { key: "on-board", icon: KanbanSquare, badge: onBoard, title: "On your boards",
+      desc: "Files already routed — each shows its board and stage.",
+      view: { key: "on-board", title: "On your boards", filter: (it) => !!it.onBoard } },
+    { key: "all", icon: Layers, badge: items.length, title: "All files",
+      desc: "Everything employees have sent to your executives.",
+      view: { key: "all", title: "All files", filter: () => true } },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <div className="font-display text-2xl">Files for Senior Executive Management</div>
+        <div className="text-xs opacity-60 mt-0.5">
+          {items.length
+            ? `${items.length} document${items.length === 1 ? "" : "s"} employees have sent for signature to your executives.`
+            : "Nothing has been sent to your executives right now."}
+          {" "}They still reach the executive as usual — open a tile to review them and route them from here.
+        </div>
+      </div>
+
+      {executives.length === 0 ? (
+        <div className="card p-8 text-center text-sm opacity-70">
+          <User size={18} className="mx-auto mb-2 opacity-50" />
+          No executives are linked to you with document access yet. The executive (or IT Admin) can add you under <span className="font-medium">Delegation</span>, with “View documents” on.
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+          {tiles.map((t) => <Tile key={t.key} icon={t.icon} title={t.title} desc={t.desc} badge={t.badge} color={t.color}
+            onClick={() => { setShownCount(PAGE); setView(t.view); }} />)}
+        </div>
+      )}
+      {modals}
+    </div>
+  );
+}
+
+// One file: what it is, who sent it, whom they asked — and what can be done.
+function InboxRow({ it, boards, onOpen, onPlace, onOpenBoard }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-3 py-3 border-b last:border-0" style={{ borderColor: "var(--c-ink-08)" }}>
+      <div className="flex items-start gap-3 min-w-0 flex-1">
+        <div className="w-8 h-8 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(15,26,46,.06)" }}>
+          {it.fileType === "pdf" ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
+        </div>
+        <div className="min-w-0">
+          <div className="font-medium text-sm" style={{ overflowWrap: "anywhere" }}>{it.fileName}</div>
+          <div className="text-xs opacity-60 mt-0.5">
+            From <span className="font-medium">{it.requestorName || "—"}</span> · {fmtWhen(it.createdAt)}
+            {it.teamName ? ` · ${it.teamName}` : ""}
+          </div>
+          <Asked item={it} />
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap shrink-0 sm:justify-end">
+        {it.onBoard && (
+          <button className="pill pill-approved" style={{ textTransform: "none", letterSpacing: 0 }}
+            onClick={() => onOpenBoard(it.onBoard.boardId)} title="Open that board">
+            <KanbanSquare size={10} /> {it.onBoard.boardName} · {it.onBoard.stageName}
+          </button>
+        )}
+        <button className="btn-ghost text-xs" onClick={onOpen}><Eye size={13} /> Open</button>
+        {!it.onBoard && (
+          <button className="btn-primary text-xs" onClick={onPlace} disabled={!boards.length}
+            title={boards.length ? "Put it on one of your boards" : "Create a board first"}>
+            <KanbanSquare size={13} /> Put on a board
+          </button>
+        )}
+      </div>
     </div>
   );
 }
