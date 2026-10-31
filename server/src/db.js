@@ -835,6 +835,9 @@ async function runSchema() {
   // executive as approver (their name/signature is on the document) AND the real
   // actor here, for the audit trail. Nullable → normal approvals leave it NULL.
   await tryExec(`ALTER TABLE requests ADD COLUMN acted_by_assistant_id VARCHAR(64) DEFAULT NULL`);
+  // HQHB: when the everyone on a multi-signer route was told it is fully signed
+  // (workflowComplete.js). Claimed atomically, so the email goes out once.
+  await tryExec(`ALTER TABLE requests ADD COLUMN route_notified_at BIGINT DEFAULT NULL`);
   // Granular per-link rights the executive grants their assistant. Defaults keep
   // prior behavior: viewing on, everything else opt-in.
   await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_view TINYINT(1) NOT NULL DEFAULT 1`);

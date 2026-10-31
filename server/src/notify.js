@@ -48,6 +48,8 @@ function inAppText(template, ctx = {}) {
       const on = ctx.removeOn ? new Date(Number(ctx.removeOn)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }) : "soon";
       return { title: `Stored until ${on}: ${f}`, body: `Save your copy before ${on} — it will then be removed from SignFlow.${ctx.attached ? " We've emailed it to you." : ""}` };
     }
+    case "workflow_complete":
+      return { title: `Fully signed: ${f}`, body: `Signed by everyone on its route${ctx.attached ? " — the signed copy is in your email" : ""}.` };
     case "resubmitted":
       return { title: `Resubmitted: ${f}`, body: `${ctx.requestorName || "The requestor"} made the changes you asked for — it's back with you.` };
     default:
