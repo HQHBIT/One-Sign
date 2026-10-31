@@ -732,7 +732,7 @@ function Shell(props) {
         <InstallBanner install={install} onInstall={handleInstall} />
         {user.role === "requestor" && <RequestorView key={homeKey} {...props} />}
         {(user.role === "approver" || user.role === "executive") && <ApproverView key={homeKey} {...props} />}
-        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} PersonalView={RequestorView} {...props} />}
+        {user.role === "executive_assistant" && <ExecutiveAssistantView key={homeKey} PersonalView={RequestorView} ReviewDrawer={ApproveDrawer} {...props} />}
         {user.role === "admin" && <AdminView key={homeKey} {...props} />}
       </main>
       {needsSig && (
@@ -2342,7 +2342,11 @@ function VoiceNote({ requestId }) {
   return <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" />;
 }
 
-function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, onClose, notify }) {
+// `actingFor` — { name, canAct, signatureBlob }: an executive assistant deciding
+// on an executive's behalf. Same drawer, same buttons; `user` is then the
+// executive (whose turn it is), the signature previewed is the one the link
+// stamps, and nothing is offered without the right to approve on their behalf.
+function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, onClose, notify, actingFor = null }) {
   const [file, setFile] = useState(null);
   // Same single-scroller rule as PreviewDrawer.
   useScrollLock();
@@ -2403,6 +2407,8 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   // placed no date field for this signer. Opt-in, so it is a real choice.
   const [addDate, setAddDate] = useState(false);
   useEffect(() => {
+    // On someone's behalf the link decides which image is stamped — no picker.
+    if (actingFor) return;
     let dead = false;
     const urls = [];
     (async () => {
@@ -2432,7 +2438,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
     nextPendingUser = nextPendingSigner(req);
     if (nextPendingUser?.userId === user.id) mySlot = nextPendingUser;
   }
-  const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot);
+  const canApprove = req.status === "pending" && (!isWorkflow || !!mySlot) && (!actingFor || actingFor.canAct);
   // Offer "add date" only where it makes sense: HQHB, a PDF (dates are PDF-only),
   // and no date field already placed for this signer by the requestor.
   const noDateField = isWorkflow ? !((mySlot?.dateFields || []).length) : !((req.signerDateFields || []).length);
@@ -2441,8 +2447,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
   const enterPreview = async () => {
     try {
       // Preview with the CHOSEN signature, not blindly the default.
-      const url = (sigId && await api.mySignatureBlob(sigId)) || await api.getSignatureBlob(user.id);
-      if (!url) { notify("Could not load your signature", "error"); return; }
+      const url = actingFor
+        ? await actingFor.signatureBlob()
+        : (sigId && await api.mySignatureBlob(sigId)) || await api.getSignatureBlob(user.id);
+      if (!url) { notify(actingFor ? "No signature on file to stamp yet" : "Could not load your signature", "error"); return; }
       setSigUrl(url);
       setPreviewing(true);
     } catch { notify("Failed to load signature preview", "error"); }
@@ -2507,6 +2515,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
           <div className="min-w-0 flex-1">
             <div className="font-display text-base sm:text-xl truncate">{req.fileName}</div>
             <div className="text-[10px] sm:text-xs opacity-60 mt-0.5 truncate">
+              {actingFor && <span className="font-medium">On behalf of {actingFor.name} · </span>}
               {teams.find(t => t.id === req.targetTeamId)?.name} · from {users.find(u => u.id === req.requestorId)?.name || "—"} · {fmt(req.createdAt)}
             </div>
           </div>
@@ -2597,7 +2606,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
                     <label className="flex items-center gap-2 text-xs cursor-pointer select-none"
                       title="The requestor placed no date field — tick to stamp today's date, smaller, just under your signature">
                       <input type="checkbox" checked={addDate} onChange={e => setAddDate(e.target.checked)} />
-                      <span>Add today's date below my signature</span>
+                      <span>Add today's date below {actingFor ? "the" : "my"} signature</span>
                     </label>
                   )}
                 </div>
@@ -2627,9 +2636,7 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
             ) : (
               <>
                 <div className="text-xs opacity-60 hidden sm:block">
-                  {isWorkflow
-                    ? "Your signature will be stamped at the highlighted position."
-                    : "Your signature will be stamped at the marked position."}
+                  {actingFor ? `${actingFor.name}'s signature` : "Your signature"} will be stamped at the {isWorkflow ? "highlighted" : "marked"} position.
                 </div>
                 <div className="flex flex-wrap gap-2 sm:gap-3 shrink-0 justify-end">
                   <button className="btn-danger" onClick={() => setRejectOpen(true)}><XCircle size={14} /> Reject</button>
@@ -2648,10 +2655,10 @@ function ApproveDrawer({ req, user, users, teams, approveRequest, rejectRequest,
         {req.status === "pending" && isWorkflow && !mySlot && nextPendingUser && (
           <div className="shrink-0 px-6 py-4 border-t text-xs opacity-70 flex items-center gap-2"
             style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
-            <Clock size={12} /> Awaiting signature from <span className="font-medium">{nextPendingUser.userName}</span> before it reaches you.
+            <Clock size={12} /> Awaiting signature from <span className="font-medium">{nextPendingUser.userName}</span> before it reaches {actingFor ? actingFor.name : "you"}.
           </div>
         )}
-        {pendingApproved && req.approverId === user.id && !req.instantApproval && (
+        {pendingApproved && undoApproval && req.approverId === user.id && !req.instantApproval && (
           <div className="shrink-0 px-6 py-4 border-t flex items-center justify-between gap-3" style={{ borderColor: "var(--c-ink-10)", backgroundColor: "var(--c-cream)" }}>
             <div className="text-xs opacity-70 flex items-center gap-2">
               <Clock size={12} /> You have until <span className="font-mono"><Countdown until={req.approvedAt + APPROVAL_WINDOW_MS} /></span> to change your mind.

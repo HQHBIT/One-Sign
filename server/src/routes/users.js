@@ -34,7 +34,7 @@ const imageTypeFor = (value) => (/\.jpe?g$/i.test(String(value)) ? "image/jpeg" 
 const saveSignature = (fileName, bytes) =>
   writeStored("signatures", fileName, bytes, { contentType: imageTypeFor(fileName) });
 
-async function sendSignature(res, value) {
+export async function sendSignature(res, value) {
   let bytes;
   try { bytes = await readStored("signatures", value); }
   catch { return res.status(404).end(); }

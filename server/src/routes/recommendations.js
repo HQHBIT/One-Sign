@@ -47,7 +47,10 @@ async function anyoneSigned(requestId) {
 
 // ---------- POST /api/requests/:id/recommend ----------
 // body: { recommendation } — whoever may reject right now may recommend changes.
-router.post("/:id/recommend", ...gate, async (req, res, next) => {
+// Exported so an executive assistant can recommend changes ON BEHALF of an
+// executive through this same code (routes/assist.js).
+router.post("/:id/recommend", ...gate, (req, res, next) => recommendHandler(req, res, next));
+export async function recommendHandler(req, res, next) {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -90,7 +93,7 @@ router.post("/:id/recommend", ...gate, async (req, res, next) => {
     const updated = await queryOne("SELECT * FROM requests WHERE id = ?", [row.id]);
     res.json({ request: await hydrateRequest(updated) });
   } catch (e) { next(e); }
-});
+}
 
 // ---------- POST /api/requests/:id/resubmit ----------
 // multipart: file? (a revised main document), reply?, boxes? (JSON — the current
