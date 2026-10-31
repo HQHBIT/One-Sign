@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, lazy, Suspense } from "react";
-import { PenLine, Check, Eye, Minus, ChevronDown } from "lucide-react";
+import { PenLine, Check, Eye, Minus, ChevronDown, Send } from "lucide-react";
 import { api } from "../../api.js";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { stageColour, withCurrent } from "./time.js";
@@ -143,12 +143,25 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
 
   const placed = signatureStages.filter((s) => (byStage[s.id] || []).length).length;
 
-  const save = async () => {
+  // Who saving should SEND it to. Placing the boxes is when the assistant means
+  // the paper to go, but on its own it sent nothing — a card already sitting in
+  // a signing stage, or waiting in front of one, was never put in anyone's
+  // queue (owner, 2026-10-31). So: the stage it is in, if that signs and has not
+  // asked yet (or was rejected); otherwise the next stage along that signs.
+  const ordered = stages || [];
+  const hereIdx = ordered.findIndex((s) => s.id === doc.stageId);
+  const here = ordered[hereIdx];
+  const sendTarget = !here || doc.waitingForSignature ? null
+    : kindOf(here) === "signature"
+      ? ((!doc.request || doc.request.status === "rejected") && here.signer ? { send: true, stage: here } : null)
+      : (() => { const next = ordered.slice(hereIdx + 1).find((s) => kindOf(s) === "signature" && s.signer); return next ? { moveTo: next, stage: next } : null; })();
+
+  const save = async (andSend) => {
     if (busy) return;
     setBusy(true); setErr(null);
     try {
       const r = await api.eaPlanBoxes(doc.id, byStage);
-      onSaved(r.document);
+      onSaved(r.document, andSend && sendTarget ? sendTarget : null);
     } catch (e) { setErr(e.message || "Could not save the layout"); setBusy(false); }
   };
 
@@ -302,11 +315,21 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                 gets there, exactly as it does today. */}
             {placed < signatureStages.length && " · the rest will be asked for when the card reaches them"}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button className="btn-ghost" onClick={onClose}>Close</button>
-            <button className="btn-gold" disabled={busy || !signatureStages.length} onClick={save}>
-              <PenLine size={14} /> {busy ? "Saving…" : "Save the layout"}
-            </button>
+            {sendTarget ? (
+              <>
+                <button className="btn-ghost" disabled={busy} onClick={() => save(false)}>Save only</button>
+                <button className="btn-gold" disabled={busy} onClick={() => save(true)}
+                  title={`Puts it in ${sendTarget.stage.signer?.name}'s queue and emails them`}>
+                  <Send size={14} /> {busy ? "Sending…" : `Save and send to ${sendTarget.stage.signer?.name}`}
+                </button>
+              </>
+            ) : (
+              <button className="btn-gold" disabled={busy || !signatureStages.length} onClick={() => save(false)}>
+                <PenLine size={14} /> {busy ? "Saving…" : "Save the layout"}
+              </button>
+            )}
           </div>
         </div>
       </div>

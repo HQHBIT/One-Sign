@@ -136,15 +136,21 @@ async function docOut(d, stageById) {
   const rq = await requestFor(d);
   const stage = stageById?.[d.stage_id] || await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
   const by = await queryOne("SELECT name FROM users WHERE id = ?", [d.created_by]);
+  // Has THIS visit to a signature stage asked anybody yet? The card's request
+  // may belong to an earlier stage — or the stage may only have been set to
+  // "Signs" after the card arrived — and then nobody here has been asked.
+  const askedHere = needsSignature(stage) ? !!(await arrivalIn(d))?.request_id : false;
   return {
     id: d.id, boardId: d.board_id, stageId: d.stage_id, title: d.title, note: d.note || "",
     fileName: d.file_name, fileType: d.file_type, createdAt: Number(d.created_at), createdBy: by?.name || null,
     enteredStageAt: Number(d.entered_stage_at), completedAt: d.completed_at ? Number(d.completed_at) : null,
     // Shown on the card only while the card sits on a signature stage; the
     // signed copy stays the current file wherever the card goes afterwards.
-    request: needsSignature(stage) && rq ? { id: rq.id, status: rq.status, rejectReason: rq.rejectReason, signerName: rq.signerName } : null,
+    request: askedHere && rq ? { id: rq.id, status: rq.status, rejectReason: rq.rejectReason, signerName: rq.signerName } : null,
     currentFile: isSigned(rq) ? "signed" : "original",
-    waitingForSignature: needsSignature(stage) && isWaiting(rq),
+    waitingForSignature: askedHere && isWaiting(rq),
+    // On a signature stage that has not asked anyone: the board offers "Send".
+    notSent: needsSignature(stage) && !askedHere,
     // On a CC stage the card is never held; what the assistant wants to see is
     // whether the person has actually opened it yet.
     cc: isCc(stage) ? await ccStateFor(d.id, stage.id) : null,
@@ -557,37 +563,54 @@ router.delete("/documents/:id", async (req, res, next) => {
 // card is created at one instant and its first movement written at the next,
 // the two disagree by however long the insert took. The upload route passes
 // the timestamp it already used, which keeps them identical.
+// Asks a signature stage's signatory to sign this card: raises the ordinary
+// direct request (which is what puts it in their queue and emails them).
+// Returns { raised } or { status, error }. Shared by entering a stage and by
+// "Send" for a card that is already sitting in one.
+async function raiseSignature({ doc, to, boxes, actor }) {
+  // Boxes supplied now win; otherwise fall back to ones planned in advance
+  // for this stage. That fallback IS the point of planning them: the card
+  // reaches the stage and simply goes, without stopping to ask again.
+  const planned = plannedBoxesFor(doc)[to.id];
+  const list = Array.isArray(boxes) && boxes.length ? boxes
+    : (Array.isArray(planned) ? planned : []);
+  if (!list.length || list.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
+    return { status: 400, error: "Place the signature box on the document first" };
+  // A stage already set up keeps its signer, even one chosen before the
+  // signatory list was narrowed to Executive Management.
+  const signer = to.signer_id && await stillSignable(to.signer_id);
+  if (!signer) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
+  const { bytes } = await currentBytes(doc);
+  const ext = doc.file_type === "pdf" ? "pdf" : "xlsx";
+  try {
+    const raised = await raiseDirectRequest({
+      user: actor,
+      file: { buffer: bytes, originalname: doc.file_name },
+      ext, fileType: doc.file_type, note: doc.note || "",
+      signers: [{ userId: signer.id, boxes: list.map((b) => ({ page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h })), dateFields: [] }],
+      requestType: "document",
+      retain: false, // the card keeps reading this request's signed copy
+    });
+    return { raised };
+  } catch (e) {
+    if (e instanceof DirectRequestError) return { status: e.status, error: e.message };
+    throw e;
+  }
+}
+
+// The move that brought the card into the stage it is in now — whose
+// request_id says whether this visit has asked anybody to sign yet.
+const arrivalIn = (doc) => queryOne(
+  "SELECT id, request_id FROM ea_movements WHERE document_id = ? AND to_stage_id = ? ORDER BY moved_at DESC LIMIT 1",
+  [doc.id, doc.stage_id]);
+
 async function enterStage({ doc, from, to, boxes, actor, at }) {
   let raised = null;
 
   if (needsSignature(to)) {
-    // Boxes supplied now win; otherwise fall back to ones planned in advance
-    // for this stage. That fallback IS the point of planning them: the card
-    // reaches the stage and simply goes, without stopping to ask again.
-    const planned = plannedBoxesFor(doc)[to.id];
-    const list = Array.isArray(boxes) && boxes.length ? boxes
-      : (Array.isArray(planned) ? planned : []);
-    if (!list.length || list.some((b) => ["x", "y", "w", "h"].some((k) => typeof b?.[k] !== "number")))
-      return { status: 400, error: "Place the signature box on the document first" };
-    // A stage already set up keeps its signer, even one chosen before the
-    // signatory list was narrowed to Executive Management.
-    const signer = to.signer_id && await stillSignable(to.signer_id);
-    if (!signer) return { status: 400, error: "This stage's signatory is no longer available — edit the stage" };
-    const { bytes } = await currentBytes(doc);
-    const ext = doc.file_type === "pdf" ? "pdf" : "xlsx";
-    try {
-      raised = await raiseDirectRequest({
-        user: actor,
-        file: { buffer: bytes, originalname: doc.file_name },
-        ext, fileType: doc.file_type, note: doc.note || "",
-        signers: [{ userId: signer.id, boxes: list.map((b) => ({ page: Number(b.page) || 1, x: b.x, y: b.y, w: b.w, h: b.h })), dateFields: [] }],
-        requestType: "document",
-        retain: false, // the card keeps reading this request's signed copy
-      });
-    } catch (e) {
-      if (e instanceof DirectRequestError) return { status: e.status, error: e.message };
-      throw e;
-    }
+    const r = await raiseSignature({ doc, to, boxes, actor });
+    if (!r.raised) return r;
+    raised = r.raised;
   }
 
   const stages = await boardStages(doc.board_id);
@@ -767,6 +790,33 @@ router.post("/documents/:id/move", async (req, res, next) => {
 
     const bad = await enterStage({ doc: d, from, to, boxes: parseBoxes(req.body?.boxes), actor: req.user });
     if (bad) return res.status(bad.status).json({ error: bad.error });
+    res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
+  } catch (e) { next(e); }
+});
+
+// POST /documents/:id/send { boxes? } — ask the signatory of the stage the card
+// is ALREADY in. Entering a stage is what used to be the only trigger, so a card
+// that was there before the stage was set to "Signs" (or whose boxes were placed
+// afterwards) sat in it and nobody was ever asked (owner, 2026-10-31).
+router.post("/documents/:id/send", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const stage = await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
+    if (!needsSignature(stage)) return res.status(400).json({ error: `"${stage?.name}" does not ask for a signature — move the card to a stage that does` });
+    const arrival = await arrivalIn(d);
+    if (arrival?.request_id) {
+      const rq = await requestFor({ request_id: arrival.request_id });
+      // Rejected or withdrawn may be asked again; anything else already went.
+      if (rq && !["rejected", "withdrawn"].includes(rq.status)) {
+        return res.status(409).json({ error: isWaiting(rq) ? `Already sent — waiting for ${rq.signerName || "the signatory"} to sign` : "Already signed at this stage" });
+      }
+    }
+    const r = await raiseSignature({ doc: d, to: stage, boxes: parseBoxes(req.body?.boxes), actor: req.user });
+    if (!r.raised) return res.status(r.status).json({ error: r.error });
+    await execute("UPDATE ea_documents SET request_id = ? WHERE id = ?", [r.raised.id, d.id]);
+    // Recorded on the arrival, so this visit now counts as asked.
+    if (arrival) await execute("UPDATE ea_movements SET request_id = ? WHERE id = ?", [r.raised.id, arrival.id]);
     res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
   } catch (e) { next(e); }
 });

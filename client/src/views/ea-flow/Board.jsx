@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -125,6 +125,24 @@ export function Board({ board, executives, notify, onBoardChanged }) {
       notify(e.message || "Could not move the document", "error");
     }
   };
+  // Ask the signatory of the stage the card is ALREADY in — for a card that was
+  // there before the stage was set to "Signs", or one sent back after a
+  // rejection. Uses the planned box, or asks for one first.
+  const send = async (doc, boxes) => {
+    const stage = stages.find((s) => s.id === doc.stageId);
+    if (!stage) return;
+    if (!boxes && !(doc.plannedBoxes?.[stage.id]?.length > 0)) { setPlacing({ doc, stage, send: true }); return; }
+    try {
+      const updated = await api.eaSend(doc.id, { boxes });
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? updated : d)));
+      setPlacing(null);
+      notify(`Sent to ${stage.signer?.name || "the signatory"} to sign`, "success");
+      await onBoardChanged();
+    } catch (e) {
+      if (placing) throw e;
+      notify(e.message || "Could not send the document", "error");
+    }
+  };
   const removeDoc = async (doc) => {
     if (!(await confirm({ title: `Remove "${doc.title}"?`, message: "The card and its trail are removed from this board. Any signature request it raised stays in your requests.", confirmLabel: "Remove", destructive: true }))) return;
     try { await api.eaDeleteDocument(doc.id); setDocs((ds) => ds.filter((d) => d.id !== doc.id)); await onBoardChanged(); }
@@ -180,7 +198,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             // column can start one — not only the first.
             onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
-            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} reminding={reminding} />
+            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} onSend={send} reminding={reminding} />
         );
       }} />
 
@@ -191,14 +209,21 @@ export function Board({ board, executives, notify, onBoardChanged }) {
           // Changing what a stage asks for changes the board itself, so the
           // columns behind the dialog have to catch up straight away.
           onStagesChanged={onBoardChanged}
-          onSaved={(updated) => { setDocs((ds) => ds.map((d) => (d.id === updated.id ? updated : d))); setPlanning(null); notify("Signature layout saved", "success"); }}
+          // "Save and send": setting the boxes is when the assistant means it to
+          // go — so it goes, to the stage it is in or the next one that signs.
+          onSaved={async (updated, next) => {
+            setDocs((ds) => ds.map((d) => (d.id === updated.id ? updated : d))); setPlanning(null);
+            if (next?.send) return send(updated);
+            if (next?.moveTo) return move(updated, next.moveTo);
+            notify("Signature layout saved", "success");
+          }}
           onClose={() => setPlanning(null)} />
       )}
       {reviewing && (
         <SendForReview doc={reviewing} executives={executives} already={reviewing.review?.people}
           onSend={(ids) => sendForReview(reviewing, ids)} onClose={() => setReviewing(null)} />
       )}
-      {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => move(placing.doc, placing.stage, boxes)} onClose={() => setPlacing(null)} />}
+      {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => (placing.send ? send(placing.doc, boxes) : move(placing.doc, placing.stage, boxes))} onClose={() => setPlacing(null)} />}
       {preview && (
         <ModalShell title={preview.doc.title} onClose={() => { URL.revokeObjectURL(preview.file.base64); setPreview(null); }}>
           <div className="text-xs opacity-50 mb-3">{preview.doc.fileName}{preview.doc.currentFile === "signed" ? " · signed copy" : ""}</div>
@@ -258,7 +283,7 @@ function FlowGrid({ count, renderStage }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, reminding }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -311,7 +336,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} reminding={reminding === d.id} />)}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} onSend={onSend} reminding={reminding === d.id} />)}
         {/* The empty state was a dead label on every column but the first,
             which quietly said "documents begin over there". It is the same
             invitation everywhere now, and it is clickable. */}
@@ -329,7 +354,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
   // How many signatories already have a box waiting for them. On the button, so
@@ -382,7 +407,7 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
       {doc.note && <div className="text-xs opacity-60 line-clamp-2">{doc.note}</div>}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={`In ${stage.name} since ${fmtWhen(doc.enteredStageAt)}`}><Clock size={10} /> {fmtDuration(inStage)}</span>
-        {doc.completedAt && <span className="pill pill-approved"><CircleCheck size={10} /> Complete</span>}
+        {doc.completedAt && !doc.notSent && !doc.waitingForSignature && <span className="pill pill-approved"><CircleCheck size={10} /> Complete</span>}
         {status === "waiting" && <span className="pill pill-pending"><Hourglass size={10} /> Awaiting {rq.signerName?.split(" ")[0]}</span>}
         {status === "signed" && <span className="pill pill-approved"><CircleCheck size={10} /> Signed by {rq.signerName?.split(" ")[0]}</span>}
         {status === "rejected" && <span className="pill pill-rejected" title={rq.rejectReason || ""}><CircleAlert size={10} /> Rejected{rq.rejectReason ? ` — ${rq.rejectReason}` : ""}</span>}
@@ -419,7 +444,17 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
             <Eye size={10} /> Review: {doc.review.viewed} of {doc.review.notified} read
           </span>
         )}
+        {doc.notSent && <span className="pill pill-pending"><Hourglass size={10} /> Not sent yet</span>}
       </div>
+      {/* On a signing stage that has not asked anyone (the stage was set to
+          "Signs" after the card arrived), or after a rejection: say so, and
+          offer the one button that sends it. */}
+      {(doc.notSent || status === "rejected") && (
+        <button className="btn-gold text-xs w-full justify-center" onClick={() => onSend(doc)}
+          title="Put it in their queue and email them, exactly like a normal request">
+          <Send size={12} /> {status === "rejected" ? "Send again to" : "Send to"} {stage.signer?.name || "the signatory"}
+        </button>
+      )}
       {/* Wraps onto a second line in a narrow tile instead of spilling out of
           the card (Move to… used to hang over the next column). */}
       <div className="flex items-center flex-wrap gap-1 pt-1 relative" ref={ref}>
