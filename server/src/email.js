@@ -246,6 +246,43 @@ const templates = {
     ].join("\n"),
   }),
 
+  // A CC stage: someone is asked to READ a document, not sign it. The wording
+  // has to be unmistakable about that, or a careful executive sits waiting for
+  // a signature box that is never coming.
+  // `reminder` makes this the SECOND ask rather than a second copy of the
+  // first. One template either way: the thing being said is the same, and two
+  // would drift into saying it two different ways.
+  ea_cc_notice: (c) => ({
+    subject: c.reminder ? `Reminder — still to read: ${c.title}` : `For your information: ${c.title}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: c.reminder
+        ? `${c.title} is still waiting to be read — no signature needed`
+        : `${c.title} has been shared with you to read — no signature needed`,
+      pillHtml: pill(c.reminder ? "Still to read" : "For information", c.reminder ? "pending" : "neutral"),
+      heading: c.reminder ? "A document is still waiting to be read" : "A document has been shared with you",
+      contentHtml:
+        greet(c.name) +
+        p(c.reminder
+          ? `<strong>${esc(c.title)}</strong> was shared with you to read and has not been opened yet. <strong>No signature is needed</strong> — this is for your information only.`
+          : `<strong>${esc(c.title)}</strong> has been shared with you to read. <strong>No signature is needed</strong> — this is for your information only.`) +
+        details([
+          { label: "Document", value: c.title },
+          { label: "Stage", value: c.stageName },
+        ]) +
+        button("Open the document", requestUrl(c), "navy") +
+        caption("You will also find it under “For your information” when you sign in."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      c.reminder
+        ? `"${c.title}" was shared with you to read and has not been opened yet. No signature is needed.`
+        : `"${c.title}" has been shared with you to read. No signature is needed.`,
+      c.stageName ? `Stage: ${c.stageName}` : null, ``,
+      `Open it: ${requestUrl(c)}`, ``,
+      `— ${BRAND.fromName}`,
+    ].filter((x) => x !== null).join("\n"),
+  }),
+
   // To the EXECUTIVE when their assistant acts on their behalf — names the
   // assistant and the action so delegation is never invisible to the owner.
   ea_action: (c) => ({

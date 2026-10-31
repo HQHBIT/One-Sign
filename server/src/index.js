@@ -28,6 +28,7 @@ import executiveAssistantsRoutes from "./routes/executive-assistants.js";
 import assistRoutes from "./routes/assist.js";
 import emailApproveRoutes from "./routes/email-approve.js";
 import eaFlowRoutes from "./routes/ea-flow.js";
+import eaCcRoutes from "./routes/ea-cc.js";
 import shzRoutes from "./routes/shz.js";
 import attachmentsRoutes from "./routes/attachments.js";
 import recommendationsRoutes from "./routes/recommendations.js";
@@ -111,6 +112,9 @@ async function main() {
   app.use("/api/assist", assistRoutes);
   app.use("/api/email-approve", emailApproveRoutes);
   app.use("/api/ea-flow", eaFlowRoutes);        // absent on any deployment other than HQHB
+  // The reading side of a CC stage. A separate router because its callers are
+  // executives and approvers, not the assistant ea-flow is locked to.
+  app.use("/api/ea-cc", eaCcRoutes);
   app.use("/api/shz", shzRoutes);               // "Send for Shz Saab Approval" — WAQF only
   app.use("/api", adminRoutes);
 

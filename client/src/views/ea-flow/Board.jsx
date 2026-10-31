@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { StageEditor } from "./StageEditor.jsx";
 import { AddDocument } from "./AddDocument.jsx";
 import { PlaceSignature } from "./PlaceSignature.jsx";
-import { fmtDuration, fmtWhen, stageColour } from "./time.js";
+import { SendForReview } from "./SendForReview.jsx";
+import { PlanSignatures } from "./PlanSignatures.jsx";
+import { fmtDuration, fmtWhen, stageColour, ccNames } from "./time.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
 const DRAG = "text/x-ea-document";
@@ -18,7 +20,9 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   const confirm = useConfirmation();
   const [docs, setDocs] = useState(null);
   const [stageModal, setStageModal] = useState(null);   // { stage } | { stage: null }
-  const [adding, setAdding] = useState(false);
+  // null when closed; otherwise { stageId } saying which column opened it, so
+  // the dialog starts on the stage the assistant pointed at.
+  const [adding, setAdding] = useState(null);
   const [placing, setPlacing] = useState(null);         // { doc, stage }
   const [preview, setPreview] = useState(null);         // { doc, file }
   const [menuFor, setMenuFor] = useState(null);         // stage id with ⋯ open
@@ -59,18 +63,61 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   };
 
   // ---- documents ----
-  const addDoc = async ({ file, title, note }) => {
-    try { await api.eaAddDocument(board.id, { file, title, note }); setAdding(false); notify(`${title || file.name} added to ${stages[0].name}`, "success"); await load(); await onBoardChanged(); }
-    catch (e) { notify(e.message || "Could not add the document", "error"); }
+  // Lay out every signature box up front, on one view of the page.
+  const [planning, setPlanning] = useState(null);
+
+  // Share ONE paper with people to read, without making a stage for it.
+  const [reviewing, setReviewing] = useState(null);
+  const sendForReview = async (doc, userIds) => {
+    try {
+      const r = await api.eaSendForReview(doc.id, userIds);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? r.document : d)));
+      setReviewing(null);
+      notify(`${doc.title} sent to ${r.sent} ${r.sent === 1 ? "person" : "people"} to read`, "success");
+    } catch (e) { notify(e.message || "Could not send it for review", "error"); }
+  };
+
+  // Ask again, for whoever still owes this card a read — the people its CC
+  // stage copied and anyone it was sent to for review.
+  // The server decides who that is and whether the cooldown has passed; this
+  // only reports what it did.
+  const [reminding, setReminding] = useState(null);
+  const remind = async (doc) => {
+    setReminding(doc.id);
+    try {
+      const r = await api.eaRemindCc(doc.id);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? r.document : d)));
+      notify(`Reminded ${r.reminded} ${r.reminded === 1 ? "person" : "people"} about ${doc.title}`, "success");
+    } catch (e) { notify(e.message || "Could not send the reminder", "error"); }
+    finally { setReminding(null); }
+  };
+
+  const addDoc = async ({ file, title, note, stageId, boxes }) => {
+    const landing = stages.find((s) => s.id === stageId) || stages[0];
+    try {
+      await api.eaAddDocument(board.id, { file, title, note, stageId, boxes });
+      setAdding(null);
+      notify(`${title || file.name} added to ${landing.name}`, "success");
+      await load(); await onBoardChanged();
+    } catch (e) { notify(e.message || "Could not add the document", "error"); }
   };
   const move = async (doc, stage, boxes) => {
     if (stage.id === doc.stageId) return;
-    if (stage.requiresSignature && !boxes) { setPlacing({ doc, stage }); return; }
+    // Only a signature stage needs a box. A CC stage notifies and lets go.
+    const signs = stage.kind === "signature" || (!stage.kind && stage.requiresSignature);
+    // Already laid out for this stage? Then the card just goes. Asking again
+    // for a box that has been decided is the thing pre-placing them removes.
+    const planned = doc.plannedBoxes?.[stage.id]?.length > 0;
+    if (signs && !boxes && !planned) { setPlacing({ doc, stage }); return; }
     try {
       const updated = await api.eaMove(doc.id, { toStageId: stage.id, boxes });
       setDocs((ds) => ds.map((d) => (d.id === doc.id ? updated : d)));
       setPlacing(null);
-      notify(stage.requiresSignature ? `Sent to ${stage.signer?.name} to sign` : `${doc.title} moved to ${stage.name}`, "success");
+      notify(
+        signs ? `Sent to ${stage.signer?.name} to sign`
+          : stage.kind === "cc" ? `${ccNames(stage)} ${(stage.ccPeople?.length ?? 1) > 1 ? "have" : "has"} been told to read ${doc.title}`
+            : `${doc.title} moved to ${stage.name}`,
+        "success");
       await onBoardChanged();
     } catch (e) {
       if (placing) throw e; // the placement modal shows it inline
@@ -111,7 +158,7 @@ export function Board({ board, executives, notify, onBoardChanged }) {
         <div className="text-xs opacity-50">{docs ? `${docs.length} document${docs.length === 1 ? "" : "s"} on this board` : "Loading…"} · drag a card onto a stage, or use Move to…</div>
         <div className="flex gap-2">
           <button className="btn-ghost text-xs" onClick={() => setStageModal({ stage: null })}><Plus size={12} /> Stage</button>
-          <button className="btn-primary text-xs" onClick={() => setAdding(true)}><Plus size={12} /> Add document</button>
+          <button className="btn-primary text-xs" onClick={() => setAdding({ stageId: stages[0]?.id })}><Plus size={12} /> Add document</button>
         </div>
       </div>
 
@@ -124,12 +171,28 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             onEdit={() => { setMenuFor(null); setStageModal({ stage: s }); }}
             onDelete={() => removeStage(s)} onShift={(dir) => shift(s, dir)}
             onDrop={(docId) => { const d = (docs || []).find((x) => x.id === docId); if (d) move(d, s); }}
-            onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc} />
+            // Papers arrive at whichever step they are actually at, so every
+            // column can start one — not only the first.
+            onAddHere={() => setAdding({ stageId: s.id })}
+            onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
+            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} reminding={reminding} />
         ))}
       </div>
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
-      {adding && <AddDocument firstStageName={stages[0].name} onAdd={addDoc} onClose={() => setAdding(false)} />}
+      {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
+      {planning && (
+        <PlanSignatures doc={planning} stages={stages} executives={executives}
+          // Changing what a stage asks for changes the board itself, so the
+          // columns behind the dialog have to catch up straight away.
+          onStagesChanged={onBoardChanged}
+          onSaved={(updated) => { setDocs((ds) => ds.map((d) => (d.id === updated.id ? updated : d))); setPlanning(null); notify("Signature layout saved", "success"); }}
+          onClose={() => setPlanning(null)} />
+      )}
+      {reviewing && (
+        <SendForReview doc={reviewing} executives={executives} already={reviewing.review?.people}
+          onSend={(ids) => sendForReview(reviewing, ids)} onClose={() => setReviewing(null)} />
+      )}
       {placing && <PlaceSignature doc={placing.doc} stage={placing.stage} onConfirm={(boxes) => move(placing.doc, placing.stage, boxes)} onClose={() => setPlacing(null)} />}
       {preview && (
         <ModalShell title={preview.doc.title} onClose={() => { URL.revokeObjectURL(preview.file.base64); setPreview(null); }}>
@@ -141,21 +204,44 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onMove, onOpen, onDownload, onRemove }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
   const [over, setOver] = useState(false);
   return (
-    <div className="shrink-0 w-72 sm:w-80 flex flex-col rounded-xl transition-colors"
-      style={{ backgroundColor: over ? "rgba(184,137,74,.12)" : "rgba(15,26,46,.035)", border: `1px solid ${over ? "var(--c-gold)" : "var(--c-ink-08)"}`, scrollSnapAlign: "start", minHeight: 260 }}
+    // A card, like every other surface in the app, rather than the flat grey
+    // panel this used to be — and the stage's colour as a 3px bar along the
+    // top, which is exactly how the Dashboard marks a stage. The two views now
+    // show the same stage the same way instead of a bar here and a dot there.
+    <div className="shrink-0 w-72 sm:w-80 flex flex-col card transition-colors"
+      style={{
+        // borderTopColor comes last on purpose: the drag-over state repaints
+        // every border, and without it the stage would lose its colour exactly
+        // when a card is hovering over it.
+        ...(over ? { backgroundColor: "rgba(184,137,74,.12)", borderColor: "var(--c-gold)" } : null),
+        borderTop: `3px solid ${colour}`,
+        scrollSnapAlign: "start", minHeight: 260,
+      }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!over) setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); const id = e.dataTransfer.getData(DRAG); if (id) onDrop(id); }}>
+      {/* No colour dot: the bar along the top says the same thing, and says it
+          the way the Dashboard does. */}
       <div className="px-3 pt-3 pb-2 flex items-center gap-2 relative" ref={menuRef}>
-        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colour }} />
         <div className="min-w-0 flex-1">
           <div className="font-medium text-sm truncate">{stage.name}</div>
-          {stage.requiresSignature && <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>}
+          {/* What the stage asks for, in the words the stage editor used. A CC
+              stage looked identical to a plain one before, which made a stage
+              that notifies somebody indistinguishable from one that does not. */}
+          {stage.kind === "cc"
+            ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><Eye size={10} /> {ccNames(stage)} {(stage.ccPeople?.length ?? 1) > 1 ? "are" : "is"} shown it</div>
+            : (stage.kind === "signature" || stage.requiresSignature)
+              ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>
+              : null}
         </div>
         <span className="text-xs opacity-50 tabular-nums">{docs.length}</span>
+        {/* Every column can start a document, not only the first: a paper
+            arrives at whichever step it is actually at. */}
+        <button className="btn-ghost px-1 py-1 text-xs" title={`Add a document to ${stage.name}`}
+          aria-label={`Add a document to ${stage.name}`} onClick={onAddHere}><Plus size={13} /></button>
         <button className="btn-ghost px-1 py-1 text-xs" aria-label={`Options for ${stage.name}`} onClick={onMenu}><Ellipsis size={13} /></button>
         {menuOpen && (
           <div className="absolute right-2 top-full z-20 rounded-lg overflow-hidden text-sm" style={{ backgroundColor: "var(--c-paper)", border: "1px solid var(--c-ink-10)", boxShadow: "0 8px 24px rgba(15,26,46,.16)", minWidth: 170 }}>
@@ -167,16 +253,43 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} />)}
-        {!docs.length && <div className="text-xs opacity-40 text-center py-8">{index === 0 ? "Add a document to start" : "Drop a card here"}</div>}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} reminding={reminding === d.id} />)}
+        {/* The empty state was a dead label on every column but the first,
+            which quietly said "documents begin over there". It is the same
+            invitation everywhere now, and it is clickable. */}
+        {!docs.length && (
+          <button onClick={onAddHere}
+            className="w-full text-xs opacity-50 hover:opacity-90 text-center py-8 rounded-lg transition-opacity"
+            style={{ border: "1px dashed var(--c-ink-18)" }}>
+            <Plus size={13} className="inline mr-1 align-middle" />
+            Add a document{index === 0 ? " to start" : ` to ${stage.name}`}
+            <span className="block mt-1 opacity-70">or drop a card here</span>
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
+  // How many signatories already have a box waiting for them. On the button, so
+  // a prepared paper can be told from an unprepared one without opening it.
+  const plannedCount = Object.values(doc.plannedBoxes || {}).filter((b) => b?.length).length;
+  // `tick` already re-renders the card every minute for the dwell time, so the
+  // reminder becomes available on its own when the cooldown passes rather than
+  // staying greyed out until someone reloads the board.
+  void tick;
+  // One button chases BOTH asks — the stage's readers and anyone the paper was
+  // sent to for review — because an assistant chasing a document does not care
+  // which of the two routes asked them.
+  const owing = (doc.cc?.canRemind ? doc.cc.notified - doc.cc.viewed : 0)
+    + (doc.review?.canRemind ? doc.review.notified - doc.review.viewed : 0);
+  const nextRemind = Math.max(
+    doc.cc?.canRemind ? (doc.cc.remindableAt || 0) : 0,
+    doc.review?.canRemind ? (doc.review.remindableAt || 0) : 0);
+  const remindReady = !nextRemind || Date.now() >= nextRemind;
   useEffect(() => {
     if (!menu) return;
     const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setMenu(false); };
@@ -188,8 +301,15 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
   const inStage = Date.now() - doc.enteredStageAt; void tick;
 
   return (
+    // The column is now a card too, so a card sitting on it needs to be lifted
+    // rather than outlined — otherwise two identical paper surfaces meet and
+    // the card's edge disappears into the column.
     <div className="card p-3 space-y-2" draggable={!doc.waitingForSignature}
-      style={{ cursor: doc.waitingForSignature ? "default" : "grab", opacity: doc.waitingForSignature ? 0.92 : 1 }}
+      style={{
+        cursor: doc.waitingForSignature ? "default" : "grab",
+        opacity: doc.waitingForSignature ? 0.92 : 1,
+        boxShadow: "0 1px 3px rgba(15,26,46,.10)",
+      }}
       onDragStart={(e) => { e.dataTransfer.setData(DRAG, doc.id); e.dataTransfer.effectAllowed = "move"; }}>
       <div className="flex items-start gap-2">
         <GripVertical size={13} className="opacity-25 shrink-0 mt-0.5 hidden sm:block" aria-hidden="true" />
@@ -208,10 +328,65 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove }
         {status === "waiting" && <span className="pill pill-pending"><Hourglass size={10} /> Awaiting {rq.signerName?.split(" ")[0]}</span>}
         {status === "signed" && <span className="pill pill-approved"><CircleCheck size={10} /> Signed by {rq.signerName?.split(" ")[0]}</span>}
         {status === "rejected" && <span className="pill pill-rejected" title={rq.rejectReason || ""}><CircleAlert size={10} /> Rejected{rq.rejectReason ? ` — ${rq.rejectReason}` : ""}</span>}
+        {/* A CC stage never holds the card, so the only thing worth showing is
+            whether the person has actually opened it — "sent" on its own tells
+            the assistant nothing they did not already know. */}
+        {doc.cc && (() => {
+          // With several people copied this is a COUNT, not a name. The names
+          // and their individual state go in the tooltip, where a long list
+          // cannot push the card apart.
+          const { notified, viewed, people } = doc.cc;
+          const tip = people.map((p) => `${p.name} — ${p.viewedAt ? `opened ${fmtWhen(p.viewedAt)}` : "not opened"}`).join("\n");
+          const one = notified === 1;
+          if (viewed === notified) {
+            return (
+              <span className="pill pill-approved" title={tip}>
+                <Eye size={10} /> {one ? `Seen by ${people[0].name.split(" ")[0]}` : `Seen by all ${notified}`}
+              </span>
+            );
+          }
+          return (
+            <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={tip}>
+              <Eye size={10} /> {viewed === 0 ? (one ? "Not opened yet" : `None of ${notified} opened`) : `Seen by ${viewed} of ${notified}`}
+            </span>
+          );
+        })()}
+        {/* Shown separately from the stage's own readers: these people were
+            asked about this paper in particular, and lumping the two together
+            would make it impossible to tell which ask is outstanding. */}
+        {doc.review && (
+          <span className={`pill ${doc.review.viewed === doc.review.notified ? "pill-approved" : ""}`}
+            style={doc.review.viewed === doc.review.notified ? undefined : { backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }}
+            title={doc.review.people.map((p) => `${p.name} — ${p.viewedAt ? `read ${fmtWhen(p.viewedAt)}` : "not read"}`).join("\n")}>
+            <Eye size={10} /> Review: {doc.review.viewed} of {doc.review.notified} read
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onDownload(doc)} title="Download"><Download size={12} /></button>
+        {/* Every signature box for this paper, on one view of the page, before
+            any of them is needed. */}
+        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onPlan(doc)}
+          title={plannedCount ? `${plannedCount} signature box set — open the layout` : "Place every signature box now, on one view of the page"}><PenLine size={12} /> Boxes{plannedCount ? ` (${plannedCount})` : ""}</button>
+        {/* A one-off: this paper needs another pair of eyes, without reshaping
+            the board to say so. */}
+        <button className="btn-ghost text-xs px-2 py-1" onClick={() => onReview(doc)}
+          title="Share this document with someone to read — no signature"><Eye size={12} /> Review</button>
+        {/* Nothing holds a card on a CC stage, so a document can sit unread
+            while the board looks perfectly healthy. This is the only way to ask
+            again — and it is offered only while somebody still has not opened
+            it, because reminding a person who already read it is how reminders
+            become noise. */}
+        {(doc.cc?.canRemind || doc.review?.canRemind) && (
+          <button className="btn-ghost text-xs px-2 py-1" disabled={reminding || !remindReady}
+            title={remindReady
+              ? `Remind the ${owing} who have not opened it`
+              : `Already reminded — next reminder after ${fmtWhen(nextRemind)}`}
+            onClick={() => onRemind(doc)}>
+            <BellRing size={12} /> {reminding ? "…" : "Remind"}
+          </button>
+        )}
         <button className="btn-ghost text-xs px-2 py-1 ml-auto" onClick={() => setMenu((m) => !m)} disabled={doc.waitingForSignature}
           title={doc.waitingForSignature ? `Waiting for ${rq?.signerName} to sign` : "Move to another stage"}><FolderInput size={12} /> Move to…</button>
         {menu && (

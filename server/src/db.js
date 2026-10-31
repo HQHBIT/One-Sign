@@ -633,6 +633,92 @@ async function runSchema() {
     CONSTRAINT fk_ea_movements_doc FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // What a stage ASKS OF someone, rather than only whether it wants a signature.
+  //   plain      — a holding step; nobody is asked for anything
+  //   signature  — raises a request to signer_id, and the card cannot leave until signed
+  //   cc         — signer_id is shown the document FOR INFORMATION; they never sign
+  //                and the card is free to move on
+  //
+  // stage_kind is the single source of truth. requires_signature is kept beside
+  // it for one reason only: a server running the previous build during a deploy
+  // reads that column, and must not mistake a CC stage for a signature stage.
+  // It is written in exactly one place (signatureSettings in ea-flow.js) so the
+  // two cannot drift, and stage_kind wins wherever they ever disagreed.
+  await tryExec("ALTER TABLE ea_stages ADD COLUMN stage_kind ENUM('plain','signature','cc') NOT NULL DEFAULT 'plain'");
+  // Backfill once, for the stages that existed before kinds did. Guarded on
+  // 'plain' so a stage later changed by hand is never dragged back.
+  await tryExec("UPDATE ea_stages SET stage_kind = 'signature' WHERE requires_signature = 1 AND stage_kind = 'plain'");
+
+  // The stages a card jumped straight over on its way here, as a JSON array of
+  // stage ids. A skipped stage is otherwise indistinguishable from one the card
+  // has not reached yet — both simply have no movement row — and the report
+  // needs to tell a deliberate skip from work still to come.
+  await tryExec("ALTER TABLE ea_movements ADD COLUMN skipped_stage_ids TEXT DEFAULT NULL");
+
+  // Signature boxes placed BEFORE the card reaches the stage that needs them,
+  // as { stageId: [box, …] }. An assistant preparing a paper that three people
+  // must sign wants to lay out all three boxes once, on one view of the page,
+  // and see them together — rather than being asked for one box at a time, days
+  // apart, with no sight of where the others went.
+  //
+  // A plan, not a promise: the stage still raises its own request in its own
+  // turn, and the boxes are simply already known by then.
+  await tryExec("ALTER TABLE ea_documents ADD COLUMN planned_boxes_json TEXT DEFAULT NULL");
+
+  // Nudging someone who has not opened a document they were copied on. Kept on
+  // the notice rather than in the `reminders` table, which hangs off a
+  // request_id — a CC notice deliberately has no request behind it.
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminded_at BIGINT DEFAULT NULL");
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN reminder_count INT NOT NULL DEFAULT 0");
+
+  // Where the ask came from. A CC STAGE copies everyone who passes through it;
+  // a one-off REVIEW is somebody deciding that this particular paper needs
+  // another pair of eyes. Same notice, same access, same reminders — but told
+  // apart, so "did the CC stage work" is not quietly inflated by one-off sends.
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN source ENUM('stage','adhoc') NOT NULL DEFAULT 'stage'");
+  // A one-off review belongs to the DOCUMENT, not to whichever stage it
+  // happened to be sitting on, so it survives the card moving on. Hence a
+  // nullable stage_id. MySQL treats NULLs as distinct in a unique key, so the
+  // ON DUPLICATE KEY refresh no longer catches a repeated ad-hoc send to the
+  // same person — that is deduplicated in code instead, in sendForReview.
+  await tryExec("ALTER TABLE ea_cc_notices MODIFY COLUMN stage_id VARCHAR(64) NULL");
+
+  // Who a CC stage copies. A list, not a column: a paper is routinely shown to
+  // several people at once, and signer_id can only ever hold one. It stays the
+  // single SIGNER of a signature stage, which really is one person — a request
+  // has one signer — so the two are deliberately not the same field.
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_stage_cc (
+    stage_id  VARCHAR(64) NOT NULL,
+    user_id   VARCHAR(64) NOT NULL,
+    PRIMARY KEY (stage_id, user_id),
+    INDEX idx_ea_stage_cc_user (user_id),
+    CONSTRAINT fk_ea_stage_cc_stage FOREIGN KEY (stage_id) REFERENCES ea_stages(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_stage_cc_user  FOREIGN KEY (user_id)  REFERENCES users(id)     ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // CC stages made while a stage could only name one person keep that person.
+  await tryExec(`INSERT IGNORE INTO ea_stage_cc (stage_id, user_id)
+    SELECT id, signer_id FROM ea_stages WHERE stage_kind = 'cc' AND signer_id IS NOT NULL`);
+
+  // A CC stage tells someone to LOOK at a document. They are not a signer, so
+  // there is no request to hang this on: notified_at is when they were told,
+  // viewed_at when they actually opened it — which is the only thing that makes
+  // "for information" reportable rather than hopeful. One row per PERSON per
+  // stage, so a document copied to five people is five separate answers to
+  // "did they read it".
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_cc_notices (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    document_id  VARCHAR(64)  NOT NULL,
+    stage_id     VARCHAR(64)  NOT NULL,
+    user_id      VARCHAR(64)  NOT NULL,
+    notified_at  BIGINT       NOT NULL,
+    viewed_at    BIGINT       DEFAULT NULL,
+    UNIQUE KEY uq_ea_cc (document_id, stage_id, user_id),
+    INDEX idx_ea_cc_user (user_id, notified_at),
+    CONSTRAINT fk_ea_cc_doc   FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_cc_stage FOREIGN KEY (stage_id)    REFERENCES ea_stages(id)    ON DELETE CASCADE,
+    CONSTRAINT fk_ea_cc_user  FOREIGN KEY (user_id)     REFERENCES users(id)        ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Screenshots and screen recordings attached to a report. A JSON list rather
   // than a table of its own: they are only ever read with their report, never
   // queried across reports, and a report without its attachments is not a thing

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Hourglass, PenLine, CircleCheck, Timer } from "lucide-react";
+import { Download, Hourglass, PenLine, CircleCheck, Timer, Eye } from "lucide-react";
 import { api } from "../../api.js";
 import { fmtDuration, fmtWhen, stageColour } from "./time.js";
+import { buildFlowCsv } from "./csv.js";
 
 // Where every document sat, and for how long. Everything shown here is
 // computed by the server from the movement trail; this only draws it.
@@ -26,16 +27,10 @@ export function Dashboard({ board, notify }) {
   const signers = useMemo(() => [...new Set((data?.documents || []).map((d) => d.signerName).filter(Boolean))], [data]);
 
   const exportCsv = () => {
-    const stages = data.stages;
-    const head = ["Document", "File", "Added", "Current stage", "In current stage", ...stages.map((s) => `Time in ${s.name}`), "Total elapsed", "Completed"];
-    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const lines = [head.map(esc).join(",")];
-    for (const d of rows) {
-      const cur = stages.find((s) => s.id === d.currentStageId);
-      lines.push([d.title, d.fileName, fmtWhen(d.createdAt), cur?.name || "", d.completedAt ? "" : fmtDuration(Date.now() - d.enteredStageAt),
-        ...d.stages.map((s) => fmtDuration(s.ms)), fmtDuration(d.totalMs), d.completedAt ? fmtWhen(d.completedAt) : ""].map(esc).join(","));
-    }
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    // The sheet itself is built by buildFlowCsv, which is a pure function of
+    // the data and therefore testable; this handler only turns it into a file.
+    const csv = buildFlowCsv({ stages: data.stages, documents: rows });
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${board.name.replace(/[^\w-]+/g, "_")}-flow-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
   };
@@ -60,10 +55,24 @@ export function Dashboard({ board, notify }) {
         <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(stages.length, 6)}, minmax(0, 1fr))` }}>
           {stages.map((s, i) => (
             <div key={s.id} className="rounded-lg p-3" style={{ backgroundColor: "rgba(15,26,46,.035)", borderTop: `3px solid ${stageColour(i)}` }}>
-              <div className="text-sm font-medium truncate flex items-center gap-1">{s.name}{s.requiresSignature && <PenLine size={11} className="opacity-50" />}</div>
+              <div className="text-sm font-medium truncate flex items-center gap-1">
+                {s.name}
+                {(s.kind === "signature" || (!s.kind && s.requiresSignature)) && <PenLine size={11} className="opacity-50" />}
+                {s.kind === "cc" && <Eye size={11} className="opacity-50" />}
+              </div>
               <div className="font-display text-2xl leading-tight mt-1">{s.count}<span className="text-xs opacity-50 font-sans ml-1">now</span></div>
               <div className="text-[11px] opacity-60 mt-1">avg {fmtDuration(s.avgMs)} · longest {fmtDuration(s.maxMs)}</div>
               {s.oldestMs > 0 && <div className="text-[11px] mt-0.5" style={{ color: "var(--c-rust)" }}>oldest waiting {fmtDuration(s.oldestMs)}</div>}
+              {/* A stage everybody goes around is a finding about the flow, not
+                  a gap in the data — so it is reported rather than left blank. */}
+              {s.skippedCount > 0 && (
+                <div className="text-[11px] opacity-60 mt-0.5">skipped by {s.skippedCount} document{s.skippedCount === 1 ? "" : "s"}</div>
+              )}
+              {s.kind === "cc" && s.ccNotified > 0 && (
+                <div className="text-[11px] mt-0.5" style={{ color: s.ccViewed === s.ccNotified ? undefined : "var(--c-rust)" }}>
+                  opened {s.ccViewed} of {s.ccNotified}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -112,6 +121,36 @@ export function Dashboard({ board, notify }) {
                       </div>
                       <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] opacity-70">
                         {d.stages.map((s, i) => s.ms > 0 && <span key={s.stageId}><span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: stageColour(i) }} />{stages[i].name} {fmtDuration(s.ms)}</span>)}
+                        {/* Named, not merely absent: a stage with no time on it
+                            is either still to come or was deliberately passed
+                            over, and the report has to say which. */}
+                        {d.stages.map((s, i) => s.skipped && (
+                          <span key={`sk_${s.stageId}`} className="line-through opacity-60" title={`${stages[i].name} was skipped`}>
+                            <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: stageColour(i), opacity: .35 }} />
+                            {stages[i].name} skipped
+                          </span>
+                        ))}
+                        {/* A CC stage copies several people, so there is one
+                            notice per PERSON. Grouped per stage, or a stage
+                            copied to five would print itself five times. */}
+                        {Object.entries((d.cc || []).reduce((acc, c) => {
+                          (acc[c.stageId] ||= []).push(c); return acc;
+                        }, {})).map(([stageId, list]) => {
+                          const i = stages.findIndex((s) => s.id === stageId);
+                          if (i < 0) return null;
+                          const seen = list.filter((c) => c.viewedAt).length;
+                          const all = seen === list.length;
+                          return (
+                            <span key={`cc_${stageId}`} style={all ? undefined : { color: "var(--c-rust)" }}
+                              title={list.map((c) => `${c.name || "someone"} — ${c.viewedAt ? `opened ${fmtWhen(c.viewedAt)}` : "not opened"}`).join("\n")}>
+                              <Eye size={10} className="inline mr-1 align-middle" />
+                              {stages[i].name}{" "}
+                              {list.length === 1
+                                ? (all ? `seen ${fmtWhen(list[0].viewedAt)}` : "not opened")
+                                : `seen by ${seen} of ${list.length}`}
+                            </span>
+                          );
+                        })}
                       </div>
                     </td>
                     <td className="px-2 py-3 align-top whitespace-nowrap">
