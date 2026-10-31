@@ -153,8 +153,13 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
   };
 
   return (
-    <ModalShell title={`Signature boxes — ${doc.title}`} onClose={onClose}>
-      <div className="space-y-3">
+    // Wide, in two columns: what each stage asks for on the left, the page the
+    // boxes go on to the right — both in view at once. (It was a narrow dialog
+    // that a long file name pushed off the left of the screen.)
+    <ModalShell title="Signature boxes" subtitle={doc.title} size="xl" onClose={onClose}>
+      <div className="space-y-4">
+      <div className="grid gap-5 items-start lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+      <div className="space-y-3 min-w-0">
         <div className="text-sm opacity-70">
           Say what each stage asks for, then place a box for everyone who signs. They are still
           asked in turn, as the card reaches their stage — this only decides{" "}
@@ -242,13 +247,9 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
 
         {err && <div className="text-xs" style={{ color: "var(--c-rust)" }}>{err}</div>}
 
-        {signatureStages.length === 0 ? (
-          <div className="text-sm opacity-70 rounded-lg p-3" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
-            No stage on this board asks for a signature yet, so there is no box to place.
-            Set one to <span className="font-medium">Signs</span> above and its signatory appears here.
-          </div>
-        ) : (
-          <>
+        {signatureStages.length > 0 && (
+          <div>
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">Whose box you are placing</div>
             {/* Whose box the next click-drag belongs to. */}
             <div className="flex flex-wrap gap-1.5">
               {signatureStages.map((s) => {
@@ -268,19 +269,33 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                 );
               })}
             </div>
-
-            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--c-ink-10)", minHeight: 320 }}>
-              {file ? (
-                <Suspense fallback={<div className="p-10 text-sm opacity-50 text-center">Opening the document…</div>}>
-                  <DocPreview file={file} markers={markers} editable
-                    onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
-                </Suspense>
-              ) : <div className="p-10 text-sm opacity-50 text-center">{err || "Opening the document…"}</div>}
-            </div>
-          </>
+          </div>
         )}
+      </div>
 
-        <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="min-w-0">
+        {signatureStages.length === 0 ? (
+          <div className="text-sm opacity-70 rounded-lg p-3" style={{ backgroundColor: "rgba(15,26,46,.04)" }}>
+            No stage on this board asks for a signature yet, so there is no box to place.
+            Set one to <span className="font-medium">Signs</span> and its signatory appears here.
+          </div>
+        ) : (
+          <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--c-ink-10)", minHeight: 320 }}>
+            {file ? (
+              <Suspense fallback={<div className="p-10 text-sm opacity-50 text-center">Opening the document…</div>}>
+                <DocPreview file={file} markers={markers} editable
+                  onAddMarker={onAddMarker} onUpdateMarker={onUpdateMarker} onDeleteMarker={onDeleteMarker} />
+              </Suspense>
+            ) : <div className="p-10 text-sm opacity-50 text-center">{err || "Opening the document…"}</div>}
+          </div>
+        )}
+      </div>
+      </div>
+
+        {/* Pinned to the bottom of the dialog: below a tall page, Save would
+            otherwise be out of sight until you scrolled past the document. */}
+        <div className="sticky -bottom-6 -mx-6 -mb-6 px-6 py-3 flex items-center justify-between gap-3 flex-wrap"
+          style={{ backgroundColor: "var(--c-cream)", borderTop: "1px solid var(--c-ink-10)" }}>
           <div className="text-xs opacity-60">
             {placed} of {signatureStages.length} {signatureStages.length === 1 ? "signatory" : "signatories"} placed
             {/* A stage left empty is not an error — it will ask when the card
