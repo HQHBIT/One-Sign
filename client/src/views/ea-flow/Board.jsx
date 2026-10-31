@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -9,6 +9,7 @@ import { PlaceSignature } from "./PlaceSignature.jsx";
 import { SendForReview } from "./SendForReview.jsx";
 import { PlanSignatures } from "./PlanSignatures.jsx";
 import { fmtDuration, fmtWhen, stageColour, ccNames } from "./time.js";
+import { flowRows, perRowFor } from "./flowLayout.js";
 
 const DocPreview = lazy(() => import("../../viewer.jsx").then(m => ({ default: m.DocPreview })));
 const DRAG = "text/x-ea-document";
@@ -162,8 +163,12 @@ export function Board({ board, executives, notify, onBoardChanged }) {
         </div>
       </div>
 
-      <div className="flex gap-4 overflow-x-auto pb-4 -mx-1 px-1" style={{ scrollSnapType: "x proximity" }}>
-        {stages.map((s, i) => (
+      {/* The stages as a path: three to a row with → between them, ↓ at the end
+          of a row, the next row running back the other way (flowLayout.js).
+          It replaced a strip that scrolled sideways and hid half the board. */}
+      <FlowGrid count={stages.length} renderStage={(i) => {
+        const s = stages[i];
+        return (
           <StageColumn key={s.id} stage={s} index={i} total={stages.length} colour={stageColour(i)}
             docs={(docs || []).filter((d) => d.stageId === s.id)} stages={stages} tick={tick}
             menuOpen={menuFor === s.id} menuRef={menuFor === s.id ? menuRef : null}
@@ -176,8 +181,8 @@ export function Board({ board, executives, notify, onBoardChanged }) {
             onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
             onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} reminding={reminding} />
-        ))}
-      </div>
+        );
+      }} />
 
       {stageModal && <StageEditor stage={stageModal.stage} executives={executives} onSave={saveStage} onClose={() => setStageModal(null)} />}
       {adding && <AddDocument stages={stages} initialStageId={adding.stageId} onAdd={addDoc} onClose={() => setAdding(null)} />}
@@ -204,6 +209,55 @@ export function Board({ board, executives, notify, onBoardChanged }) {
   );
 }
 
+// Lays the stages out by flowRows(): a grid of tiles with arrow gutters
+// between them, so each arrow sits exactly between the two stages it joins.
+// The number to a row follows the board's own width, not the window's.
+function FlowGrid({ count, renderStage }) {
+  const ref = useRef(null);
+  const [perRow, setPerRow] = useState(3);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => setPerRow(perRowFor(el.clientWidth));
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const rows = flowRows(count, perRow);
+  // Tile, arrow, tile, arrow, tile — the arrows get a narrow column of their own.
+  const cols = Array.from({ length: perRow }, () => "minmax(0, 1fr)").join(" 2rem ");
+  const arrow = { color: "var(--c-gold)" };
+  return (
+    <div ref={ref} className="pb-4">
+      {rows.map((row, r) => (
+        <div key={r}>
+          <div className="grid items-stretch" style={{ gridTemplateColumns: cols }}>
+            {row.slots.map((idx, j) => {
+              const next = row.slots[j + 1];
+              return [
+                <div key={`s${j}`} className="min-w-0 flex">{idx === null ? null : renderStage(idx)}</div>,
+                j < perRow - 1 && (
+                  <div key={`a${j}`} className="flex items-start justify-center pt-5" aria-hidden="true">
+                    {idx !== null && next != null && (row.reversed ? <ArrowLeft size={18} style={arrow} /> : <ArrowRight size={18} style={arrow} />)}
+                  </div>
+                ),
+              ];
+            })}
+          </div>
+          {row.downAt !== null && (
+            <div className="grid" style={{ gridTemplateColumns: cols }} aria-hidden="true">
+              <div className="flex justify-center py-2" style={{ gridColumn: row.downAt * 2 + 1 }}>
+                <ArrowDown size={18} style={arrow} />
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, reminding }) {
   const [over, setOver] = useState(false);
   return (
@@ -211,14 +265,14 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
     // panel this used to be — and the stage's colour as a 3px bar along the
     // top, which is exactly how the Dashboard marks a stage. The two views now
     // show the same stage the same way instead of a bar here and a dot there.
-    <div className="shrink-0 w-72 sm:w-80 flex flex-col card transition-colors"
+    <div className="w-full min-w-0 flex flex-col card transition-colors"
       style={{
         // borderTopColor comes last on purpose: the drag-over state repaints
         // every border, and without it the stage would lose its colour exactly
         // when a card is hovering over it.
         ...(over ? { backgroundColor: "rgba(184,137,74,.12)", borderColor: "var(--c-gold)" } : null),
         borderTop: `3px solid ${colour}`,
-        scrollSnapAlign: "start", minHeight: 260,
+        minHeight: 220,
       }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes(DRAG)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!over) setOver(true); } }}
       onDragLeave={() => setOver(false)}
@@ -226,6 +280,10 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
       {/* No colour dot: the bar along the top says the same thing, and says it
           the way the Dashboard does. */}
       <div className="px-3 pt-3 pb-2 flex items-center gap-2 relative" ref={menuRef}>
+        {/* The step's number on the path: on a snaking layout the second row
+            reads right to left, and the number settles any doubt. */}
+        <span className="w-5 h-5 rounded-full text-[10px] font-medium flex items-center justify-center shrink-0 tabular-nums"
+          style={{ backgroundColor: colour, color: "#fff" }}>{index + 1}</span>
         <div className="min-w-0 flex-1">
           <div className="font-medium text-sm truncate">{stage.name}</div>
           {/* What the stage asks for, in the words the stage editor used. A CC
@@ -246,8 +304,8 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         {menuOpen && (
           <div className="absolute right-2 top-full z-20 rounded-lg overflow-hidden text-sm" style={{ backgroundColor: "var(--c-paper)", border: "1px solid var(--c-ink-10)", boxShadow: "0 8px 24px rgba(15,26,46,.16)", minWidth: 170 }}>
             <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" onClick={onEdit}><Pencil size={13} className="opacity-70" /> Edit stage</button>
-            <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" disabled={index === 0} onClick={() => onShift(-1)}><ChevronLeft size={13} className="opacity-70" /> Move left</button>
-            <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" disabled={index === total - 1} onClick={() => onShift(1)}><ChevronRight size={13} className="opacity-70" /> Move right</button>
+            <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" disabled={index === 0} onClick={() => onShift(-1)}><ChevronLeft size={13} className="opacity-70" /> Move earlier</button>
+            <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" disabled={index === total - 1} onClick={() => onShift(1)}><ChevronRight size={13} className="opacity-70" /> Move later</button>
             <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5" style={{ color: "var(--c-rust-deep)" }} onClick={onDelete}><Trash2 size={13} className="opacity-80" /> Delete</button>
           </div>
         )}
@@ -304,7 +362,7 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
     // The column is now a card too, so a card sitting on it needs to be lifted
     // rather than outlined — otherwise two identical paper surfaces meet and
     // the card's edge disappears into the column.
-    <div className="card p-3 space-y-2" draggable={!doc.waitingForSignature}
+    <div className="card p-3 space-y-2 min-w-0" draggable={!doc.waitingForSignature}
       style={{
         cursor: doc.waitingForSignature ? "default" : "grab",
         opacity: doc.waitingForSignature ? 0.92 : 1,
@@ -317,7 +375,7 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
           {doc.fileType === "pdf" ? <FileText size={13} /> : <FileSpreadsheet size={13} />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-sm leading-snug">{doc.title}</div>
+          <div className="font-medium text-sm leading-snug break-words">{doc.title}</div>
           <div className="text-[11px] opacity-50 truncate">{doc.fileName}{doc.currentFile === "signed" ? " · signed" : ""}</div>
         </div>
       </div>
@@ -362,7 +420,9 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
           </span>
         )}
       </div>
-      <div className="flex items-center gap-1 pt-1 relative" ref={ref}>
+      {/* Wraps onto a second line in a narrow tile instead of spilling out of
+          the card (Move to… used to hang over the next column). */}
+      <div className="flex items-center flex-wrap gap-1 pt-1 relative" ref={ref}>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onOpen(doc)} title="Preview"><Eye size={12} /></button>
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onDownload(doc)} title="Download"><Download size={12} /></button>
         {/* Every signature box for this paper, on one view of the page, before
