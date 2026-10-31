@@ -445,6 +445,11 @@ jobs:
                 console.log("step state on those requests: " + JSON.stringify(await rows(
                   "SELECT st.status, st.team_id IS NULL AS no_team, COUNT(*) AS n" +
                   " FROM ea_documents d JOIN request_steps st ON st.request_id = d.request_id GROUP BY st.status, no_team")));
+                console.log("stages by kind (position, has signer, flag agrees): " + JSON.stringify(await rows(
+                  "SELECT stage_kind, position, signer_id IS NOT NULL AS has_signer, requires_signature, COUNT(*) AS n" +
+                  " FROM ea_stages GROUP BY stage_kind, position, has_signer, requires_signature ORDER BY position")));
+                console.log("stages whose flag and kind disagree: " + (await one(
+                  "SELECT COUNT(*) AS n FROM ea_stages WHERE (stage_kind = ? AND requires_signature = 1) OR (stage_kind = ? AND requires_signature = 0)", ["plain", "signature"])).n);
                 console.log("current_step on those requests: " + JSON.stringify(await rows(
                   "SELECT r.current_step, COUNT(*) AS n FROM ea_documents d JOIN requests r ON r.id = d.request_id GROUP BY r.current_step")));
                 await c.end();
