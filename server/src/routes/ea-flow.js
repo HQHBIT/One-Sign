@@ -130,6 +130,69 @@ async function requestFor(d) {
   return { id: r.id, status: r.status, rejectReason: r.reject_reason || null, signerName: sg?.name || null, signedFilePath: r.signed_file_path || null };
 }
 const isSigned = (rq) => !!(rq && rq.status === "approved" && rq.signedFilePath);
+
+// ============================================================
+//   Files for Senior Executive Management
+// ============================================================
+// Everything an employee has sent for signature to an executive this assistant
+// supports — the executives come from the assistant's Delegation links (with
+// view access), never a fixed list. The request still goes to the executive
+// exactly as before; this is the assistant's view of it, and a card put on a
+// board from here (source_request_id) follows it. Confidential documents stay
+// out, as everywhere else an assistant looks.
+async function myExecutives(assistantId) {
+  return query(
+    `SELECT u.id, u.name FROM executive_assistants ea JOIN users u ON u.id = ea.executive_id
+      WHERE ea.assistant_id = ? AND u.active = 1 AND (ea.can_view IS NULL OR ea.can_view = 1 OR ea.can_dashboard = 1)
+      ORDER BY u.name`, [assistantId]);
+}
+
+// Pending, non-confidential requests on which any of `execIds` is asked to
+// sign — the same test the executive tab uses (assist.js) — leaving out the
+// ones this assistant's own boards raised (those are already cards).
+async function inboxRequests(assistantId, execIds, onlyId = null) {
+  if (!execIds.length) return [];
+  const ph = execIds.map(() => "?").join(",");
+  return query(
+    `SELECT DISTINCT r.* FROM requests r
+       LEFT JOIN request_steps st ON st.request_id = r.id
+       LEFT JOIN request_step_signers sg ON sg.step_id = st.id
+      WHERE r.status = 'pending' AND (r.confidential IS NULL OR r.confidential = 0)
+        ${onlyId ? "AND r.id = ?" : ""}
+        AND (sg.user_id IN (${ph}) OR r.approver_id IN (${ph})
+             OR (r.target_team_id IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM signing_authority sa WHERE sa.team_id = r.target_team_id AND sa.user_id IN (${ph}))))
+        AND NOT EXISTS (SELECT 1 FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id
+                         WHERE d.request_id = r.id AND b.owner_id = ?)
+      ORDER BY r.created_at DESC LIMIT 300`,
+    [...(onlyId ? [onlyId] : []), ...execIds, ...execIds, ...execIds, assistantId]);
+}
+
+// Who sent it, whom they asked (every step, in order), and whose turn it is —
+// names only, never addresses.
+async function requestSummary(r, myExecIds = []) {
+  const requestor = await queryOne("SELECT name FROM users WHERE id = ?", [r.requestor_id]);
+  const steps = await query("SELECT id, step_order, status FROM request_steps WHERE request_id = ? ORDER BY step_order", [r.id]);
+  const signers = steps.length ? await query(
+    `SELECT sg.step_id, sg.signer_order, sg.status, u.id AS user_id, u.name FROM request_step_signers sg
+       JOIN request_steps st ON st.id = sg.step_id JOIN users u ON u.id = sg.user_id
+      WHERE st.request_id = ? ORDER BY st.step_order, sg.signer_order`, [r.id]) : [];
+  const team = r.target_team_id ? await queryOne("SELECT name FROM teams WHERE id = ?", [r.target_team_id]) : null;
+  const awaiting = signers.find((s) => s.status === "pending");
+  const signed = signers.filter((s) => s.status === "signed").map((s) => s.name);
+  return {
+    requestId: r.id, status: r.status, fileName: r.file_name, fileType: r.file_type,
+    requestType: r.request_type || null, createdAt: Number(r.created_at),
+    requestorName: requestor?.name || null, teamName: team?.name || null,
+    steps: steps.map((st) => ({
+      order: st.step_order, status: st.status,
+      signers: signers.filter((s) => s.step_id === st.id)
+        .map((s) => ({ name: s.name, status: s.status, mine: myExecIds.includes(s.user_id) })),
+    })),
+    awaiting: awaiting?.name || null,
+    signedBy: signed,
+  };
+}
 const isWaiting = (rq) => !!(rq && (rq.status === "pending" || rq.status === "approved_pending"));
 
 async function docOut(d, stageById) {
@@ -160,7 +223,15 @@ async function docOut(d, stageById) {
     // Boxes laid out ahead of time, so the board can show how much of the
     // paper is already prepared and the editor can reopen the same layout.
     plannedBoxes: plannedBoxesFor(d),
+    // Put on the board from "Files for Senior Executive Management": the
+    // employee's request this card follows — who sent it, whose turn it is.
+    source: d.source_request_id ? await sourceFor(d.source_request_id) : null,
   };
+}
+
+async function sourceFor(requestId) {
+  const r = await queryOne("SELECT * FROM requests WHERE id = ?", [requestId]);
+  return r ? requestSummary(r) : null;
 }
 
 // Tell someone a document is waiting for their eyes at a CC stage.
@@ -508,8 +579,89 @@ router.post("/boards/:id/documents", upload.single("file"), async (req, res, nex
 export async function currentBytes(d) {
   const rq = await requestFor(d);
   if (isSigned(rq)) return { bytes: await readStored("signed", rq.signedFilePath), signed: true };
+  // A card following an employee's request shows that request's signed copy
+  // once the executive has signed it.
+  if (d.source_request_id) {
+    const src = await queryOne("SELECT status, signed_file_path FROM requests WHERE id = ?", [d.source_request_id]);
+    if (src?.signed_file_path && !/\.json$/i.test(src.signed_file_path)) {
+      return { bytes: await readStored("signed", src.signed_file_path), signed: true };
+    }
+  }
   return { bytes: await readStored("documents", d.file_path), signed: false };
 }
+
+// ---------- GET /inbox — Files for Senior Executive Management ----------
+router.get("/inbox", async (req, res, next) => {
+  try {
+    const execs = await myExecutives(req.user.id);
+    const ids = execs.map((e) => e.id);
+    const rows = await inboxRequests(req.user.id, ids);
+    // Which of these are already cards on one of this assistant's boards.
+    const placed = rows.length ? await query(
+      `SELECT d.id, d.source_request_id, b.id AS board_id, b.name AS board_name, s.name AS stage_name
+         FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id JOIN ea_stages s ON s.id = d.stage_id
+        WHERE b.owner_id = ? AND d.source_request_id IN (${rows.map(() => "?").join(",")})`,
+      [req.user.id, ...rows.map((r) => r.id)]) : [];
+    const items = [];
+    for (const r of rows) {
+      const p = placed.find((x) => x.source_request_id === r.id);
+      items.push({
+        ...(await requestSummary(r, ids)),
+        onBoard: p ? { documentId: p.id, boardId: p.board_id, boardName: p.board_name, stageName: p.stage_name } : null,
+      });
+    }
+    res.json({ executives: execs, items });
+  } catch (e) { next(e); }
+});
+
+// ---------- POST /inbox/:requestId/board { boardId, stageId } ----------
+// Put an employee's request on one of this assistant's boards, as a card that
+// follows it. Into a stage that does not itself ask for a signature: asking
+// another executive to sign is moving the card to a signing stage afterwards,
+// where the box is placed — the same as for any card.
+router.post("/inbox/:requestId/board", async (req, res, next) => {
+  try {
+    const b = await myBoard(req.user.id, String(req.body?.boardId || ""));
+    if (!b) return res.status(400).json({ error: "Choose one of your boards" });
+    const stages = await boardStages(b.id);
+    const landing = stages.find((s) => s.id === String(req.body?.stageId || "")) || stages.find((s) => !needsSignature(s));
+    if (!landing) return res.status(400).json({ error: "Add a stage to the board first" });
+    if (needsSignature(landing)) {
+      return res.status(400).json({ error: `"${landing.name}" asks for a signature — put it in another stage, then move it there when it should be signed` });
+    }
+    const execs = await myExecutives(req.user.id);
+    const [r] = await inboxRequests(req.user.id, execs.map((e) => e.id), req.params.requestId);
+    if (!r) return res.status(404).json({ error: "This document is not among the files sent to your executives" });
+    const already = await queryOne(
+      `SELECT b.name FROM ea_documents d JOIN ea_boards b ON b.id = d.board_id WHERE b.owner_id = ? AND d.source_request_id = ?`,
+      [req.user.id, r.id]);
+    if (already) return res.status(409).json({ error: `Already on your board "${already.name}"` });
+
+    // The card keeps its own copy of the file as it stands now; it shows the
+    // signed copy once the executive signs (currentBytes).
+    const bytes = r.signed_file_path && !/\.json$/i.test(r.signed_file_path)
+      ? await readStored("signed", r.signed_file_path)
+      : await readStored("documents", r.file_path);
+    const ext = r.file_type === "pdf" ? "pdf" : "xlsx";
+    const id = uid("ead");
+    const storedName = await writeStored("documents", `${id}.${ext}`, bytes,
+      { contentType: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const now = Date.now();
+    const title = tidy(String(r.file_name || "Document").replace(/\.[^.]+$/, "")).slice(0, MAX_TITLE) || "Document";
+    await execute(
+      `INSERT INTO ea_documents (id, board_id, stage_id, title, note, file_name, file_path, file_type, request_id, created_by, created_at, entered_stage_at, completed_at, source_request_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?)`,
+      [id, b.id, stages[0].id, title, String(r.note || "").slice(0, 2000), r.file_name, storedName, r.file_type, req.user.id, now, now, r.id]);
+    const doc = await queryOne("SELECT * FROM ea_documents WHERE id = ?", [id]);
+    const bad = await enterStage({ doc, from: null, to: landing, boxes: null, actor: req.user, at: now });
+    if (bad) {
+      await execute("DELETE FROM ea_documents WHERE id = ?", [id]);
+      await deleteStored("documents", storedName).catch(() => {});
+      return res.status(bad.status).json({ error: bad.error });
+    }
+    res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [id])) });
+  } catch (e) { next(e); }
+});
 
 router.get("/documents/:id/file", async (req, res, next) => {
   try {

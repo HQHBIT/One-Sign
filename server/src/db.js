@@ -664,6 +664,11 @@ async function runSchema() {
   // A plan, not a promise: the stage still raises its own request in its own
   // turn, and the boxes are simply already known by then.
   await tryExec("ALTER TABLE ea_documents ADD COLUMN planned_boxes_json TEXT DEFAULT NULL");
+  // A card put on a board from "Files for Senior Executive Management": the
+  // employee's own request it tracks. That request still goes to the executive
+  // exactly as before; the card follows it (2026-10-31).
+  await tryExec("ALTER TABLE ea_documents ADD COLUMN source_request_id VARCHAR(64) DEFAULT NULL");
+  await tryExec("ALTER TABLE ea_documents ADD INDEX idx_ea_documents_source (source_request_id)");
 
   // Nudging someone who has not opened a document they were copied on. Kept on
   // the notice rather than in the `reminders` table, which hangs off a

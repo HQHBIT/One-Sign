@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, KanbanSquare, BarChart3, Check, X } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, KanbanSquare, BarChart3, Check, X, Inbox } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { Board } from "./Board.jsx";
 import { Dashboard } from "./Dashboard.jsx";
+import { ExecInbox } from "./ExecInbox.jsx";
+
+// The first entry beside the boards: what employees sent to my executives.
+const INBOX = "__inbox";
 
 // The assistant's document flow: their boards, one open at a time, each
 // viewable as the board itself or as the dashboard of where things sat.
@@ -13,7 +17,8 @@ export function FlowTab({ notify }) {
   // Every active executive on this box — who a signature stage may name.
   const [executives, setExecutives] = useState([]);
   useEffect(() => { api.eaExecutives().then(setExecutives).catch(() => setExecutives([])); }, []);
-  const [current, setCurrent] = useState(null);
+  // Opens on "Files for Senior Executive Management": that is where new work arrives.
+  const [current, setCurrent] = useState(INBOX);
   const [view, setView] = useState("board");        // board | dashboard
   const [naming, setNaming] = useState(false);       // creating a board
   const [renaming, setRenaming] = useState(false);
@@ -24,7 +29,7 @@ export function FlowTab({ notify }) {
     try {
       const bs = await api.eaBoards();
       setBoards(bs);
-      setCurrent((c) => (c && bs.some((b) => b.id === c) ? c : bs[0]?.id || null));
+      setCurrent((c) => (c === INBOX || (c && bs.some((b) => b.id === c)) ? c : bs[0]?.id || INBOX));
       return bs;
     } catch (e) { notify(e.message || "Could not load your boards", "error"); setBoards([]); return []; }
   };
@@ -57,8 +62,13 @@ export function FlowTab({ notify }) {
 
   return (
     <div className="space-y-4">
-      {/* boards row */}
+      {/* boards row — "Files for Senior Executive Management" first */}
       <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => { setCurrent(INBOX); setRenaming(false); }}
+          className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm tile-hover"
+          style={current === INBOX ? { backgroundColor: "var(--c-ink)", color: "var(--c-cream)" } : { backgroundColor: "rgba(15,26,46,.06)" }}>
+          <Inbox size={14} /> Files for Senior Executive Management
+        </button>
         {boards.map((b) => (
           <button key={b.id} onClick={() => { setCurrent(b.id); setRenaming(false); }}
             className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm tile-hover"
@@ -74,7 +84,11 @@ export function FlowTab({ notify }) {
         )}
       </div>
 
-      {!board ? (
+      {current === INBOX ? (
+        <ExecInbox boards={boards} notify={notify}
+          onOpenBoard={(id) => { setCurrent(id); setView("board"); }}
+          onPlaced={async () => { await load(); }} />
+      ) : !board ? (
         <div className="card p-10 text-center">
           <KanbanSquare size={36} className="mx-auto opacity-30 mb-3" />
           <div className="font-display text-2xl mb-2">Your document flow</div>

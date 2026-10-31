@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send, Inbox } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -445,6 +445,18 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
           </span>
         )}
         {doc.notSent && <span className="pill pill-pending"><Hourglass size={10} /> Not sent yet</span>}
+        {/* Put here from "Files for Senior Executive Management": the employee's
+            own request, which the executive signs as usual — this follows it. */}
+        {doc.source && (
+          <span className={`pill ${doc.source.status === "approved" ? "pill-approved" : doc.source.status === "rejected" ? "pill-rejected" : ""}`}
+            style={doc.source.status === "approved" || doc.source.status === "rejected" ? undefined : { backgroundColor: "rgba(184,137,74,.14)", textTransform: "none", letterSpacing: 0 }}
+            title={`Sent by ${doc.source.requestorName || "an employee"}`}>
+            <Inbox size={10} /> From {doc.source.requestorName?.split(" ")[0] || "employee"} ·{" "}
+            {doc.source.status === "approved" ? `signed${doc.source.signedBy?.length ? ` by ${doc.source.signedBy.at(-1).split(" ")[0]}` : ""}`
+              : doc.source.status === "rejected" ? "rejected"
+                : doc.source.awaiting ? `awaiting ${doc.source.awaiting.split(" ")[0]}` : doc.source.status}
+          </span>
+        )}
       </div>
       {/* On a signing stage that has not asked anyone (the stage was set to
           "Signs" after the card arrived), or after a rejection: say so, and

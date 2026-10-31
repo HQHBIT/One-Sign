@@ -520,6 +520,67 @@ try {
   r = await call(REQR, "POST", `/api/assist/${EXEC}/requests/${rejReq}/reject`, { reason: "x" });
   ck(r.status === 403, `someone who is not an assistant cannot use these routes (${r.status})`);
 
+  // ---- Files for Senior Executive Management (owner, 2026-10-31) ----
+  // An employee sends a document straight to the executive, as they always do.
+  const empFd = new FormData();
+  empFd.append("file", new Blob([pdfBytes], { type: "application/pdf" }), "Vendor contract.pdf");
+  empFd.append("direct", "true");
+  empFd.append("signers", JSON.stringify([{ userId: EXEC, page: 1, x: 20, y: 70, w: 25, h: 8 }]));
+  empFd.append("requestType", "general");
+  r = await fetch(`${BASE}/api/requests`, { method: "POST", headers: hdr(REQR, false), body: empFd });
+  const empReq = (await j(r)).request?.id;
+  ck(r.status === 200 && !!empReq, `an employee sends a document to the executive (${r.status})`);
+  let inbox = await j(await call(EA, "GET", "/api/ea-flow/inbox"));
+  let item = inbox.items?.find((x) => x.requestId === empReq);
+  ck(!!item, "it appears in the assistant's Files for Senior Executive Management");
+  ck(item?.requestorName && item.steps?.[0]?.signers?.[0]?.mine === true && item?.awaiting === item.steps[0].signers[0].name,
+    `…showing who sent it (${item?.requestorName}) and whom they asked (${item?.awaiting})`);
+  ck(inbox.executives?.some((e) => e.id === EXEC) && !/@/.test(JSON.stringify(inbox)), "…for the executives the assistant is linked to, and with no email addresses");
+  // A document the assistant's own board raised is already a card — not listed.
+  ck(!inbox.items?.some((x) => x.requestId === rejReq), "documents raised by the assistant's own boards are not listed again");
+  // Confidential stays out.
+  await execute("UPDATE requests SET confidential = 1 WHERE id = ?", [empReq]);
+  inbox = await j(await call(EA, "GET", "/api/ea-flow/inbox"));
+  ck(!inbox.items?.some((x) => x.requestId === empReq), "a confidential document is not listed");
+  await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [empReq]);
+
+  // Put it on a board.
+  const b2stages = (await j(await call(EA, "GET", "/api/ea-flow/boards"))).boards?.find((x) => x.id === B2)?.stages || [];
+  const plainStage = b2stages.find((s) => s.kind === "plain");
+  r = await call(EA, "POST", `/api/ea-flow/inbox/${empReq}/board`, { boardId: B2, stageId: S_LATE });
+  ck(r.status === 400, `not straight into a stage that asks for a signature (${r.status})`);
+  r = await call(EA, "POST", `/api/ea-flow/inbox/${empReq}/board`, { boardId: B2, stageId: plainStage?.id });
+  const fromInbox = (await j(r)).document;
+  ck(r.status === 200 && fromInbox?.stageId === plainStage?.id && fromInbox?.source?.requestId === empReq,
+    `put on a board, in the chosen stage, linked to the employee's request (${r.status})`);
+  ck(fromInbox?.source?.awaiting === item?.awaiting && fromInbox?.source?.requestorName === item?.requestorName,
+    "…and the card shows who sent it and whose signature it is waiting for");
+  r = await call(EA, "POST", `/api/ea-flow/inbox/${empReq}/board`, { boardId: B2, stageId: plainStage?.id });
+  ck(r.status === 409, `it can go on a board only once (${r.status})`);
+  item = (await j(await call(EA, "GET", "/api/ea-flow/inbox"))).items?.find((x) => x.requestId === empReq);
+  ck(item?.onBoard?.boardId === B2 && item?.onBoard?.stageName === plainStage?.name, "the list then says which board and stage it is on");
+  const stillPending = await queryOne(
+    `SELECT r.status, sg.user_id FROM requests r JOIN request_steps st ON st.request_id = r.id JOIN request_step_signers sg ON sg.step_id = st.id WHERE r.id = ?`, [empReq]);
+  ck(stillPending?.status === "pending" && stillPending?.user_id === EXEC, "the employee's request is untouched — still with the executive to sign");
+  r = await call(OTHER_EA, "POST", `/api/ea-flow/inbox/${empReq}/board`, { boardId: B2, stageId: plainStage?.id });
+  ck(r.status === 400, `another assistant cannot put it on someone else's board (${r.status})`);
+  // ---- an assistant sees what their executive was sent to READ (owner, 2026-10-31) ----
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_FIRST}/review`, { userIds: [EXEC] });
+  ck(r.status === 200, `a card is sent to the executive for review (${r.status})`);
+  const execReads = await j(await call(EXEC, "GET", "/api/ea-cc"));
+  ck(execReads.documents?.some((d) => d.id === D_FIRST), "…and is in the executive's own For your information");
+  let assistReads = await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/for-info`));
+  const shared = assistReads.documents?.find((d) => d.id === D_FIRST);
+  ck(!!shared && shared.viewedAt === null && shared.stageName === "Sent for review",
+    "a linked assistant sees it under the executive's For review, not yet opened");
+  r = await fetch(`${BASE}/api/assist/${EXEC}/for-info/${D_FIRST}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 200 && (await r.arrayBuffer()).byteLength > 100, `…and can open the file (${r.status})`);
+  assistReads = await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/for-info`));
+  ck(assistReads.documents?.find((d) => d.id === D_FIRST)?.viewedAt === null,
+    "the assistant opening it does NOT count as the executive having read it");
+  r = await call(UNLINKED, "GET", `/api/assist/${EXEC}/for-info`);
+  ck(r.status === 403, `someone not assisting the executive cannot see it (${r.status})`);
+
   // ---- not on a WAQF box ----
   waqf = startApi(PORT + 10, "waqf");
   await waitFor(`http://127.0.0.1:${PORT + 10}`, waqf);
