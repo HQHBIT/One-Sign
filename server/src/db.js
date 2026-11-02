@@ -648,6 +648,12 @@ async function runSchema() {
   // Backfill once, for the stages that existed before kinds did. Guarded on
   // 'plain' so a stage later changed by hand is never dragged back.
   await tryExec("UPDATE ea_stages SET stage_kind = 'signature' WHERE requires_signature = 1 AND stage_kind = 'plain'");
+  // A fourth kind: a step whose whole job is to approve. Arriving there marks
+  // the paper Approved and records the moment — nobody is asked for anything,
+  // no request is raised, and nothing whatever is drawn onto the document.
+  // Widening the ENUM is a separate statement from creating it, so a database
+  // that already has the column gets the new value too.
+  await tryExec("ALTER TABLE ea_stages MODIFY COLUMN stage_kind ENUM('plain','signature','cc','approval') NOT NULL DEFAULT 'plain'");
 
   // The stages a card jumped straight over on its way here, as a JSON array of
   // stage ids. A skipped stage is otherwise indistinguishable from one the card

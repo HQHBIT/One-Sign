@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PenLine, Eye } from "lucide-react";
+import { PenLine, Eye, Stamp } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { withCurrent } from "./time.js";
 
@@ -14,6 +14,7 @@ const KINDS = [
   ["plain", "Nothing — just a step", "A holding place on the board. Nobody is asked for anything."],
   ["signature", "Needs a signature", "Moving a document here sends it to that person to sign, exactly like a normal request. It can move on once they have signed."],
   ["cc", "For information only (CC)", "That person is shown the document and told it is for information. They do not sign, and the card is free to move on straight away."],
+  ["approval", "Marks it approved", "Moving a document here marks it Approved and records the moment. Nobody is asked to sign, nothing is added to the document itself, and the approval stays on the card as it moves on."],
 ];
 
 export function StageEditor({ stage, executives, onSave, onClose }) {
@@ -68,9 +69,10 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
           <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">What this stage asks for</div>
           <div className="space-y-1.5">
             {KINDS.map(([value, label, blurb]) => {
-              // Only "plain" works without somebody to name, so the other two
-              // are disabled rather than silently failing on save.
-              const blocked = value !== "plain" && executives.length === 0;
+              // Only the kinds that NAME somebody need somebody to name, so
+              // those are disabled rather than silently failing on save. A
+              // step and an approval ask nothing of anyone.
+              const blocked = (value === "signature" || value === "cc") && executives.length === 0;
               return (
                 <label key={value} className="flex items-start gap-3 cursor-pointer rounded-lg p-2"
                   style={kind === value ? { backgroundColor: "rgba(184,137,74,.10)" } : undefined}>
@@ -80,6 +82,7 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
                     <span className="text-sm font-medium inline-flex items-center gap-1.5">
                       {value === "signature" && <PenLine size={13} />}
                       {value === "cc" && <Eye size={13} />}
+                      {value === "approval" && <Stamp size={13} />}
                       {label}
                     </span>
                     <span className="block text-xs opacity-60 mt-0.5">

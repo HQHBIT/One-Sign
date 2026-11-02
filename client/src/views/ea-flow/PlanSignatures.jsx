@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, lazy, Suspense } from "react";
-import { PenLine, Check, Eye, Minus, ChevronDown, Send } from "lucide-react";
+import { PenLine, Check, Eye, Minus, ChevronDown, Send, Stamp } from "lucide-react";
 import { api } from "../../api.js";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { stageColour, withCurrent } from "./time.js";
@@ -35,6 +35,7 @@ const ASKS = [
   ["plain", "No one", Minus],
   ["signature", "Signs", PenLine],
   ["cc", "Reads", Eye],
+  ["approval", "Approves", Stamp],
 ];
 
 export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChanged, onClose }) {
@@ -199,8 +200,9 @@ export function PlanSignatures({ doc, stages, executives, onSaved, onStagesChang
                   <div className="inline-flex rounded-full overflow-hidden shrink-0" style={{ border: "1px solid var(--c-ink-10)" }}>
                     {ASKS.map(([value, label, Icon]) => {
                       // Nobody to name means nothing to ask: offering it would
-                      // only produce a refusal on save.
-                      const blocked = value !== "plain" && executives.length === 0;
+                      // only produce a refusal on save. Approving names nobody,
+                      // so it is always available.
+                      const blocked = (value === "signature" || value === "cc") && executives.length === 0;
                       const on = kind === value;
                       return (
                         <button key={value} disabled={saving || blocked}

@@ -59,6 +59,7 @@ export function Dashboard({ board, notify }) {
                 {s.name}
                 {(s.kind === "signature" || (!s.kind && s.requiresSignature)) && <PenLine size={11} className="opacity-50" />}
                 {s.kind === "cc" && <Eye size={11} className="opacity-50" />}
+                {s.kind === "approval" && <Stamp size={11} className="opacity-50" />}
               </div>
               <div className="font-display text-2xl leading-tight mt-1">{s.count}<span className="text-xs opacity-50 font-sans ml-1">now</span></div>
               <div className="text-[11px] opacity-60 mt-1">avg {fmtDuration(s.avgMs)} · longest {fmtDuration(s.maxMs)}</div>
