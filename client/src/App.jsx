@@ -5,7 +5,7 @@ import {
   FilePlus, AlertCircle, Plus, X, Check, ArrowRight, ArrowLeft, Building2,
   RefreshCw, Send, Inbox, Archive, ChevronRight, ChevronDown, ChevronUp, Undo2, Trash2,
   FileSpreadsheet, Stamp, History, Zap, GitBranch, Eye as EyeIcon, EyeOff, Printer,
-  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare, Hourglass, Flag
+  KeyRound, Wallet, Pencil, RotateCcw, GitMerge, ScanFace, Mic, Square, Calendar, Lock, Moon, Paperclip, MessageSquare, Hourglass, Flag, Fingerprint
 } from "lucide-react";
 import { api } from "./api.js";
 import {
@@ -41,6 +41,7 @@ import { DelegationSettings } from "./components/DelegationSettings.jsx";
 import { RoleChangeModal } from "./components/RoleChangeModal.jsx";
 import { EmailApproveScreen } from "./components/EmailApproveScreen.jsx";
 import { ExecutiveAssistantView } from "./views/ExecutiveAssistantView.jsx";
+import { AdminSignRegister } from "./views/AdminSignRegister.jsx";
 import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
@@ -2843,6 +2844,7 @@ function AdminView(props) {
     back={() => { setDocsTeamId(null); setTab("home"); }} />;
   if (tab === "reports") return <AdminReports {...props} back={() => setTab("home")} />;
   if (tab === "emails") return <AdminEmails {...props} back={() => setTab("home")} />;
+  if (tab === "sign-register") return <AdminSignRegister notify={props.notify} back={() => setTab("home")} />;
   if (tab === "issues") return <AdminIssues back={() => setTab("home")} />;
   if (tab === "registrations") return <AdminRegistrations {...props} back={() => setTab("home")} />;
   if (tab === "password-resets") return <AdminPasswordResets {...props} back={() => setTab("home")} />;
@@ -2858,6 +2860,8 @@ function AdminView(props) {
     { key: "documents", icon: FileText, title: "All documents", desc: "Download or audit every file, team-wise.", badge: requests.length },
     { key: "reports", icon: BarChart3, title: "Reports", desc: "Team-wise reporting, export to CSV." },
     { key: "emails", icon: Mail, title: "Email log", desc: "Inspect every notification sent by SignFlow.", badge: emails.length },
+    // HQHB: every signature's Sign Number — who signed, when, from where.
+    ...(isHqhbBox() ? [{ key: "sign-register", icon: Fingerprint, title: "Signature register", desc: "Trace any signature by its Sign Number — signer, time, address and file fingerprint.", color: "var(--c-gold)" }] : []),
     { key: "issues", icon: Flag, title: "Reported issues", desc: "Everything submitted on the issues & enhancements form." },
     { key: "registrations", icon: UserPlus, title: "Registrations", desc: "Approve or reject new self-sign-up requests." },
     { key: "password-resets", icon: KeyRound, title: "Password resets", desc: "Approve users' password-reset requests." },

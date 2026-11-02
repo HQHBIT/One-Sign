@@ -123,7 +123,9 @@ try {
   ck(d.length === 1 && near(d[0].h, 3) && near(d[0].y, 38.4) && d[0].x === 20,
     `a date field was persisted under the signature, 3/8 of its height (${JSON.stringify(d[0])})`);
   const signed = await fs.readFile(path.join(UPLOADS, "signed", `${c.id}.signed.pdf`)).catch(() => null);
-  ck(!!signed && signed.length > pdfBytes.length + 100 && (await PDFDocument.load(signed)).getPageCount() === 1, "the signed PDF exists and is stamped");
+  // Two pages: the document, and the Sign Number audit page every fully signed
+  // HQHB document gains (signRegister.js, 2026-10-31).
+  ck(!!signed && signed.length > pdfBytes.length + 100 && (await PDFDocument.load(signed)).getPageCount() === 2, "the signed PDF exists and is stamped (plus its audit page)");
 
   // ---- single-approver: without addDate nothing is added ----
   c = await createSingle(BASE);

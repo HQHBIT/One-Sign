@@ -838,6 +838,44 @@ async function runSchema() {
   // HQHB: when the everyone on a multi-signer route was told it is fully signed
   // (workflowComplete.js). Claimed atomically, so the email goes out once.
   await tryExec(`ALTER TABLE requests ADD COLUMN route_notified_at BIGINT DEFAULT NULL`);
+
+  // --- Sign Numbers (HQHB, 2026-10-31) — signRegister.js ---------------------
+  // Every signature gets its own number (SF-2026-000123), printed under it and
+  // listed on the audit page of the fully signed document. The register is the
+  // record an administrator looks a number up in. `signer_ref` is the step
+  // signer's id, or 'single' for a team request's one approver — unique per
+  // request, so a rebuilt document reuses the numbers it already has.
+  await tryExec(`CREATE TABLE IF NOT EXISTS sign_register (
+    sign_no               VARCHAR(24)  NOT NULL PRIMARY KEY,
+    year                  INT          NOT NULL,
+    seq                   INT          NOT NULL,
+    request_id            VARCHAR(64)  NOT NULL,
+    signer_ref            VARCHAR(64)  NOT NULL,
+    signer_id             VARCHAR(64)  NOT NULL,
+    signer_name           VARCHAR(255) DEFAULT NULL,
+    acted_by_assistant_id VARCHAR(64)  DEFAULT NULL,
+    acted_by_name         VARCHAR(255) DEFAULT NULL,
+    step_order            INT          DEFAULT NULL,
+    signed_at             BIGINT       NOT NULL,
+    ip                    VARCHAR(64)  DEFAULT NULL,
+    user_agent            VARCHAR(255) DEFAULT NULL,
+    doc_sha256            CHAR(64)     DEFAULT NULL,
+    source                VARCHAR(16)  NOT NULL DEFAULT 'live',
+    created_at            BIGINT       NOT NULL,
+    UNIQUE KEY uq_sign_register_ref (request_id, signer_ref),
+    UNIQUE KEY uq_sign_register_seq (year, seq),
+    INDEX idx_sign_register_signer (signer_id, signed_at),
+    INDEX idx_sign_register_signed (signed_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // What was signed, kept on the row itself: a register entry must still say
+  // which document it was after that document is deleted.
+  await tryExec("ALTER TABLE sign_register ADD COLUMN document_name VARCHAR(255) DEFAULT NULL");
+  await tryExec("ALTER TABLE sign_register ADD COLUMN requested_by_name VARCHAR(255) DEFAULT NULL");
+  await tryExec("ALTER TABLE sign_register ADD COLUMN confidential TINYINT(1) NOT NULL DEFAULT 0");
+  await tryExec(`CREATE TABLE IF NOT EXISTS sign_counters (
+    year     INT NOT NULL PRIMARY KEY,
+    last_seq INT NOT NULL
+  ) ENGINE=InnoDB`);
   // Granular per-link rights the executive grants their assistant. Defaults keep
   // prior behavior: viewing on, everything else opt-in.
   await tryExec(`ALTER TABLE executive_assistants ADD COLUMN can_view TINYINT(1) NOT NULL DEFAULT 1`);
