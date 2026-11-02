@@ -1543,6 +1543,17 @@ function HodDashboard({ user, notify, back }) {
   );
 }
 
+// Who approved a document: everyone who signed it on its route, or the team
+// approver of a single-approver request — never the person looking.
+function approversOf(r, user) {
+  const out = new Map();
+  for (const st of r.workflow || []) for (const sg of st.signers || []) {
+    if (sg.status === "signed" && sg.userId && sg.userId !== user?.id) out.set(sg.userId, sg.userName || "Unknown");
+  }
+  if (!out.size && r.approverId && r.approverId !== user?.id) out.set(r.approverId, r.approverName || "Unknown");
+  return [...out].map(([id, name]) => ({ id, name }));
+}
+
 function ApprovedList({ items, teams, users, user, back, notify, title = "Approved requests" }) {
   const [open, setOpen] = useState(null);
   // WAQF only: which of my documents have been sent for Shz Saab approval, and
@@ -1557,6 +1568,9 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
     <>
       <FolderedList items={items} title={title} back={back} notify={notify}
         emptyIcon={Archive} emptyText={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`}
+        // Search, and filter by who approved — offering only the people who
+        // actually approved these documents (owner, 2026-11-02).
+        search={{ approvers: (r) => approversOf(r, user) }}
         renderRow={(r, i, moveMenu, rowProps) => (
           <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
             actions={(

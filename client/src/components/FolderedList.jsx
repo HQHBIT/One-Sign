@@ -9,7 +9,7 @@
 //   checkbox and the bar that moves several rows together.
 // ============================================================
 import { useEffect, useState } from "react";
-import { FolderPlus, CheckSquare, X } from "lucide-react";
+import { FolderPlus, CheckSquare, X, Search } from "lucide-react";
 import { BackHeader } from "./BackHeader.jsx";
 import { Empty } from "./Empty.jsx";
 import { FolderStrip } from "./FolderStrip.jsx";
@@ -21,8 +21,33 @@ import { useFolders } from "../lib/useFolders.js";
  * @param renderRow    (r, i, moveMenu, rowProps) => <RequestRow …/> — the parent supplies the row; `moveMenu` goes
  *                     among its actions and `rowProps` is spread onto it (drag handle, or checkbox state when selecting)
  * @param countLabel   what the title count says, e.g. "signed"
+ * @param search       optional { approvers: (r) => [{ id, name }] } — shows a search box and an
+ *                     "Approved by" filter. While either is in use the list shows every match,
+ *                     filed or not, so a document is never missed for sitting in a folder.
  */
-export function FolderedList({ items, title, back, notify, emptyIcon, emptyText, countLabel = "signed", renderRow }) {
+export function FolderedList({ items, title, back, notify, emptyIcon, emptyText, countLabel = "signed", renderRow, search = null }) {
+  const [query, setQuery] = useState("");
+  const [approver, setApprover] = useState("");
+  // The people who appear as approvers on THESE documents, and on how many —
+  // never a directory of everyone.
+  const approverOptions = (() => {
+    if (!search?.approvers) return [];
+    const m = new Map();
+    for (const r of items) for (const a of search.approvers(r)) {
+      const e = m.get(a.id) || { id: a.id, name: a.name, n: 0 };
+      e.n += 1; m.set(a.id, e);
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  })();
+  const q = query.trim().toLowerCase();
+  const filtering = !!search && (!!q || !!approver);
+  const matches = (r) => {
+    if (approver && !search.approvers(r).some((a) => a.id === approver)) return false;
+    if (!q) return true;
+    const hay = [r.fileName, r.requestorName, r.requestType, r.note, r.approverName,
+      ...search.approvers(r).map((a) => a.name)].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  };
   const { folders, placements, createFolder, renameFolder, deleteFolder, moveTo, moveMany } = useFolders({ notify });
   const [current, setCurrent] = useState(null);       // open folder id, or null
   const [creating, setCreating] = useState(false);
@@ -30,9 +55,11 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
   const [selected, setSelected] = useState(() => new Set());
 
   const folderIds = new Set(folders.map((f) => f.id));
-  const visible = current
-    ? items.filter((r) => placements[r.id] === current)
-    : items.filter((r) => !placements[r.id] || !folderIds.has(placements[r.id]));
+  const visible = filtering
+    ? items.filter(matches)
+    : current
+      ? items.filter((r) => placements[r.id] === current)
+      : items.filter((r) => !placements[r.id] || !folderIds.has(placements[r.id]));
   const openFolder = current ? folders.find((f) => f.id === current) : null;
 
   // Selection belongs to one screen: opening or leaving a folder clears it.
@@ -74,13 +101,15 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
   const filedCount = items.length - (current ? 0 : visible.length);
   const empty = !items.length
     ? <Empty icon={emptyIcon} text={emptyText} />
+    : filtering
+      ? <Empty icon={emptyIcon} text="Nothing matches — try another word, or clear the filter." />
     : current
       ? <Empty icon={emptyIcon} text="Nothing in this folder yet — drag documents here, or use Move to… on a document." />
       : <Empty icon={emptyIcon} text={`Everything is filed — open a folder above. (${filedCount} filed)`} />;
 
   return (
     <div>
-      <BackHeader back={back} title={title} step={`${items.length} ${countLabel}`}
+      <BackHeader back={back} title={title} step={filtering ? `${visible.length} of ${items.length} ${countLabel}` : `${items.length} ${countLabel}`}
         actions={(
           <div className="flex items-center gap-2 flex-wrap justify-end">
             {visible.length > 0 && (
@@ -94,6 +123,28 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
             </button>
           </div>
         )} />
+
+      {search && items.length > 0 && (
+        <div className="mt-5 flex flex-col sm:flex-row gap-2 sm:items-center">
+          <div className="relative flex-1 max-w-xl">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} className="w-full pl-9"
+              placeholder="Search by document name, type or person…" aria-label="Search documents" />
+          </div>
+          {approverOptions.length > 0 && (
+            <select value={approver} onChange={(e) => setApprover(e.target.value)} className="sm:w-72" aria-label="Approved by">
+              <option value="">Approved by: everyone</option>
+              {approverOptions.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.n})</option>)}
+            </select>
+          )}
+          {filtering && (
+            <button className="btn-ghost text-xs shrink-0" onClick={() => { setQuery(""); setApprover(""); }}><X size={12} /> Clear</button>
+          )}
+        </div>
+      )}
+      {filtering && (
+        <div className="text-xs opacity-60 mt-2">Showing matches from every folder.</div>
+      )}
 
       <FolderStrip folders={folders} current={current} creating={creating} onCreatingChange={setCreating}
         onOpen={open} onCreate={createFolder} onRename={renameFolder} onDelete={deleteFolder} onMove={moveTo} />
