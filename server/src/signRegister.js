@@ -108,32 +108,17 @@ export async function recordDocHash(requestId, bytes) {
   await execute("UPDATE sign_register SET doc_sha256 = ? WHERE request_id = ? AND doc_sha256 IS NULL", [sha256(bytes), requestId]).catch(() => {});
 }
 
-// Is this the signature that completes the document — nobody left to sign?
-export async function completesRoute(requestId) {
-  const left = await queryOne(
-    `SELECT 1 AS ok FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id
-      WHERE st.request_id = ? AND sg.status = 'pending' LIMIT 1`, [requestId]);
-  return !left;
-}
-
-// Everything the audit page prints.
-export async function auditFor(row, originalBytes) {
-  const requestor = await queryOne("SELECT name FROM users WHERE id = ?", [row.requestor_id]);
-  const signatures = await query(
-    `SELECT sign_no, signer_name, acted_by_name, step_order, signed_at FROM sign_register
-      WHERE request_id = ? ORDER BY signed_at, seq`, [row.id]);
-  return {
-    documentName: row.file_name,
-    documentId: row.id,
-    requestedBy: requestor?.name || "—",
-    sentAt: Number(row.created_at),
-    completedAt: Date.now(),
-    originalSha256: sha256(originalBytes),
-    signatures: signatures.map((s) => ({
-      signNo: s.sign_no, signer: s.signer_name || "—", actedBy: s.acted_by_name || null,
-      step: s.step_order, signedAt: Number(s.signed_at),
-    })),
-  };
+// The fingerprint of the document as it arrived, before anybody signed it.
+//
+// The audit page used to print this; with that page gone (owner, 2026-11-02)
+// the register is the only place it survives, so it is written onto the rows of
+// the request. Stamping rebuilds the signed copy from the original every time,
+// so these bytes are identical at every signature — hence the IS NULL guard,
+// which makes every call after the first a no-op.
+export async function recordOriginalHash(requestId, originalBytes) {
+  if (!signNumbersOn()) return;
+  await execute("UPDATE sign_register SET original_sha256 = ? WHERE request_id = ? AND original_sha256 IS NULL",
+    [sha256(originalBytes), requestId]).catch(() => {});
 }
 
 /**

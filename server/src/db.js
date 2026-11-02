@@ -867,9 +867,9 @@ async function runSchema() {
   await tryExec(`ALTER TABLE requests ADD COLUMN route_notified_at BIGINT DEFAULT NULL`);
 
   // --- Sign Numbers (HQHB, 2026-10-31) — signRegister.js ---------------------
-  // Every signature gets its own number (SF-2026-000123), printed under it and
-  // listed on the audit page of the fully signed document. The register is the
-  // record an administrator looks a number up in. `signer_ref` is the step
+  // Every signature gets its own number (SF-2026-000123), printed as a small
+  // tag under it. The register is the record an administrator looks a number up
+  // in — and since the audit page was removed, the ONLY one. `signer_ref` is the step
   // signer's id, or 'single' for a team request's one approver — unique per
   // request, so a rebuilt document reuses the numbers it already has.
   await tryExec(`CREATE TABLE IF NOT EXISTS sign_register (
@@ -899,6 +899,11 @@ async function runSchema() {
   await tryExec("ALTER TABLE sign_register ADD COLUMN document_name VARCHAR(255) DEFAULT NULL");
   await tryExec("ALTER TABLE sign_register ADD COLUMN requested_by_name VARCHAR(255) DEFAULT NULL");
   await tryExec("ALTER TABLE sign_register ADD COLUMN confidential TINYINT(1) NOT NULL DEFAULT 0");
+  // The fingerprint of the document as it was BEFORE anyone signed it, beside
+  // doc_sha256 (the file that signature produced). It used to be printed on the
+  // audit page; that page is gone (owner, 2026-11-02), and the register is now
+  // the only place this is kept — so it is kept here rather than lost.
+  await tryExec("ALTER TABLE sign_register ADD COLUMN original_sha256 CHAR(64) DEFAULT NULL");
   await tryExec(`CREATE TABLE IF NOT EXISTS sign_counters (
     year     INT NOT NULL PRIMARY KEY,
     last_seq INT NOT NULL

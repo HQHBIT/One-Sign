@@ -1,5 +1,5 @@
 // HQHB Sign Numbers: every signature gets a number, printed under it; the fully
-// signed document gains an audit page; the admin register traces it (owner,
+// signed document gains NOTHING; the admin register holds the trace (owner,
 // 2026-10-31).
 //
 //   node test/sign-numbers.integration.mjs      (from server/, MySQL running)
@@ -108,7 +108,7 @@ try {
   ck(reg[0]?.user_agent === "sign-numbers-test" && !!reg[0]?.ip && reg[0]?.source === "live", "…with the browser, the address and 'recorded live'");
   let bytes = await signedBytes(id);
   ck(hasText(bytes, noA), "the number is printed on the signed PDF");
-  ck((await PDFDocument.load(bytes)).getPageCount() === 1, "no audit page yet — someone still has to sign");
+  ck((await PDFDocument.load(bytes)).getPageCount() === 1, "the signed file is still the one page that went in");
 
   r = await approve(B, id);
   ck(r.status === 200 && (await j(r)).request?.status === "approved", `the second executive signs; it is approved (${r.status})`);
@@ -118,8 +118,11 @@ try {
     `the second signature gets the next number, and the first keeps its own (${noA}, ${noB})`);
   bytes = await signedBytes(id);
   ck(hasText(bytes, noA) && hasText(bytes, noB), "both numbers are on the final PDF — the rebuild reprinted the first");
-  ck((await PDFDocument.load(bytes)).getPageCount() === 2, "a fully signed document gains one audit page");
-  ck(hasText(bytes, "Signature Audit Report") && hasText(bytes, id), "…the audit page names itself and carries the document ID");
+  // Nothing is appended, ever (owner, 2026-11-02). A fully signed document is
+  // the document that was sent, with the signatures and their tags on it; the
+  // trace that used to be printed on an added page lives in the register.
+  ck((await PDFDocument.load(bytes)).getPageCount() === 1, "a fully signed document gains NO extra page");
+  ck(!hasText(bytes, "Signature Audit Report"), "…and carries no audit report");
   ck(reg[1].doc_sha256 === sha256(bytes), "the register holds the fingerprint of the final signed file");
 
   // ---- a single signer: numbered, and complete at once ----
@@ -127,8 +130,8 @@ try {
   await approve(A, single);
   const sreg = await register(single);
   const sbytes = await signedBytes(single);
-  ck(sreg.length === 1 && hasText(sbytes, sreg[0].sign_no) && (await PDFDocument.load(sbytes)).getPageCount() === 2,
-    "a one-signature document is numbered and gets its audit page straight away");
+  ck(sreg.length === 1 && hasText(sbytes, sreg[0].sign_no) && (await PDFDocument.load(sbytes)).getPageCount() === 1,
+    "a one-signature document is numbered and stays the length it was");
 
   // ---- the admin register ----
   r = await fetch(`${BASE}/api/admin/sign-register?q=${encodeURIComponent(noA)}`, { headers: hdr(ADM) });
@@ -139,6 +142,12 @@ try {
   b = await j(r);
   ck(r.status === 200 && b.signature?.signNo === noB && b.document?.length === 2 && b.signature.docSha256,
     "…and its full trace, with every other signature on the same document");
+  // The one fact the audit page held that the register did not. Removing the
+  // page must not destroy it, so it is kept on the row now.
+  ck(/^[0-9a-f]{64}$/.test(b.signature?.originalSha256 || ""),
+    `…including the fingerprint of the document BEFORE anyone signed it (${(b.signature?.originalSha256 || "missing").slice(0, 12)}…)`);
+  ck(b.signature.originalSha256 !== b.signature.docSha256,
+    "…which is not the same thing as the fingerprint of the signed file");
   r = await fetch(`${BASE}/api/admin/sign-register?q=SN%20Second`, { headers: hdr(ADM) });
   ck((await j(r)).signatures?.some((s) => s.signNo === noB), "…or by the signer's name");
   r = await fetch(`${BASE}/api/admin/sign-register`, { headers: hdr(R) });
