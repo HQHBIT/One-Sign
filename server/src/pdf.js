@@ -130,8 +130,15 @@ export async function stampPdfMultiBytes({ srcBytes, stamps }) {
 
     // HQHB Sign Number: a small grey tag under the signature (and under a date
     // sitting directly beneath it), naming the register entry and nothing more.
+    // The page's own size, rotation and the signature's aspect go with it, so
+    // the tag can sit under the INK rather than under the bounding box.
     if (s.signNo) {
-      const box = signNoBox(s, stamps);
+      const { width: pageW, height: pageH } = page.getSize();
+      const box = signNoBox(s, stamps, {
+        pageW, pageH,
+        rotation: page.getRotation().angle,
+        signatureAspect: sigImg.height > 0 ? sigImg.width / sigImg.height : null,
+      });
       drawTextInBox(page, font, signNoText(s.signNo), placeInRotatedPage(page, box),
         { maxSize: 6, color: rgb(0.45, 0.48, 0.54) });
     }
@@ -151,22 +158,62 @@ const IST = (ts) => new Date(Number(ts) || Date.now()).toLocaleString("en-IN", {
 // only needs to point at the entry.
 export const signNoText = (signNo) => String(signNo ?? "");
 
-// Where that tag goes, in the app's %-coordinates: a small box under the
-// signature, no wider than it needs to be, pushed below a date stamped right
-// under the signature, and above the signature instead when the page has no
-// room left.
-export function signNoBox(s, stamps = []) {
+// Where that tag goes, in the app's %-coordinates (y measured from the top): a
+// small box tucked under the signature, no wider than it needs to be, pushed
+// below a date stamped right under the signature, and above the signature
+// instead when the page has no room left.
+//
+// It follows the INK, not the boxes (owner, 2026-11-02: "the space is too much,
+// it should be right below the signature"). Both boxes above it are bounding
+// boxes with their content centred inside: a signature is contain-fitted, so a
+// wide signature in a tall box leaves half the slack beneath it, and a date is
+// drawn centred in its own box too. Anchoring to the box bottoms therefore left
+// a gap as tall as that slack — on the owner's document, enough to push the tag
+// into the footer.
+//
+// `opts` carries what the page knows and the stamp does not: its size, its
+// rotation, and the signature image's aspect (width ÷ height). Without them
+// this falls back to the old box-bottom behaviour rather than guessing.
+export function signNoBox(s, stamps = [], opts = {}) {
+  const { pageW = 595.28, pageH = 841.89, signatureAspect = null, rotation = 0, dateMaxSize = 24 } = opts;
   const page = s.page || 1;
-  const h = Math.min(1.6, Math.max(1.0, Number(s.h) * 0.2));
+  const pct = (pt) => (pt / pageH) * 100;
+  // A rotated page swaps the box's own frame against the page's, so the slack
+  // below the ink no longer runs down the page. Left alone rather than
+  // mis-corrected: those pages keep the behaviour they have always had.
+  const upright = ((rotation % 360) + 360) % 360 === 0;
+
+  // Tall enough that the 6 pt number is not shrunk by drawTextInBox (it sizes
+  // text at 72% of the box), and no taller — the text is centred in this box,
+  // so every extra point of height is a point of gap above it.
+  const h = pct(8.6);
+
   let bottom = Number(s.y) + Number(s.h);
+  if (upright && signatureAspect > 0) {
+    // fitContain centres the image: half the unused height sits below the ink.
+    const boxW = (Number(s.w) / 100) * pageW, boxH = (Number(s.h) / 100) * pageH;
+    const inkH = Math.min(boxH, boxW / signatureAspect);
+    bottom -= pct((boxH - inkH) / 2);
+  }
   for (const d of stamps) {
     if (d.type !== "date" || (d.page || 1) !== page) continue;
     const overlapsX = d.x < s.x + s.w && d.x + d.w > s.x;
     const justBelow = d.y >= s.y + s.h - 0.5 && d.y <= s.y + s.h + 6;
-    if (overlapsX && justBelow) bottom = Math.max(bottom, d.y + d.h);
+    if (!overlapsX || !justBelow) continue;
+    let dateBottom = Number(d.y) + Number(d.h);
+    if (upright) {
+      // drawTextInBox centres the date in its box too, so its glyphs stop a
+      // baseline's worth above the bottom edge.
+      const dH = (Number(d.h) / 100) * pageH;
+      const size = Math.min(dH * 0.72, dateMaxSize);
+      dateBottom -= pct((dH - size) / 2 + size * 0.12);
+    }
+    bottom = Math.max(bottom, dateBottom);
   }
-  let y = bottom + 0.3;
-  if (y + h > 99.5) y = Math.max(0, Number(s.y) - 0.3 - h);
+
+  // A hair of air, not a line of it.
+  let y = bottom + pct(1.2);
+  if (y + h > 99.5) y = Math.max(0, Number(s.y) - pct(1.2) - h);
   // Wide enough for "SF-2026-000123" at 6.5pt and no wider, so the tag sits
   // under the signature instead of spanning the page. It never grows past the
   // signature's own width — a wide signature does not want a wide tag.
