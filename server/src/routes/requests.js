@@ -8,7 +8,7 @@ import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } fr
 import { sendEmail } from "../email.js";
 import { notifyUser } from "../notify.js";
 import { notifyRouteOfCompletion } from "../workflowComplete.js";
-import { assignSignNo, releaseSignNo, signNumbersFor, recordDocHash, completesRoute, auditFor, signNumbersOn } from "../signRegister.js";
+import { assignSignNo, releaseSignNo, signNumbersFor, recordDocHash, signNumbersOn, recordOriginalHash } from "../signRegister.js";
 import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { signXlsxBuffer } from "../xlsx-sign.js";
 import {
@@ -238,14 +238,16 @@ export async function requireUnlocked(req, row) {
 // Confidential documents stay in memory end to end — decrypt, stamp, re-encrypt
 // — so a readable copy never exists on disk. Every signing path goes through
 // here, so none of them can forget.
-// `final`: this signature completes the document — on HQHB the audit page of
-// every Sign Number is appended (signRegister.js / pdf.js).
-async function stampAndStore({ row, stamps, final = false }) {
+// Nothing is added to the document but the signatures, their dates and the
+// small Sign Number tag. The fully signed PDF used to gain an audit page; it
+// was removed (owner, 2026-11-02) and the trace lives in the register, so the
+// original's fingerprint is written there instead of printed.
+async function stampAndStore({ row, stamps }) {
   const srcBytes = await readStored("documents", row.file_path);
   const isPdf = row.file_type === "pdf";
-  const audit = isPdf && final && signNumbersOn() ? await auditFor(row, srcBytes) : null;
+  await recordOriginalHash(row.id, srcBytes);
   const outBytes = isPdf
-    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps, audit }))
+    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps }))
     // Excel embeds signature images only — date fields are PDF-only.
     : await signXlsxBuffer({ buffer: srcBytes, stamps: stamps.filter(s => s.type !== "date" && s.signaturePath) });
   const outName = storedNameFor(`${row.id}.signed.${isPdf ? "pdf" : "xlsx"}`, row.confidential);
@@ -1218,7 +1220,6 @@ export async function approveRequestHandler(req, res, next) {
           ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt, signNo })),
           ...dateStampsFor(row.signer_date_fields_json, signedAt)
         ],
-        final: true, // a team request has one approver — this completes it
       });
       await stampSignedAttachments({ row, user: req.user, sig, signedAt });
     } catch (e) {
@@ -1326,7 +1327,7 @@ async function approveWorkflowStep({ req, res, row, signer }) {
         ...dateStampsFor(s.date_fields_json, signedAt)
       ];
     });
-    signedPath = await stampAndStore({ row, stamps, final: await completesRoute(row.id) });
+    signedPath = await stampAndStore({ row, stamps });
     // Supporting documents marked "needs signature" are signed by this approval.
     await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {
@@ -1448,7 +1449,6 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
                 ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt, signNo })),
                 ...dateStampsFor(row.signer_date_fields_json, signedAt)
               ],
-              final: true,
             });
             await stampSignedAttachments({ row, user: req.user, sig, signedAt });
           } catch (e) {
@@ -1516,7 +1516,7 @@ async function approveWorkflowStepInline({ req, row, signer }) {
         ...dateStampsFor(s.date_fields_json, signedAt)
       ];
     });
-    signedPath = await stampAndStore({ row, stamps, final: await completesRoute(row.id) });
+    signedPath = await stampAndStore({ row, stamps });
     // Supporting documents marked "needs signature" are signed by this approval.
     await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {

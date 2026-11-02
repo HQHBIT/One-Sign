@@ -86,9 +86,13 @@ export async function stampPdfMulti({ srcPath, stamps, outName }) {
 // memory, stamped here and re-encrypted before touching the disk, so a readable
 // copy never exists in the filesystem. stampPdfMulti is a thin wrapper over this
 // so both paths provably behave identically.
-// `audit` (optional): the fully-signed document's audit data — an audit page is
-// appended (addAuditPage). A stamp carrying `signNo` gets its Sign Number line.
-export async function stampPdfMultiBytes({ srcBytes, stamps, audit = null }) {
+// A stamp carrying `signNo` gets its small Sign Number tag.
+//
+// Nothing is ever ADDED to the document here beyond the signatures, their dates
+// and that tag. A fully signed document used to gain a Signature Audit Report
+// page; the owner asked for it gone (2026-11-02) and the whole trace now lives
+// in Admin → Signature register, which is the place to read it.
+export async function stampPdfMultiBytes({ srcBytes, stamps }) {
   const pdf = await PDFDocument.load(srcBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
 
@@ -133,7 +137,6 @@ export async function stampPdfMultiBytes({ srcBytes, stamps, audit = null }) {
     }
   }
 
-  if (audit) await addAuditPage(pdf, audit);
   return await pdf.save();
 }
 
@@ -143,9 +146,9 @@ const IST = (ts) => new Date(Number(ts) || Date.now()).toLocaleString("en-IN", {
 });
 // The tag on the page is the NUMBER and nothing else (owner, 2026-11-02): the
 // line that also carried "Signed via SignFlow" and the timestamp ran a third of
-// the page wide and got in the document's way. Everything it used to say is on
-// the audit page and in the register, where there is room for it; the page
-// itself only needs to point at the entry.
+// the page wide and got in the document's way. Everything it used to say is in
+// Admin → Signature register, where there is room to read it; the page itself
+// only needs to point at the entry.
 export const signNoText = (signNo) => String(signNo ?? "");
 
 // Where that tag goes, in the app's %-coordinates: a small box under the
@@ -172,111 +175,6 @@ export function signNoBox(s, stamps = []) {
   return { page, x, y, w, h };
 }
 
-// The page added at the end of a fully signed document: what it is, where it
-// came from, its original fingerprint, and every signature on it.
-async function addAuditPage(pdf, a) {
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const mono = await pdf.embedFont(StandardFonts.Courier);
-  const INK = rgb(0.06, 0.1, 0.18), MUTED = rgb(0.4, 0.43, 0.5), GOLD = rgb(0.72, 0.54, 0.29), LINE = rgb(0.86, 0.84, 0.8);
-  const W = 595.28, H = 841.89, M = 48;
-  const fit = (text, f, size, maxW) => {
-    let t = String(text ?? "");
-    if (f.widthOfTextAtSize(t, size) <= maxW) return t;
-    while (t.length > 1 && f.widthOfTextAtSize(t + "…", size) > maxW) t = t.slice(0, -1);
-    return t + "…";
-  };
-  // Words onto at most `max` lines of `maxW`; the last line ellipsed only if
-  // the text truly does not fit even then.
-  const wrap = (text, f, size, maxW, max) => {
-    const words = String(text ?? "").split(/\s+/).filter(Boolean);
-    const lines = [];
-    let line = "";
-    for (const w of words) {
-      const t = line ? `${line} ${w}` : w;
-      if (f.widthOfTextAtSize(t, size) <= maxW || !line) line = t;
-      else { lines.push(line); line = w; }
-    }
-    if (line) lines.push(line);
-    if (lines.length > max) { const keep = lines.slice(0, max); keep[max - 1] = fit(lines.slice(max - 1).join(" "), f, size, maxW); return keep; }
-    return lines.map((l) => fit(l, f, size, maxW));
-  };
-  const rows = a.signatures || [];
-  const PER_PAGE = 14;
-  const pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
-
-  for (let p = 0; p < pages; p++) {
-    const page = pdf.addPage([W, H]);
-    let y = H - M;
-    // Header band
-    page.drawRectangle({ x: 0, y: H - 6, width: W, height: 6, color: GOLD });
-    page.drawText("SignFlow", { x: M, y: y - 4, size: 11, font: bold, color: GOLD });
-    page.drawText("HQHB", { x: W - M - bold.widthOfTextAtSize("HQHB", 9), y: y - 2, size: 9, font: bold, color: MUTED });
-    y -= 34;
-    page.drawText("Signature Audit Report", { x: M, y, size: 20, font: bold, color: INK });
-    y -= 16;
-    page.drawText(fit(`Completed ${IST(a.completedAt)} IST`, font, 9.5, W - 2 * M), { x: M, y, size: 9.5, font, color: MUTED });
-    y -= 22;
-
-    if (p === 0) {
-      // Document details
-      const details = [
-        ["Document", a.documentName],
-        ["Document ID", a.documentId],
-        ["Requested by", a.requestedBy],
-        ["Sent for signature", `${IST(a.sentAt)} IST`],
-        ["Fully signed", `${IST(a.completedAt)} IST`],
-        ["Signatures", String(rows.length)],
-      ];
-      page.drawRectangle({ x: M, y: y - details.length * 17 - 34, width: W - 2 * M, height: details.length * 17 + 40, borderColor: LINE, borderWidth: 0.8, color: rgb(0.985, 0.98, 0.97) });
-      y -= 18;
-      for (const [k, v] of details) {
-        page.drawText(k, { x: M + 14, y, size: 9, font, color: MUTED });
-        page.drawText(fit(v, bold, 9.5, W - 2 * M - 150), { x: M + 140, y, size: 9.5, font: bold, color: INK });
-        y -= 17;
-      }
-      page.drawText("Original file (SHA-256)", { x: M + 14, y, size: 9, font, color: MUTED });
-      page.drawText(fit(a.originalSha256, mono, 7.6, W - 2 * M - 150), { x: M + 140, y, size: 7.6, font: mono, color: INK });
-      y -= 40;
-    }
-
-    // Signatures table
-    const cols = [{ t: "Sign No", w: 108 }, { t: "Signer", w: 244 }, { t: "Signed (IST)", w: 112 }, { t: "Step", w: W - 2 * M - 464 }];
-    page.drawText(p === 0 ? "Signatures" : "Signatures (continued)", { x: M, y, size: 12, font: bold, color: INK });
-    y -= 26;
-    page.drawRectangle({ x: M, y: y - 6, width: W - 2 * M, height: 20, color: rgb(0.06, 0.1, 0.18) });
-    let cx = M + 8;
-    for (const c of cols) { page.drawText(c.t, { x: cx, y: y, size: 8.5, font: bold, color: rgb(1, 1, 1) }); cx += c.w; }
-    y -= 26;
-    for (const [i, r] of rows.slice(p * PER_PAGE, (p + 1) * PER_PAGE).entries()) {
-      // A record meant for tracing never cuts a name short: it wraps (two lines).
-      const nameLines = wrap(r.signer, bold, 9, cols[1].w - 10, 2);
-      const byLines = r.actedBy ? wrap(`signed on their behalf by ${r.actedBy}`, font, 7.5, cols[1].w - 10, 2) : [];
-      const rowH = 10 + nameLines.length * 11 + byLines.length * 9.5;
-      if (i % 2 === 1) page.drawRectangle({ x: M, y: y - rowH + 14, width: W - 2 * M, height: rowH, color: rgb(0.965, 0.955, 0.94) });
-      cx = M + 8;
-      page.drawText(r.signNo, { x: cx, y, size: 8.5, font: mono, color: INK }); cx += cols[0].w;
-      let ly = y;
-      for (const l of nameLines) { page.drawText(l, { x: cx, y: ly, size: 9, font: bold, color: INK }); ly -= 11; }
-      for (const l of byLines) { page.drawText(l, { x: cx, y: ly + 1, size: 7.5, font, color: MUTED }); ly -= 9.5; }
-      cx += cols[1].w;
-      page.drawText(fit(IST(r.signedAt), font, 8.5, cols[2].w - 8), { x: cx, y, size: 8.5, font, color: INK }); cx += cols[2].w;
-      page.drawText(r.step ? `Step ${r.step}` : "—", { x: cx, y, size: 8.5, font, color: INK });
-      y -= rowH;
-      page.drawLine({ start: { x: M, y: y + 12 }, end: { x: W - M, y: y + 12 }, thickness: 0.5, color: LINE });
-    }
-
-    // Footer
-    const foot = "This page was added by SignFlow when the document was fully signed. Every Sign Number is kept in the SignFlow register held by the HQHB IT administrator — quote it to trace or verify a signature.";
-    const words = foot.split(" "); let line = "", fy = M + 18;
-    const lines = [];
-    for (const wd of words) { const tryL = line ? `${line} ${wd}` : wd; if (font.widthOfTextAtSize(tryL, 7.8) > W - 2 * M) { lines.push(line); line = wd; } else line = tryL; }
-    if (line) lines.push(line);
-    page.drawLine({ start: { x: M, y: fy + 16 }, end: { x: W - M, y: fy + 16 }, thickness: 0.6, color: LINE });
-    for (const l of lines) { page.drawText(l, { x: M, y: fy, size: 7.8, font, color: MUTED }); fy -= 11; }
-    page.drawText(`Audit page ${p + 1} of ${pages}`, { x: W - M - font.widthOfTextAtSize(`Audit page ${p + 1} of ${pages}`, 7.8), y: M - 6, size: 7.8, font, color: MUTED });
-  }
-}
 
 
 // Draws a date string centred in a placed box, auto-shrinking to fit. Shared by

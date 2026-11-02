@@ -11,13 +11,13 @@ const router = Router();
 // where, and the fingerprint of the file it produced. A confidential document's
 // name is withheld here as everywhere else the IT Admin looks.
 const REG_COLS = `g.sign_no, g.request_id, g.signer_id, g.signer_name, g.acted_by_name, g.step_order, g.signed_at,
-  g.ip, g.user_agent, g.doc_sha256, g.source,
+  g.ip, g.user_agent, g.doc_sha256, g.original_sha256, g.source,
   COALESCE(r.file_name, g.document_name) AS file_name, COALESCE(r.confidential, g.confidential) AS confidential,
   COALESCE(r.status, 'deleted') AS status, COALESCE(u.name, g.requested_by_name) AS requestor_name`;
 const regOut = (g) => ({
   signNo: g.sign_no, requestId: g.request_id, signerId: g.signer_id, signerName: g.signer_name,
   actedBy: g.acted_by_name || null, step: g.step_order, signedAt: Number(g.signed_at),
-  ip: g.ip, userAgent: g.user_agent, docSha256: g.doc_sha256, source: g.source,
+  ip: g.ip, userAgent: g.user_agent, docSha256: g.doc_sha256, originalSha256: g.original_sha256, source: g.source,
   documentName: Number(g.confidential) ? "Confidential document" : g.file_name,
   confidential: !!Number(g.confidential), documentStatus: g.status, requestedBy: g.requestor_name,
 });

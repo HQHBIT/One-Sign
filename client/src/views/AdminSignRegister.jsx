@@ -134,6 +134,10 @@ function SignNumberDetail({ signNo, onClose, onOpenOther }) {
             {row("Document ID", s.requestId, true)}
             {row("Requested by", s.requestedBy)}
             {row("Status", s.documentStatus)}
+            {/* The document as it arrived, before anybody signed it. This used
+                to be printed on the audit page appended to the signed PDF;
+                that page is gone, so the register is where it lives now. */}
+            {row("Original file (SHA-256)", s.originalSha256, true)}
           </div>
           <div>
             <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1.5">Every signature on it</div>
