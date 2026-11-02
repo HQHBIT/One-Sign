@@ -124,13 +124,12 @@ export async function stampPdfMultiBytes({ srcBytes, stamps, audit = null }) {
     const sigImg = await embed(s.signaturePath, s.signatureBytes);
     page.drawImage(sigImg, fitContain(place, sigImg.width, sigImg.height));
 
-    // HQHB Sign Number: one small grey line under the signature (and under a
-    // date sitting directly beneath it), so every signature on the page says
-    // which register entry it is.
+    // HQHB Sign Number: a small grey tag under the signature (and under a date
+    // sitting directly beneath it), naming the register entry and nothing more.
     if (s.signNo) {
       const box = signNoBox(s, stamps);
-      drawTextInBox(page, font, signNoText(s.signNo, s.signedAt), placeInRotatedPage(page, box),
-        { maxSize: 6.5, color: rgb(0.36, 0.39, 0.46) });
+      drawTextInBox(page, font, signNoText(s.signNo), placeInRotatedPage(page, box),
+        { maxSize: 6, color: rgb(0.45, 0.48, 0.54) });
     }
   }
 
@@ -142,15 +141,20 @@ export async function stampPdfMultiBytes({ srcBytes, stamps, audit = null }) {
 const IST = (ts) => new Date(Number(ts) || Date.now()).toLocaleString("en-IN", {
   timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
 });
-export const signNoText = (signNo, signedAt) => `${signNo} · Signed via SignFlow · ${IST(signedAt)} IST`;
+// The tag on the page is the NUMBER and nothing else (owner, 2026-11-02): the
+// line that also carried "Signed via SignFlow" and the timestamp ran a third of
+// the page wide and got in the document's way. Everything it used to say is on
+// the audit page and in the register, where there is room for it; the page
+// itself only needs to point at the entry.
+export const signNoText = (signNo) => String(signNo ?? "");
 
-// Where the Sign Number line goes, in the app's %-coordinates: under the
-// signature, at least a third of the page wide (a narrow box would shrink the
-// text to nothing), pushed below a date stamped right under the signature, and
-// above the signature instead when there is no room left on the page.
+// Where that tag goes, in the app's %-coordinates: a small box under the
+// signature, no wider than it needs to be, pushed below a date stamped right
+// under the signature, and above the signature instead when the page has no
+// room left.
 export function signNoBox(s, stamps = []) {
   const page = s.page || 1;
-  const h = Math.min(2.2, Math.max(1.3, Number(s.h) * 0.24));
+  const h = Math.min(1.6, Math.max(1.0, Number(s.h) * 0.2));
   let bottom = Number(s.y) + Number(s.h);
   for (const d of stamps) {
     if (d.type !== "date" || (d.page || 1) !== page) continue;
@@ -160,7 +164,10 @@ export function signNoBox(s, stamps = []) {
   }
   let y = bottom + 0.3;
   if (y + h > 99.5) y = Math.max(0, Number(s.y) - 0.3 - h);
-  const w = Math.min(98, Math.max(Number(s.w), 34));
+  // Wide enough for "SF-2026-000123" at 6.5pt and no wider, so the tag sits
+  // under the signature instead of spanning the page. It never grows past the
+  // signature's own width — a wide signature does not want a wide tag.
+  const w = Math.min(98, Math.max(Number(s.w), 13));
   const x = Math.max(1, Math.min(Number(s.x) + Number(s.w) / 2 - w / 2, 99 - w));
   return { page, x, y, w, h };
 }
