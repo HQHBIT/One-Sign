@@ -455,3 +455,32 @@ jobs:
                 await c.end();
               })().catch(e => console.log("DB ERROR: " + e.code + " - " + e.message));
             ' 2>&1 | tail -12
+
+            echo
+            echo "=============== 16. did the approvals table migrate? ==============="
+            # Counts and column NAMES only — this repository is public and so are these
+            # logs. No document titles, no names, no ids.
+            cd /home/ubuntu/OneSign/server || exit 0
+            node -e '
+              const mysql = require("mysql2/promise");
+              require("dotenv").config();
+              (async () => {
+                const cfg = {
+                  host: process.env.DB_HOST || "localhost",
+                  port: parseInt(process.env.DB_PORT || "3306", 10),
+                  user: process.env.DB_USER || "root",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME || "signflow"
+                };
+                if (process.env.DB_SOCKET_PATH) cfg.socketPath = process.env.DB_SOCKET_PATH;
+                const c = await mysql.createConnection(cfg);
+                const rows = async (sql, p) => (await c.execute(sql, p || []))[0];
+                const t = await rows("SHOW TABLES LIKE ?", ["ea_approvals"]);
+                console.log("ea_approvals exists: " + (t.length ? "yes" : "NO"));
+                if (t.length) {
+                  console.log("its columns: " + (await rows("SHOW COLUMNS FROM ea_approvals")).map(r => r.Field).join(","));
+                  console.log("stamps recorded so far: " + (await rows("SELECT COUNT(*) AS n FROM ea_approvals"))[0].n);
+                }
+                await c.end();
+              })().catch(e => console.log("DB ERROR: " + e.code + " - " + e.message));
+            ' 2>&1 | tail -6
