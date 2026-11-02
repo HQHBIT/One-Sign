@@ -1324,8 +1324,19 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, r
                       <Undo2 size={12} /> Withdraw
                     </button>
                   )}
-                  {r.hasSignedFile && <DownloadBtn req={r} user={user} />}
-                  {r.hasSignedFile && <PrintBtn req={r} />}
+                  {/* Offered whether or not anything has been signed yet. On a
+                      multi-step route a document can sit here for days with no
+                      signed copy in existence, and the requestor still needs to
+                      be able to take a copy away (owner, 2026-11-02). Both
+                      buttons already fall back to the ORIGINAL file when there
+                      is no signed one, and both keep the confidential rules:
+                      Download hides itself unless the requestor owns a fully
+                      signed document, Print hides itself outright, and the
+                      server refuses either way. */}
+                  {/* Retention may already have removed the files; the server
+                      answers 410 for those, so do not offer a dead button. */}
+                  {!r.filesPurgedAt && <DownloadBtn req={r} user={user} />}
+                  {!r.filesPurgedAt && <PrintBtn req={r} />}
                 </div>
               )} />
           ))}
