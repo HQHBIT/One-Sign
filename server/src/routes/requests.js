@@ -938,12 +938,22 @@ async function isExecutiveOn(userId, row) {
 // ============================================================
 //   preview / download
 // ============================================================
+// HQHB: the requestor DOWNLOADS a copy only once every signer has signed
+// (owner, 2026-11-02). Viewing in SignFlow is unaffected; approvers keep their
+// download (they may take a paper away to read before signing). The client
+// greys out Download/Print for the same case (lib/finalCopy.js).
+const FINAL_COPY_ONLY = "Available once every signer has signed";
+const requestorCopyTooEarly = (req, row) =>
+  deploymentOrg() === "hqhb" && req.query?.download === "1"
+  && row.requestor_id === req.user.id && row.status !== "approved";
+
 router.get("/:id/file", authRequired, async (req, res, next) => {
   try {
     const row = await queryOne("SELECT * FROM requests WHERE id = ?", [req.params.id]);
     if (!row) return res.status(404).end();
     if (!(await authoriseAccess(req.user, row))) return res.status(403).end();
     if (row.files_purged_at) return res.status(410).json(removedBody(row));
+    if (requestorCopyTooEarly(req, row)) return res.status(403).json({ error: FINAL_COPY_ONLY });
     if (row.confidential) {
       const gate = await requireUnlocked(req, row);
       if (gate) return res.status(403).json(gate);
@@ -967,6 +977,7 @@ router.get("/:id/signed", authRequired, async (req, res, next) => {
     // Excel requests approved before real .xlsx stamping existed recorded a
     // ".signed.json" manifest rather than a document — serve the original for those.
     if (/\.json$/i.test(row.signed_file_path)) return res.send(await readStored("documents", row.file_path));
+    if (requestorCopyTooEarly(req, row)) return res.status(403).json({ error: FINAL_COPY_ONLY });
     if (row.confidential) {
       const gate = await requireUnlocked(req, row);
       if (gate) return res.status(403).json(gate);

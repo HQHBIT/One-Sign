@@ -1325,7 +1325,7 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, r
                     </button>
                   )}
                   {r.hasSignedFile && <DownloadBtn req={r} user={user} />}
-                  {r.hasSignedFile && <PrintBtn req={r} />}
+                  {r.hasSignedFile && <PrintBtn req={r} user={user} />}
                 </div>
               )} />
           ))}
@@ -1552,7 +1552,7 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
               <div className="flex flex-wrap gap-2">
                 <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 <DownloadBtn req={r} user={user} />
-                <PrintBtn req={r} />
+                <PrintBtn req={r} user={user} />
                 {moveMenu}
               </div>
             )}
@@ -1792,7 +1792,7 @@ function PreviewDrawer({ req, onClose, users, teams, user }) {
                 (greyed inside the 1-hour window; confidential = requestor only,
                 once fully signed, and only while unlocked). */}
             {!locked && !req.filesPurgedAt && <DownloadBtn req={req} user={user} />}
-            {!locked && !req.filesPurgedAt && <PrintBtn req={req} />}
+            {!locked && !req.filesPurgedAt && <PrintBtn req={req} user={user} />}
             <StatusPill status={req.status} />
             <button onClick={onClose} className="btn-ghost text-xs"><X size={14} /></button>
           </div>
@@ -2759,7 +2759,7 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
                   <button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>
                 )}
                 <DownloadBtn req={r} user={user} />
-                <PrintBtn req={r} />
+                <PrintBtn req={r} user={user} />
                 {moveMenu}
               </div>
             )} />
@@ -4472,7 +4472,7 @@ function AdminDocuments({ requests, users, teams, user, back, defaultTeamId }) {
         {list.length === 0 ? <div className="p-10 text-center opacity-50 text-sm">No documents.</div> :
           list.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
-              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} user={user} /><PrintBtn req={r} /></div>} />
+              actions={<div className="flex flex-wrap gap-2"><DownloadBtn req={r} user={user} /><PrintBtn req={r} user={user} /></div>} />
           ))}
       </div>
     </div>

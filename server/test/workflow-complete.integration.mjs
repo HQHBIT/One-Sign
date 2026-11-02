@@ -84,8 +84,15 @@ try {
   ck(r.status === 200, `the first signer signs (${r.status})`);
   await settle();
   ck((await mailsTo(A, t0)).every((m) => m.template !== "workflow_complete"), "nobody is told it is complete while the second signer is still to sign");
+  // The requestor's copy waits for the last signature (owner, 2026-11-02).
+  const getSigned = (who, dl) => fetch(`${BASE}/api/requests/${id}/signed${dl ? "?download=1" : ""}`, { headers: hdr(who) });
+  r = await getSigned(R, true);
+  ck(r.status === 403 && /every signer has signed/.test((await j(r)).error || ""), `mid-route, the requestor cannot download the partly signed copy (${r.status})`);
+  ck((await getSigned(R, false)).status === 200, "…but can still view it in SignFlow");
+  ck((await getSigned(A, true)).status === 200, "an approver keeps their download");
   r = await approve(B, id);
   ck(r.status === 200 && (await j(r)).request?.status === "approved", `the last signer signs and it is approved (${r.status})`);
+  ck((await getSigned(R, true)).status === 200, "once fully signed, the requestor downloads it");
   await settle();
   for (const [who, label] of [[A, "the first signer"], [B, "the last signer"]]) {
     const done = (await mailsTo(who, t0)).filter((m) => m.template === "workflow_complete");

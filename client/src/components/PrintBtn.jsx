@@ -2,17 +2,19 @@ import { useState } from "react";
 import { Printer } from "lucide-react";
 import { api } from "../api.js";
 import { spreadsheetPrintDoc } from "../lib/printDoc.js";
+import { requestorMustWait, WAIT_TITLE } from "../lib/finalCopy.js";
 
-export function PrintBtn({ req }) {
+export function PrintBtn({ req, user }) {
   // Printing produces a copy that leaves every control behind.
   if (req.confidential) return null;
   const [busy, setBusy] = useState(false);
   // Inside the 1-hour rejection window the document isn't final — the approver
   // can still reject or withdraw — so printing is held until it completes.
-  if (req.status === "approved_pending") {
+  // HQHB: the requestor's copy waits for the last signature (lib/finalCopy.js).
+  if (req.status === "approved_pending" || requestorMustWait(req, user)) {
     return (
       <button className="btn-ghost text-xs" disabled aria-disabled="true"
-        title="Available once the 1-hour rejection window completes"
+        title={requestorMustWait(req, user) ? WAIT_TITLE : "Available once the 1-hour rejection window completes"}
         style={{ opacity: 0.35, cursor: "not-allowed" }}>
         <Printer size={12} /> Print
       </button>

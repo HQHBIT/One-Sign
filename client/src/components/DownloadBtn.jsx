@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
 import { api } from "../api.js";
+import { requestorMustWait, WAIT_TITLE } from "../lib/finalCopy.js";
 
 export function DownloadBtn({ req, user }) {
   const [busy, setBusy] = useState(false);
@@ -12,10 +13,11 @@ export function DownloadBtn({ req, user }) {
   }
   // Inside the 1-hour rejection window the document isn't final — the approver
   // can still reject or withdraw — so the file can't be taken out yet.
-  if (req.status === "approved_pending") {
+  // HQHB: the requestor's copy waits for the last signature (lib/finalCopy.js).
+  if (req.status === "approved_pending" || requestorMustWait(req, user)) {
     return (
       <button className="btn-ghost text-xs" disabled aria-disabled="true"
-        title="Available once the 1-hour rejection window completes"
+        title={requestorMustWait(req, user) ? WAIT_TITLE : "Available once the 1-hour rejection window completes"}
         style={{ opacity: 0.35, cursor: "not-allowed" }}>
         <Download size={12} /> Download
       </button>
