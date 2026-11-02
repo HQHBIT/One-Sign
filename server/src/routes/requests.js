@@ -8,6 +8,7 @@ import { authRequired, requireRole, isSigner, SIGNER_ROLES, signActionToken } fr
 import { sendEmail } from "../email.js";
 import { notifyUser } from "../notify.js";
 import { notifyRouteOfCompletion } from "../workflowComplete.js";
+import { assignSignNo, releaseSignNo, signNumbersFor, recordDocHash, completesRoute, auditFor, signNumbersOn } from "../signRegister.js";
 import { stampPdfMultiBytes, bakeOrientation, bakeUniformRotation, applySelfMarks } from "../pdf.js";
 import { signXlsxBuffer } from "../xlsx-sign.js";
 import {
@@ -237,19 +238,24 @@ export async function requireUnlocked(req, row) {
 // Confidential documents stay in memory end to end — decrypt, stamp, re-encrypt
 // — so a readable copy never exists on disk. Every signing path goes through
 // here, so none of them can forget.
-async function stampAndStore({ row, stamps }) {
+// `final`: this signature completes the document — on HQHB the audit page of
+// every Sign Number is appended (signRegister.js / pdf.js).
+async function stampAndStore({ row, stamps, final = false }) {
   const srcBytes = await readStored("documents", row.file_path);
   const isPdf = row.file_type === "pdf";
+  const audit = isPdf && final && signNumbersOn() ? await auditFor(row, srcBytes) : null;
   const outBytes = isPdf
-    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps }))
+    ? Buffer.from(await stampPdfMultiBytes({ srcBytes, stamps, audit }))
     // Excel embeds signature images only — date fields are PDF-only.
     : await signXlsxBuffer({ buffer: srcBytes, stamps: stamps.filter(s => s.type !== "date" && s.signaturePath) });
   const outName = storedNameFor(`${row.id}.signed.${isPdf ? "pdf" : "xlsx"}`, row.confidential);
   // Returns a bucket key once the object-storage copy has been read back and
   // verified, otherwise the bare filename. Either way the disk copy exists, so
   // readStored can always fall back to it.
-  return await writeStored("signed", outName, sealIfConfidential(outBytes, row.confidential),
+  const stored = await writeStored("signed", outName, sealIfConfidential(outBytes, row.confidential),
     { contentType: isPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  await recordDocHash(row.id, outBytes);
+  return stored;
 }
 
 // HQHB "Recommend changes": supporting documents the requestor marked as needing
@@ -1200,6 +1206,8 @@ export async function approveRequestHandler(req, res, next) {
     }
 
     let signedPath = null;
+    // HQHB: this signature's Sign Number (null elsewhere).
+    const signNo = await assignSignNo({ requestId: row.id, signerRef: "single", signerId: req.user.id, signerName: req.user.name, signedAt, req });
     try {
       const sig = await signatureSource(req.userRow.signature_path);
       // every signature box + any date fields the requestor placed for the
@@ -1207,13 +1215,15 @@ export async function approveRequestHandler(req, res, next) {
       signedPath = await stampAndStore({
         row,
         stamps: [
-          ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+          ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt, signNo })),
           ...dateStampsFor(row.signer_date_fields_json, signedAt)
-        ]
+        ],
+        final: true, // a team request has one approver — this completes it
       });
       await stampSignedAttachments({ row, user: req.user, sig, signedAt });
     } catch (e) {
       console.error("[approve] stamp failed", e);
+      await releaseSignNo(row.id, "single");
       return res.status(500).json({ error: "Failed to stamp signature" });
     }
 
@@ -1281,6 +1291,12 @@ async function approveWorkflowStep({ req, res, row, signer }) {
     autoDated = true;
   }
 
+  // HQHB: this signer's Sign Number, then every number given so far on this
+  // document — the rebuild reprints them all, unchanged.
+  const stepRow = await queryOne("SELECT step_order FROM request_steps WHERE id = ?", [signer.step_id]);
+  await assignSignNo({ requestId: row.id, signerRef: signer.id, signerId: req.user.id, signerName: req.user.name, stepOrder: stepRow?.step_order ?? null, signedAt: Date.now(), req });
+  const signNos = await signNumbersFor(row.id);
+
   // Collect all signed signers in order to stamp
   const allSigned = await query(`
     SELECT sg.*, u.name AS user_name FROM request_step_signers sg
@@ -1303,17 +1319,19 @@ async function approveWorkflowStep({ req, res, row, signer }) {
           ...sigs.get(s.signature_path),
           page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
           signerName: s.user_name,
-          signedAt
+          signedAt,
+          signNo: signNos.get(s.id) || null,
         })),
         // the signer's own placeable date fields, all showing their signing date
         ...dateStampsFor(s.date_fields_json, signedAt)
       ];
     });
-    signedPath = await stampAndStore({ row, stamps });
+    signedPath = await stampAndStore({ row, stamps, final: await completesRoute(row.id) });
     // Supporting documents marked "needs signature" are signed by this approval.
     await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {
     console.error("[approve workflow] stamp failed", e);
+    await releaseSignNo(row.id, signer.id);
     // Roll back the signer status so it can be retried
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     // …and the date we auto-added for this attempt, so a retry starts clean.
@@ -1421,17 +1439,20 @@ router.post("/batch-approve", authRequired, requireRole(...SIGNER_ROLES), async 
           const markerList = Array.isArray(parsedMarker) ? parsedMarker : [parsedMarker];
           const signedAt = Date.now();
           let signedPath;
+          const signNo = await assignSignNo({ requestId: row.id, signerRef: "single", signerId: req.user.id, signerName: req.user.name, signedAt, req });
           try {
             const sig = await signatureSource(req.userRow.signature_path);
             signedPath = await stampAndStore({
               row,
               stamps: [
-                ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt })),
+                ...markerList.map(m => ({ ...sig, page: m.page || 1, x: m.x, y: m.y, w: m.w, h: m.h, signerName: req.user.name, signedAt, signNo })),
                 ...dateStampsFor(row.signer_date_fields_json, signedAt)
-              ]
+              ],
+              final: true,
             });
             await stampSignedAttachments({ row, user: req.user, sig, signedAt });
           } catch (e) {
+            await releaseSignNo(row.id, "single");
             results.failed.push({ id, error: "Stamp failed" });
             continue;
           }
@@ -1465,6 +1486,9 @@ async function approveWorkflowStepInline({ req, row, signer }) {
     "UPDATE request_step_signers SET status = 'signed', signed_at = ?, signature_path = ? WHERE id = ?",
     [Date.now(), req.userRow.signature_path, signer.id]
   );
+  const stepRow = await queryOne("SELECT step_order FROM request_steps WHERE id = ?", [signer.step_id]);
+  await assignSignNo({ requestId: row.id, signerRef: signer.id, signerId: req.user.id, signerName: req.user.name, stepOrder: stepRow?.step_order ?? null, signedAt: Date.now(), req });
+  const signNos = await signNumbersFor(row.id);
 
   const allSigned = await query(`
     SELECT sg.*, u.name AS user_name FROM request_step_signers sg
@@ -1485,16 +1509,18 @@ async function approveWorkflowStepInline({ req, row, signer }) {
           ...sigs.get(s.signature_path),
           page: b.page, x: b.x, y: b.y, w: b.w, h: b.h,
           signerName: s.user_name,
-          signedAt
+          signedAt,
+          signNo: signNos.get(s.id) || null,
         })),
         // the signer's own placeable date fields, all showing their signing date
         ...dateStampsFor(s.date_fields_json, signedAt)
       ];
     });
-    signedPath = await stampAndStore({ row, stamps });
+    signedPath = await stampAndStore({ row, stamps, final: await completesRoute(row.id) });
     // Supporting documents marked "needs signature" are signed by this approval.
     await stampSignedAttachments({ row, user: req.user, sig: await signatureSource(req.userRow.signature_path), signedAt: Date.now() });
   } catch (e) {
+    await releaseSignNo(row.id, signer.id);
     await execute("UPDATE request_step_signers SET status = 'pending', signed_at = NULL, signature_path = NULL WHERE id = ?", [signer.id]);
     return { error: "Stamp failed" };
   }

@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { initDb } from "./db.js";
+import { backfillRegister } from "./signRegister.js";
 import { startScheduler } from "./scheduler.js";
 import { startRetention } from "./retention.js";
 import { startDiskCachePruning } from "./diskCache.js";
@@ -60,6 +61,10 @@ async function main() {
     console.error("  and that the MySQL server is running and reachable.\n");
     process.exit(1);
   }
+  // HQHB: number every signature made before Sign Numbers existed, oldest first,
+  // BEFORE the server takes a new one — so the register runs in signing order.
+  // Never fatal: a failure here must not keep the site down.
+  await backfillRegister().catch((e) => console.error("[sign-register] backfill failed:", e.message));
 
   const app = express();
   // One front proxy (nginx/Cloudflare) sits ahead of us, so trust exactly one

@@ -119,6 +119,9 @@ async function runAsExecutive(req, res, next, ctx, handler, { action, body }) {
     body,
     file: req.file,
     headers: req.headers,
+    ip: req.ip,
+    // Recorded on the Sign Number: who actually pressed Approve.
+    actingAssistant: { id: req.user.id, name: req.user.name },
   };
   let afterOk = Promise.resolve();
   const sendJson = res.json.bind(res);

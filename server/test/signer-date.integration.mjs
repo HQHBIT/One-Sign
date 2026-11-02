@@ -63,7 +63,10 @@ check("signer approve -> 200", appr.status === 200);
 
 const signedPath = path.resolve("server/uploads/signed", reqId + ".signed.pdf");
 const signed = (reqId && fs.existsSync(signedPath)) ? fs.readFileSync(signedPath) : null;
-check("signed doc exists + valid PDF", !!signed && (await PDFDocument.load(signed)).getPageCount() === 1);
+// One page in, two pages out: the single page that was signed, plus the
+// Signature Audit Report appended once the document is fully signed. This
+// asserted exactly 1 page, which was true until Sign Numbers added that page.
+check("signed doc exists + valid PDF", !!signed && (await PDFDocument.load(signed)).getPageCount() === 2);
 check("signed doc is stamped (bigger than plain input)", !!signed && signed.length > pdfBytes.length + 100);
 
 // cleanup

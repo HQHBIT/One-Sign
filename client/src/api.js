@@ -130,6 +130,11 @@ export const api = {
     const res = await this.fetch(`/api/assist/${executiveId}/signature-image`, { raw: true });
     return URL.createObjectURL(await res.blob());
   },
+  // HQHB Signature register (admin): search, and one Sign Number's full trace.
+  adminSignRegister({ q = "", limit = 50, offset = 0 } = {}) {
+    return this.fetch(`/api/admin/sign-register?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`);
+  },
+  adminSignNumber(signNo) { return this.fetch(`/api/admin/sign-register/${encodeURIComponent(signNo)}`); },
   // What the executive was sent to read (Document flow review / CC), and the file.
   assistForInfo(executiveId) { return this.fetch(`/api/assist/${executiveId}/for-info`).then(r => r.documents); },
   async assistForInfoFileUrl(executiveId, documentId) {

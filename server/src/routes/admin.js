@@ -1,9 +1,65 @@
 import { Router } from "express";
 import { healthCheck as storageHealthCheck } from "../storage.js";
-import { query } from "../db.js";
+import { query, queryOne } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
+import { signNumbersOn } from "../signRegister.js";
 
 const router = Router();
+
+// ---------- Sign Number register (HQHB) — signRegister.js ----------
+// Every signature's number, who signed, for whom an assistant acted, when, from
+// where, and the fingerprint of the file it produced. A confidential document's
+// name is withheld here as everywhere else the IT Admin looks.
+const REG_COLS = `g.sign_no, g.request_id, g.signer_id, g.signer_name, g.acted_by_name, g.step_order, g.signed_at,
+  g.ip, g.user_agent, g.doc_sha256, g.source,
+  COALESCE(r.file_name, g.document_name) AS file_name, COALESCE(r.confidential, g.confidential) AS confidential,
+  COALESCE(r.status, 'deleted') AS status, COALESCE(u.name, g.requested_by_name) AS requestor_name`;
+const regOut = (g) => ({
+  signNo: g.sign_no, requestId: g.request_id, signerId: g.signer_id, signerName: g.signer_name,
+  actedBy: g.acted_by_name || null, step: g.step_order, signedAt: Number(g.signed_at),
+  ip: g.ip, userAgent: g.user_agent, docSha256: g.doc_sha256, source: g.source,
+  documentName: Number(g.confidential) ? "Confidential document" : g.file_name,
+  confidential: !!Number(g.confidential), documentStatus: g.status, requestedBy: g.requestor_name,
+});
+
+router.get("/admin/sign-register", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    if (!signNumbersOn()) return res.json({ enabled: false, total: 0, signatures: [] });
+    const q = String(req.query.q || "").trim();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+    const like = `%${q}%`;
+    // A confidential document's name is never matched either — searching for
+    // it must not reveal that it exists.
+    const where = q
+      ? `WHERE g.sign_no LIKE ? OR g.signer_name LIKE ? OR g.request_id LIKE ? OR (COALESCE(r.confidential, g.confidential, 0) = 0 AND COALESCE(r.file_name, g.document_name) LIKE ?)`
+      : "";
+    const params = q ? [like, like, like, like] : [];
+    const [{ n }] = await query(`SELECT COUNT(*) AS n FROM sign_register g LEFT JOIN requests r ON r.id = g.request_id ${where}`, params);
+    const rows = await query(
+      `SELECT ${REG_COLS} FROM sign_register g
+         LEFT JOIN requests r ON r.id = g.request_id LEFT JOIN users u ON u.id = r.requestor_id
+         ${where} ORDER BY g.signed_at DESC, g.seq DESC LIMIT ${limit} OFFSET ${offset}`, params);
+    res.json({ enabled: true, total: Number(n), signatures: rows.map(regOut) });
+  } catch (e) { next(e); }
+});
+
+// One Sign Number, with every other signature on the same document.
+router.get("/admin/sign-register/:signNo", authRequired, requireRole("admin"), async (req, res, next) => {
+  try {
+    if (!signNumbersOn()) return res.status(404).json({ error: "Not found" });
+    const g = await queryOne(
+      `SELECT ${REG_COLS} FROM sign_register g
+         LEFT JOIN requests r ON r.id = g.request_id LEFT JOIN users u ON u.id = r.requestor_id
+        WHERE g.sign_no = ?`, [String(req.params.signNo).trim().toUpperCase()]);
+    if (!g) return res.status(404).json({ error: "No signature has that Sign Number" });
+    const siblings = await query(
+      `SELECT ${REG_COLS} FROM sign_register g
+         LEFT JOIN requests r ON r.id = g.request_id LEFT JOIN users u ON u.id = r.requestor_id
+        WHERE g.request_id = ? ORDER BY g.signed_at, g.seq`, [g.request_id]);
+    res.json({ signature: regOut(g), document: siblings.map(regOut) });
+  } catch (e) { next(e); }
+});
 
 // Object storage diagnostic. Does a real write / read-back / delete rather than
 // only pinging the bucket — credentials that can reach a bucket but not write to
