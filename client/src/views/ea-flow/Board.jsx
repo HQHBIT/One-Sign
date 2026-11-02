@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send, Inbox } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Stamp, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send, Inbox } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -150,6 +150,42 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
       notify(e.message || "Could not send the document", "error");
     }
   };
+  // Write down that this paper was approved at the stage it is sitting on, then
+  // ask whether it should move on — approving and moving are two decisions, and
+  // a paper is sometimes approved but not yet ready to travel.
+  const [approving, setApproving] = useState(null);
+  const approve = async (doc) => {
+    const here = stages.find((s) => s.id === doc.stageId);
+    setApproving(doc.id);
+    try {
+      const r = await api.eaApprove(doc.id);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? r.document : d)));
+      notify(`${doc.title} marked approved at ${here?.name || "this stage"}`, "success");
+      await onBoardChanged();
+      // A signature stage holds the card until it is signed, whoever approves
+      // it — so do not offer a move the move route would refuse.
+      if (r.heldBy) return notify(`It stays here until ${r.heldBy} signs`, "info");
+      const next = r.nextStage && stages.find((s) => s.id === r.nextStage.id);
+      if (!next) return;
+      const go = await confirm({
+        title: `Move it on to "${next.name}"?`,
+        message: `${doc.title} is approved at ${here?.name || "this stage"}. The approval and the time it was given stay on the card wherever it goes.`,
+        confirmLabel: `Move to ${next.name}`,
+        cancelLabel: "Leave it here",
+      });
+      if (go) await move(r.document, next);
+    } catch (e) { notify(e.message || "Could not mark it approved", "error"); }
+    finally { setApproving(null); }
+  };
+  const unapprove = async (doc) => {
+    try {
+      const updated = await api.eaUnapprove(doc.id);
+      setDocs((ds) => ds.map((d) => (d.id === doc.id ? updated : d)));
+      notify(`Approval removed from ${doc.title}`, "success");
+      await onBoardChanged();
+    } catch (e) { notify(e.message || "Could not undo the approval", "error"); }
+  };
+
   const removeDoc = async (doc) => {
     if (!(await confirm({ title: `Remove "${doc.title}"?`, message: "The card and its trail are removed from this board. Any signature request it raised stays in your requests.", confirmLabel: "Remove", destructive: true }))) return;
     try { await api.eaDeleteDocument(doc.id); setDocs((ds) => ds.filter((d) => d.id !== doc.id)); await onBoardChanged(); }
@@ -181,6 +217,7 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
   const cardProps = {
     stages, tick, onMove: move, onOpen: open, onDownload: download, onRemove: removeDoc,
     onRemind: remind, onReview: (d) => setReviewing(d), onPlan: (d) => setPlanning(d), onSend: send,
+    onApprove: approve, onUnapprove: unapprove, approving,
   };
   const docsIn = (s) => (docs || []).filter((d) => d.stageId === s.id);
   // What a stage asks for, in the same words as the stage editor.
@@ -256,7 +293,8 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
             // column can start one — not only the first.
             onAddHere={() => setAdding({ stageId: s.id })}
             onMove={move} onOpen={open} onDownload={download} onRemove={removeDoc}
-            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} onSend={send} reminding={reminding} />
+            onRemind={remind} onReview={(d) => setReviewing(d)} onPlan={(d) => setPlanning(d)} onSend={send}
+            onApprove={approve} onUnapprove={unapprove} approving={approving} reminding={reminding} />
         );
       }} />
       )}
@@ -344,7 +382,7 @@ function FlowGrid({ count, renderStage }) {
   );
 }
 
-function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, reminding }) {
+function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen, menuRef, onMenu, onEdit, onDelete, onShift, onDrop, onAddHere, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, onApprove, onUnapprove, approving, reminding }) {
   const [over, setOver] = useState(false);
   return (
     // A card, like every other surface in the app, rather than the flat grey
@@ -397,7 +435,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
         )}
       </div>
       <div className="px-2 pb-2 space-y-2 flex-1">
-        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} onSend={onSend} reminding={reminding === d.id} />)}
+        {docs.map((d) => <Card key={d.id} doc={d} stage={stage} stages={stages} tick={tick} onMove={onMove} onOpen={onOpen} onDownload={onDownload} onRemove={onRemove} onRemind={onRemind} onReview={onReview} onPlan={onPlan} onSend={onSend} onApprove={onApprove} onUnapprove={onUnapprove} approving={approving} reminding={reminding === d.id} />)}
         {/* The empty state was a dead label on every column but the first,
             which quietly said "documents begin over there". It is the same
             invitation everywhere now, and it is clickable. */}
@@ -415,7 +453,7 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
   );
 }
 
-function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, reminding }) {
+function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, onRemind, onReview, onPlan, onSend, onApprove, onUnapprove, approving, reminding }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef(null);
   // How many signatories already have a box waiting for them. On the button, so
@@ -440,6 +478,14 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [menu]);
+  // The approval trail. It follows the DOCUMENT, so a card that was approved
+  // two stages ago still says so here — that is the whole point of stamping it.
+  const approvals = doc.approvals || [];
+  const approvedHere = approvals.find((a) => a.stageId === doc.stageId);
+  const earlier = approvals.filter((a) => a.stageId !== doc.stageId).at(-1);
+  const approvalTip = approvals
+    .map((a) => `${a.stageName} — approved ${fmtWhen(a.at)}${a.by ? ` by ${a.by}` : ""}`)
+    .join("\n");
   const rq = doc.request;
   const status = rq ? (rq.status === "approved" || rq.status === "approved_pending" ? "signed" : rq.status === "rejected" ? "rejected" : rq.status === "pending" ? "waiting" : "other") : null;
   const inStage = Date.now() - doc.enteredStageAt; void tick;
@@ -506,6 +552,19 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
           </span>
         )}
         {doc.notSent && <span className="pill pill-pending"><Hourglass size={10} /> Not sent yet</span>}
+        {/* Approved HERE reads as a decision taken at this stage; approved
+            earlier travels with the card, so the stage it lands on can see the
+            one before it signed off, and when. Both carry the whole trail in
+            the tooltip. */}
+        {approvedHere ? (
+          <span className="pill pill-approved" title={approvalTip}>
+            <Stamp size={10} /> Approved {fmtWhen(approvedHere.at)}
+          </span>
+        ) : earlier ? (
+          <span className="pill" style={{ backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }} title={approvalTip}>
+            <Stamp size={10} /> Approved at {earlier.stageName} · {fmtWhen(earlier.at)}
+          </span>
+        ) : null}
         {/* Put here from "Files for Senior Executive Management": the employee's
             own request, which the executive signs as usual — this follows it. */}
         {doc.source && (
@@ -537,6 +596,15 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
             any of them is needed. */}
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onPlan(doc)}
           title={plannedCount ? `${plannedCount} signature box set — open the layout` : "Place every signature box now, on one view of the page"}><PenLine size={12} /> Boxes{plannedCount ? ` (${plannedCount})` : ""}</button>
+        {/* Write down that this stage approved it. Offered only where it has
+            not been stamped yet — a second stamp for the same stage would say
+            nothing the first does not. */}
+        {!approvedHere && (
+          <button className="btn-ghost text-xs px-2 py-1" disabled={approving === doc.id} onClick={() => onApprove(doc)}
+            title={`Mark this document approved at "${stage.name}" — the time is recorded and travels with the card`}>
+            <Stamp size={12} /> {approving === doc.id ? "…" : "Approve"}
+          </button>
+        )}
         {/* A one-off: this paper needs another pair of eyes, without reshaping
             the board to say so. */}
         <button className="btn-ghost text-xs px-2 py-1" onClick={() => onReview(doc)}
@@ -566,6 +634,15 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
                 {s.requiresSignature && <PenLine size={11} className="opacity-50" />}
               </button>
             ))}
+            {/* A stamp is a record, and a record that cannot be corrected is a
+                worse record. Kept out of the main row so it is not one click
+                away from the Approve button it undoes. */}
+            {approvedHere && (
+              <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5 border-t" style={{ borderColor: "var(--c-ink-10)" }}
+                onClick={() => { setMenu(false); onUnapprove(doc); }}>
+                <Stamp size={13} className="opacity-60" /> Undo the approval here
+              </button>
+            )}
             <button className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-black/5 border-t" style={{ borderColor: "var(--c-ink-10)", color: "var(--c-rust-deep)" }} onClick={() => { setMenu(false); onRemove(doc); }}>
               <Trash2 size={13} className="opacity-80" /> Remove from board
             </button>

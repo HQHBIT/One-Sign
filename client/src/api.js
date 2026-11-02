@@ -414,6 +414,10 @@ export const api = {
   eaSendForReview(id, userIds) { return this.fetch(`/api/ea-flow/documents/${id}/review`, { method: "POST", body: JSON.stringify({ userIds }) }); },
   // Replaces the whole signature layout: { stageId: [box, …] }.
   eaPlanBoxes(id, boxesByStage) { return this.fetch(`/api/ea-flow/documents/${id}/planned-boxes`, { method: "PUT", body: JSON.stringify({ boxesByStage }) }); },
+  // Stamps the stage the card is on as approved. Answers with the stage that
+  // comes next, so the board can offer to move it on.
+  eaApprove(id) { return this.fetch(`/api/ea-flow/documents/${id}/approve`, { method: "POST", body: "{}" }); },
+  eaUnapprove(id) { return this.fetch(`/api/ea-flow/documents/${id}/approve`, { method: "DELETE" }).then(r => r.document); },
   eaDashboard(boardId) { return this.fetch(`/api/ea-flow/boards/${boardId}/dashboard`); },
 
   // -------- documents shared with ME for information (a CC stage) --------

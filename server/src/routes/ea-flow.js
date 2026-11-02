@@ -203,6 +203,7 @@ async function docOut(d, stageById) {
   // may belong to an earlier stage — or the stage may only have been set to
   // "Signs" after the card arrived — and then nobody here has been asked.
   const askedHere = needsSignature(stage) ? !!(await arrivalIn(d))?.request_id : false;
+  const approvals = await approvalsFor(d.id);
   return {
     id: d.id, boardId: d.board_id, stageId: d.stage_id, title: d.title, note: d.note || "",
     fileName: d.file_name, fileType: d.file_type, createdAt: Number(d.created_at), createdBy: by?.name || null,
@@ -226,6 +227,11 @@ async function docOut(d, stageById) {
     // Put on the board from "Files for Senior Executive Management": the
     // employee's request this card follows — who sent it, whose turn it is.
     source: d.source_request_id ? await sourceFor(d.source_request_id) : null,
+    // Every stage this paper has been approved at. The WHOLE trail, not just
+    // this stage's stamp: the point of marking a stage approved is that the
+    // stages after it can see it happened, and when.
+    approvals: approvals,
+    approvedHere: approvals.some((a) => a.stageId === d.stage_id),
   };
 }
 
@@ -318,6 +324,24 @@ async function reviewStateFor(documentId) {
   return summariseNotices(await query(
     `SELECT ${NOTICE_COLUMNS} FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
       WHERE n.document_id = ? AND n.source = 'adhoc' ORDER BY u.name`, [documentId]));
+}
+
+// Every stage this paper has been approved at, oldest first.
+//
+// Read for the DOCUMENT and not for its current stage: an approval is usually
+// the reason a card moved on at all, so the stage it arrives at is exactly
+// where it needs to be visible. The stage's name is read now rather than stored
+// at the time, so a renamed stage reads by its current name everywhere.
+async function approvalsFor(documentId) {
+  const rows = await query(
+    `SELECT a.stage_id, a.approved_at, s.name AS stage_name, u.name AS by_name
+       FROM ea_approvals a
+       JOIN ea_stages s ON s.id = a.stage_id
+       LEFT JOIN users u ON u.id = a.approved_by
+      WHERE a.document_id = ? ORDER BY a.approved_at ASC`, [documentId]);
+  return rows.map((a) => ({
+    stageId: a.stage_id, stageName: a.stage_name, at: Number(a.approved_at), by: a.by_name || null,
+  }));
 }
 
 // GET /executives — everyone a signature stage may name.
@@ -973,6 +997,60 @@ router.post("/documents/:id/send", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- approved at this stage ----------
+// Marking a card approved writes down a decision that happened somewhere else —
+// in a meeting, on paper, over the phone. It is NOT a signature: a signature
+// stage still asks its signatory and still holds the card until they sign.
+//
+// The stamp is per (document, stage), so the trail travels with the card and
+// the stage it moves to can see who approved it before, and when.
+//
+// The reply names the stage that comes next, because approving is almost always
+// the moment a card is ready to move on — but moving it is a second decision,
+// and the client asks before taking it.
+router.post("/documents/:id/approve", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const stage = await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
+    if (!stage) return res.status(400).json({ error: "This card is not on a stage" });
+    const already = await queryOne("SELECT approved_at FROM ea_approvals WHERE document_id = ? AND stage_id = ?", [d.id, stage.id]);
+    if (already) return res.status(409).json({ error: `Already marked approved at "${stage.name}"` });
+
+    const at = Date.now();
+    await execute(
+      "INSERT INTO ea_approvals (id, document_id, stage_id, approved_at, approved_by) VALUES (?, ?, ?, ?, ?)",
+      [uid("eaa"), d.id, stage.id, at, req.user.id]);
+
+    // What the card could do next. A signature stage that is still waiting
+    // holds the card whatever anybody approves, so say so rather than offering
+    // a move the move route would refuse.
+    const stages = await boardStages(d.board_id);
+    const next = stages.find((s) => Number(s.position) > Number(stage.position)) || null;
+    const rq = await requestFor(d);
+    const held = needsSignature(stage) && isWaiting(rq);
+    res.json({
+      document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])),
+      approvedAt: at,
+      nextStage: next ? { id: next.id, name: next.name, kind: kindOf(next) } : null,
+      heldBy: held ? (rq.signerName || "the signatory") : null,
+    });
+  } catch (e) { next(e); }
+});
+
+// Undo the stamp for the stage the card is on. A mis-click should not be a
+// permanent part of the record; the trail is the assistant's own account of
+// what happened, and they are the one correcting it.
+router.delete("/documents/:id/approve", async (req, res, next) => {
+  try {
+    const d = await myDoc(req.user.id, req.params.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+    const gone = await execute("DELETE FROM ea_approvals WHERE document_id = ? AND stage_id = ?", [d.id, d.stage_id]);
+    if (!gone?.affectedRows) return res.status(404).json({ error: "This card is not marked approved here" });
+    res.json({ document: await docOut(await queryOne("SELECT * FROM ea_documents WHERE id = ?", [d.id])) });
+  } catch (e) { next(e); }
+});
+
 // ============================================================
 //   dashboard — where each document sat, and for how long
 // ============================================================
@@ -992,6 +1070,9 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
       // A stage can be reported on for being passed over as much as for being
       // sat in — "nobody ever stops here" is a finding about the flow.
       skippedCount: 0, ccNotified: 0, ccViewed: 0,
+      // How many papers were signed off here. A stage everything passes through
+      // unapproved is a different finding from one that approves everything.
+      approvedCount: 0,
     }]));
     // Every CC notice on this board, read once rather than per card.
     const notices = await query(
@@ -1007,6 +1088,19 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
       (noticesByDoc[n.document_id] ||= []).push(n);
       const agg = perStage[n.stage_id];
       if (agg) { agg.ccNotified += 1; if (n.viewed_at) agg.ccViewed += 1; }
+    }
+    // Every approval on this board, read once rather than per card.
+    const stamps = await query(
+      `SELECT a.document_id, a.stage_id, a.approved_at, u.name AS by_name
+         FROM ea_approvals a
+         JOIN ea_documents d ON d.id = a.document_id
+         LEFT JOIN users u ON u.id = a.approved_by
+        WHERE d.board_id = ? ORDER BY a.approved_at ASC`, [b.id]);
+    const stampsByDoc = {};
+    for (const a of stamps) {
+      (stampsByDoc[a.document_id] ||= []).push(a);
+      const agg = perStage[a.stage_id];
+      if (agg) agg.approvedCount += 1;
     }
     const out = [];
     for (const d of docs) {
@@ -1034,7 +1128,14 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
       out.push({
         id: d.id, title: d.title, fileName: d.file_name, createdAt: Number(d.created_at), completedAt: d.completed_at ? Number(d.completed_at) : null,
         currentStageId: d.stage_id, enteredStageAt: Number(d.entered_stage_at), totalMs: Math.max(0, end - Number(d.created_at)),
-        stages: stages.map((s) => ({ stageId: s.id, ms: dwell[s.id], skipped: skipped.has(s.id) })),
+        stages: stages.map((s) => {
+          const stamp = (stampsByDoc[d.id] || []).find((a) => a.stage_id === s.id);
+          return {
+            stageId: s.id, ms: dwell[s.id], skipped: skipped.has(s.id),
+            approvedAt: stamp ? Number(stamp.approved_at) : null,
+            approvedBy: stamp?.by_name || null,
+          };
+        }),
         skippedStageIds: [...skipped],
         cc: (noticesByDoc[d.id] || []).map((n) => ({
           stageId: n.stage_id, name: n.user_name, notifiedAt: Number(n.notified_at), viewedAt: n.viewed_at ? Number(n.viewed_at) : null,
@@ -1050,6 +1151,7 @@ router.get("/boards/:id/dashboard", async (req, res, next) => {
           id: s.id, name: s.name, kind: a.kind, requiresSignature: a.requiresSignature,
           count: a.count, avgMs: a.spells ? Math.round(a.sumMs / a.spells) : 0, maxMs: a.maxMs, oldestMs: a.oldestMs,
           skippedCount: a.skippedCount, ccNotified: a.ccNotified, ccViewed: a.ccViewed,
+          approvedCount: a.approvedCount,
         };
       }),
       documents: out,

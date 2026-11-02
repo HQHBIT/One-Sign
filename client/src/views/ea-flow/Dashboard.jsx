@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Hourglass, PenLine, CircleCheck, Timer, Eye } from "lucide-react";
+import { Download, Hourglass, PenLine, CircleCheck, Timer, Eye, Stamp } from "lucide-react";
 import { api } from "../../api.js";
 import { fmtDuration, fmtWhen, stageColour } from "./time.js";
 import { buildFlowCsv } from "./csv.js";
@@ -68,6 +68,12 @@ export function Dashboard({ board, notify }) {
               {s.skippedCount > 0 && (
                 <div className="text-[11px] opacity-60 mt-0.5">skipped by {s.skippedCount} document{s.skippedCount === 1 ? "" : "s"}</div>
               )}
+              {/* How often this step actually signs something off. A stage
+                  everything passes through unapproved reads very differently
+                  from one that approves what reaches it. */}
+              {s.approvedCount > 0 && (
+                <div className="text-[11px] opacity-60 mt-0.5">approved {s.approvedCount} document{s.approvedCount === 1 ? "" : "s"}</div>
+              )}
               {s.kind === "cc" && s.ccNotified > 0 && (
                 <div className="text-[11px] mt-0.5" style={{ color: s.ccViewed === s.ccNotified ? undefined : "var(--c-rust)" }}>
                   opened {s.ccViewed} of {s.ccNotified}
@@ -128,6 +134,15 @@ export function Dashboard({ board, notify }) {
                           <span key={`sk_${s.stageId}`} className="line-through opacity-60" title={`${stages[i].name} was skipped`}>
                             <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: stageColour(i), opacity: .35 }} />
                             {stages[i].name} skipped
+                          </span>
+                        ))}
+                        {/* When each step signed off. Shown beside the dwell
+                            times because "it sat there four days and was
+                            approved on the third" is one story, not two. */}
+                        {d.stages.map((s, i) => s.approvedAt && (
+                          <span key={`ap_${s.stageId}`} title={`${stages[i].name} — approved ${fmtWhen(s.approvedAt)}${s.approvedBy ? ` by ${s.approvedBy}` : ""}`}>
+                            <Stamp size={10} className="inline mr-1 align-middle opacity-70" />
+                            {stages[i].name} approved {fmtWhen(s.approvedAt)}
                           </span>
                         ))}
                         {/* A CC stage copies several people, so there is one

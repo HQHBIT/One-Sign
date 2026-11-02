@@ -724,6 +724,27 @@ async function runSchema() {
     CONSTRAINT fk_ea_cc_user  FOREIGN KEY (user_id)     REFERENCES users(id)        ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // "This paper was approved here, at this moment." A record the assistant
+  // makes, not a signature: the approval itself may have happened in a meeting,
+  // on paper or over the phone, and the board is where it gets written down.
+  //
+  // One row per (document, stage), so a card carries its whole approval trail
+  // as it travels — the next stage can see that the one before approved it, and
+  // when. Approving a stage the card has come back to refreshes that stage's
+  // own stamp rather than adding a second one.
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_approvals (
+    id           VARCHAR(64)  NOT NULL PRIMARY KEY,
+    document_id  VARCHAR(64)  NOT NULL,
+    stage_id     VARCHAR(64)  NOT NULL,
+    approved_at  BIGINT       NOT NULL,
+    approved_by  VARCHAR(64)  NOT NULL,
+    UNIQUE KEY uq_ea_approval (document_id, stage_id),
+    INDEX idx_ea_approval_doc (document_id, approved_at),
+    CONSTRAINT fk_ea_appr_doc   FOREIGN KEY (document_id) REFERENCES ea_documents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_appr_stage FOREIGN KEY (stage_id)    REFERENCES ea_stages(id)    ON DELETE CASCADE,
+    CONSTRAINT fk_ea_appr_user  FOREIGN KEY (approved_by) REFERENCES users(id)        ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Screenshots and screen recordings attached to a report. A JSON list rather
   // than a table of its own: they are only ever read with their report, never
   // queried across reports, and a report without its attachments is not a thing

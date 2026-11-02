@@ -14,6 +14,10 @@ export function buildFlowCsv({ stages, documents, now = Date.now() }) {
     "Document", "File", "Added", "Current stage", "In current stage",
     ...stages.map((s) => `Time in ${s.name}`),
     ...ccStages.map((s) => `Copied to ${s.name}`),
+    // One column per stage, holding the moment that stage signed off. A single
+    // "approved" column would lose WHICH step approved it, which is the
+    // question anyone reading an approval trail is asking.
+    ...stages.map((s) => `Approved at ${s.name}`),
     "Stages skipped",
     "Total elapsed", "Completed",
   ];
@@ -39,6 +43,10 @@ export function buildFlowCsv({ stages, documents, now = Date.now() }) {
       d.completedAt ? "" : fmtDuration(now - d.enteredStageAt),
       ...(d.stages || []).map((s) => fmtDuration(s.ms)),
       ...ccStages.map((s) => ccCell(s.id)),
+      ...stages.map((s) => {
+        const a = (d.stages || []).find((x) => x.stageId === s.id);
+        return a?.approvedAt ? `${fmtWhen(a.approvedAt)}${a.approvedBy ? ` — ${a.approvedBy}` : ""}` : "";
+      }),
       skipped,
       fmtDuration(d.totalMs), d.completedAt ? fmtWhen(d.completedAt) : "",
     ];
