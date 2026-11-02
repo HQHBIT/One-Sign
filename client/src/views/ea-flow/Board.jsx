@@ -222,7 +222,9 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
   const docsIn = (s) => (docs || []).filter((d) => d.stageId === s.id);
   // What a stage asks for, in the same words as the stage editor.
   const asks = (s) => (s.kind === "cc" ? `${ccNames(s)} ${(s.ccPeople?.length ?? 1) > 1 ? "are" : "is"} shown it`
-    : (s.kind === "signature" || s.requiresSignature) ? `${s.signer?.name || "Someone"} signs` : "A step on the way");
+    : (s.kind === "signature" || s.requiresSignature) ? `${s.signer?.name || "Someone"} signs`
+      : s.kind === "approval" ? "Marked approved here — nothing signed"
+        : "A step on the way");
   const openStage = layout === "tiles" ? stages.find((s) => s.id === openStageId) : null;
 
   return (
@@ -267,7 +269,7 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
             const waiting = list.filter((d) => d.waitingForSignature || d.notSent).length;
             return (
               <Tile key={s.id} color={stageColour(i)}
-                icon={s.kind === "cc" ? Eye : (s.kind === "signature" || s.requiresSignature) ? PenLine : FileText}
+                icon={s.kind === "cc" ? Eye : s.kind === "approval" ? Stamp : (s.kind === "signature" || s.requiresSignature) ? PenLine : FileText}
                 title={`${i + 1}. ${s.name}`}
                 desc={`${asks(s)}${waiting ? ` · ${waiting} awaiting a signature` : ""}`}
                 badge={list.length}

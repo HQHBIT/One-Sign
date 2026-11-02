@@ -96,6 +96,10 @@ const stillSignable = (id) => queryOne(
 const kindOf = (s) => s?.stage_kind || (s?.requires_signature ? "signature" : "plain");
 const needsSignature = (s) => kindOf(s) === "signature";
 const isCc = (s) => kindOf(s) === "cc";
+// A step whose job IS the approval. Reaching it marks the paper Approved and
+// records the moment; nobody is asked to sign, no request is raised, and
+// nothing is drawn onto the document itself.
+const isApproval = (s) => kindOf(s) === "approval";
 
 // Everyone a CC stage copies, in a stable order. Empty for any other kind.
 // Inactive people drop out here rather than being told about documents.
@@ -419,7 +423,7 @@ router.delete("/boards/:id", async (req, res, next) => {
 // string. THE ONLY writer of requires_signature — see the note on the column in
 // db.js: stage_kind is the truth, that column is a compatibility shadow for a
 // server still running the previous build mid-deploy.
-const STAGE_KINDS = ["plain", "signature", "cc"];
+const STAGE_KINDS = ["plain", "signature", "cc", "approval"];
 // Replaces a stage's CC list wholesale. Rewriting rather than diffing keeps
 // "who is copied" a single statement of fact; the notices already sent are
 // untouched, because being told about a document is a thing that happened.
@@ -436,7 +440,10 @@ async function signatureSettings(req, body, current = null) {
     ? (body.requiresSignature === undefined ? kindOf(current) : (body.requiresSignature ? "signature" : "plain"))
     : String(body.kind);
   if (!STAGE_KINDS.includes(kind)) return "Choose what this stage asks for";
-  if (kind === "plain") return { kind, requiresSignature: 0, signerId: null, ccUserIds: [] };
+  // Neither of these asks anything of anybody, so neither names a person. An
+  // approval stage is written with requires_signature 0 like any other: the
+  // whole point is that nothing is signed there.
+  if (kind === "plain" || kind === "approval") return { kind, requiresSignature: 0, signerId: null, ccUserIds: [] };
 
   // A CC stage copies MANY people; a signature stage has exactly one signer,
   // because the request it raises has exactly one signer. Different shapes on
@@ -799,6 +806,19 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
     const people = await ccRecipients(to.id);
     if (!people.length) return { status: 400, error: "Nobody on this stage can be shown the document any more — edit the stage" };
     for (const person of people) await noticeCc({ doc, stage: to, person, at: now });
+  }
+
+  if (isApproval(to)) {
+    // The stage IS the approval, so arriving is the decision — there is no
+    // second button to press, nothing is asked of anybody, and nothing is
+    // written onto the document. Only the stamp is recorded.
+    //
+    // A card sent back and round again re-approves: the stamp says when this
+    // stage last passed it, which is the question the trail is asked.
+    await execute(
+      `INSERT INTO ea_approvals (id, document_id, stage_id, approved_at, approved_by) VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE approved_at = VALUES(approved_at), approved_by = VALUES(approved_by)`,
+      [uid("eaa"), doc.id, to.id, now, actor.id]);
   }
 
   // Which stages did the card jump straight over? Only a FORWARD move skips

@@ -464,6 +464,52 @@ try {
   ck((await call(EA, "DELETE", `/api/ea-flow/documents/${D_APP}/approve`)).status === 404,
     "undoing an approval that was never given is refused");
 
+  // ---- a stage whose job IS the approval ----
+  // The owner's ask: a step that marks the paper Approved, with nothing signed
+  // and nothing drawn onto the document. Arriving there is the decision.
+  r = await add2({ name: "Approved by the office", kind: "approval" });
+  b = await j(r);
+  const T_OK = b.stage?.id;
+  ck(r.status === 200 && b.stage?.kind === "approval", `a stage can be set to mark documents approved (${r.status})`);
+  ck(!b.stage?.signer && !(b.stage?.ccPeople || []).length,
+    "…and names nobody, because it asks nothing of anybody");
+
+  r = await uploadDoc(EA, B2, "Goes past the approval step", "", { stageId: T_IN });
+  const D_STG = (await j(r)).document?.id;
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_STG}/move`, { toStageId: T_OK });
+  b = await j(r);
+  ck(r.status === 200 && b.document?.approvedHere === true,
+    `moving a card onto it marks the document approved, with no box and no signature (${r.status} ${b.error || ""})`);
+  ck(b.document?.approvals?.[0]?.stageName === "Approved by the office" && b.document.approvals[0].at > 0,
+    "…stamped with the stage that did it and the moment it happened");
+  // The whole point of "nothing embossed": no request is raised, so nothing is
+  // ever drawn onto the file and the card is not held waiting for anyone.
+  ck(b.document?.request === null && b.document?.waitingForSignature === false && b.document?.notSent === false,
+    "…and nobody is asked to sign, so nothing is added to the document itself");
+  const stillOriginal = await queryOne("SELECT request_id FROM ea_documents WHERE id = ?", [D_STG]);
+  ck(!stillOriginal?.request_id, "…the card carries no signature request at all");
+
+  // It is a step, not a gate: the card leaves whenever the assistant says so.
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_STG}/move`, { toStageId: T_END });
+  b = await j(r);
+  ck(r.status === 200, `an approval stage never holds the card (${r.status})`);
+  ck(b.document?.approvals?.length === 1 && b.document.approvals[0].stageId === T_OK,
+    "…and the approval travels onward with it, which is why it is stamped at all");
+
+  // Round again: the stamp says when this stage LAST passed it.
+  const firstAt = b.document.approvals[0].at;
+  await new Promise((res) => setTimeout(res, 40));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_STG}/move`, { toStageId: T_OK });
+  b = await j(r);
+  ck(r.status === 200 && b.document?.approvals?.length === 1 && b.document.approvals[0].at > firstAt,
+    "coming back round re-approves rather than adding a second stamp for the same stage");
+
+  // Tidied away so the dashboard counts below are about the stages they name.
+  await call(EA, "DELETE", `/api/ea-flow/documents/${D_STG}`);
+  await call(EA, "DELETE", `/api/ea-flow/stages/${T_OK}`);
+
   // ---- stages jumped over ----
   r = await uploadDoc(EA, B2, "Goes straight through", "", { stageId: T_IN }); const D_SKIP = (await j(r)).document?.id;
   await new Promise((res) => setTimeout(res, 30));
