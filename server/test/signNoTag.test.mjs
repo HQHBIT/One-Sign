@@ -51,11 +51,83 @@ test("a narrow signature still gets a box the number fits in", async () => {
 test("a date stamped under the signature pushes the tag below it", () => {
   const date = { type: "date", page: 1, x: 22, y: 68.2, w: 12, h: 2 };
   const box = signNoBox(SIG, [date]);
-  assert.ok(box.y >= date.y + date.h, "the tag must clear the date, not land on it");
+  const without = signNoBox(SIG, []);
+  // Below the date's TEXT, which stops short of its box's bottom edge — the
+  // tag used to clear the whole box and so sat a line too low. What matters is
+  // that the date still pushes it down at all.
+  assert.ok(box.y > without.y, "the tag must move down for the date, not ignore it");
+  assert.ok(box.y < date.y + date.h, "…but only as far as the date's glyphs, not its box");
 });
 
 test("no room below the signature puts the tag above it", () => {
   const low = { page: 1, x: 20, y: 98.6, w: 25, h: 1 };
   const box = signNoBox(low);
   assert.ok(box.y + box.h <= low.y, "the tag should move above rather than run off the page");
+});
+
+// ---- how far below the signature it sits (owner, 2026-11-02) ----
+// "the space is too much, it should be right below the signature". Both boxes
+// above the tag are BOUNDING boxes with their content centred inside, so
+// anchoring to their bottom edges left a gap as tall as the leftover slack. On
+// the owner's document that pushed the tag down into the page footer.
+const PW = 595.28, PH = 841.89;
+const pctOf = (pt) => (pt / PH) * 100;
+const ptOf = (pct) => (pct / 100) * PH;
+
+// Where the tag's text actually starts, mirroring drawTextInBox's centring.
+const textTop = (box) => {
+  const h = ptOf(box.h);
+  const size = Math.min(h * 0.72, 6);
+  const baseline = (h - size) / 2 + size * 0.12;
+  return box.y + box.h - pctOf(baseline + size * 0.72);
+};
+// Where a contain-fitted signature's ink actually stops.
+const inkBottom = (sig, aspect) => {
+  const boxW = (sig.w / 100) * PW, boxH = ptOf(sig.h);
+  return sig.y + sig.h - pctOf((boxH - Math.min(boxH, boxW / aspect)) / 2);
+};
+
+const WIDE = { page: 1, x: 12, y: 60, w: 24, h: 7 };   // a short signature in a tall box
+const ASPECT = 3.4;
+const opts = { pageW: PW, pageH: PH, signatureAspect: ASPECT };
+
+test("the tag sits just under the signature's ink, not under its box", () => {
+  const box = signNoBox(WIDE, [], opts);
+  const gap = ptOf(textTop(box) - inkBottom(WIDE, ASPECT));
+  assert.ok(gap > 0, `the tag must not land on the signature (gap ${gap.toFixed(1)}pt)`);
+  assert.ok(gap < 6, `the tag should be right below the ink, not a line away (gap ${gap.toFixed(1)}pt)`);
+});
+
+test("a date in between is cleared by the same small gap, measured off its glyphs", () => {
+  const date = { type: "date", page: 1, x: 14, y: 67.2, w: 14, h: 2.4 };
+  const box = signNoBox(WIDE, [date], opts);
+  const dH = ptOf(date.h), size = Math.min(dH * 0.72, 24);
+  const dateInk = date.y + date.h - pctOf((dH - size) / 2 + size * 0.12);
+  const gap = ptOf(textTop(box) - dateInk);
+  assert.ok(gap > 0 && gap < 6, `the tag should follow the date closely (gap ${gap.toFixed(1)}pt)`);
+});
+
+test("the tag's own height no longer grows with the signature", () => {
+  // It used to be signature height × 0.2, so a tall signature bought itself a
+  // taller box — and the text is centred in it, so that was pure gap.
+  const short = signNoBox({ ...WIDE, h: 3 }, [], opts);
+  const tall = signNoBox({ ...WIDE, h: 12 }, [], opts);
+  assert.equal(short.h.toFixed(3), tall.h.toFixed(3));
+  // Still tall enough that the 6pt number is not shrunk (drawTextInBox sizes
+  // text at 72% of the box height).
+  assert.ok(ptOf(short.h) * 0.72 >= 6, `box of ${ptOf(short.h).toFixed(1)}pt would shrink the number`);
+});
+
+test("a rotated page keeps the behaviour it had, rather than a wrong correction", () => {
+  // The slack runs down the BOX's own frame, which no longer points down the
+  // page once it is rotated — so the correction is deliberately not applied.
+  const upright = signNoBox(WIDE, [], opts);
+  const turned = signNoBox(WIDE, [], { ...opts, rotation: 90 });
+  assert.ok(turned.y > upright.y, "a rotated page falls back to the box bottom");
+  assert.equal(turned.y.toFixed(3), (WIDE.y + WIDE.h + pctOf(1.2)).toFixed(3));
+});
+
+test("with no aspect to go on, it falls back rather than guessing", () => {
+  const box = signNoBox(WIDE, [], { pageW: PW, pageH: PH });
+  assert.equal(box.y.toFixed(3), (WIDE.y + WIDE.h + pctOf(1.2)).toFixed(3));
 });
