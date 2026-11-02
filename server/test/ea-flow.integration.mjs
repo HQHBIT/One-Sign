@@ -415,6 +415,55 @@ try {
   r = await call(EA, "POST", `/api/ea-flow/documents/${D_LATE}/cc-remind`);
   ck(r.status === 200, `a document sent for review can be chased too (${r.status})`);
 
+  // ---- approved at a stage, and the stamp travels with the card ----
+  // Marking a paper approved is the assistant writing down a decision taken
+  // elsewhere. It is NOT a signature, and the card is expected to carry the
+  // stamp onward: the stage it lands on has to be able to see that the stage
+  // before it signed off, and when.
+  r = await uploadDoc(EA, B2, "Approved on the way through", "", { stageId: T_IN });
+  const D_APP = (await j(r)).document?.id;
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_APP}/approve`);
+  b = await j(r);
+  ck(r.status === 200 && typeof b.approvedAt === "number" && b.approvedAt > 0,
+    `a card can be marked approved where it sits, and the moment is recorded (${r.status})`);
+  ck(b.document?.approvedHere === true && b.document?.approvals?.length === 1,
+    "…the card says so, and carries exactly one stamp");
+  ck(b.document?.approvals?.[0]?.stageName === "In" && !!b.document.approvals[0].by,
+    `…naming the stage that approved it and who wrote it down (${b.document?.approvals?.[0]?.stageName})`);
+  // The point of answering with the next stage: approving is the moment a card
+  // is usually ready to move, and the client asks whether it should.
+  ck(b.nextStage?.id === T_SIG && !b.heldBy,
+    `…and says which stage comes next, so the board can offer to move it on (${b.nextStage?.name})`);
+  ck((await call(EA, "POST", `/api/ea-flow/documents/${D_APP}/approve`)).status === 409,
+    "approving the same stage twice is refused — a second stamp says nothing the first does not");
+
+  // THE ASK: the stamp has to survive the move.
+  await new Promise((res) => setTimeout(res, 30));
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_APP}/move`,
+    { toStageId: T_SIG, boxes: [{ page: 1, x: 10, y: 60, w: 25, h: 8 }] });
+  b = await j(r);
+  ck(r.status === 200 && b.document?.approvals?.length === 1 && b.document.approvals[0].stageId === T_IN,
+    `the approval travels to the next stage with the card (${r.status})`);
+  ck(b.document?.approvedHere === false,
+    "…while this stage is not pretending to have approved it itself");
+
+  // A signature stage holds the card whoever approves it, so no move is
+  // offered — the alternative is offering one the move route would refuse.
+  r = await call(EA, "POST", `/api/ea-flow/documents/${D_APP}/approve`);
+  b = await j(r);
+  ck(r.status === 200 && typeof b.heldBy === "string" && b.heldBy.length > 0,
+    `approving a card that is still waiting for a signature says who it is waiting on (${b.heldBy})`);
+  ck(b.document?.approvals?.length === 2, "…and the stamp is still recorded");
+
+  // A record that cannot be corrected is a worse record.
+  r = await call(EA, "DELETE", `/api/ea-flow/documents/${D_APP}/approve`);
+  b = await j(r);
+  ck(r.status === 200 && b.document?.approvals?.length === 1 && b.document?.approvedHere === false,
+    `an approval can be undone where it was given (${r.status})`);
+  ck(b.document?.approvals?.[0]?.stageId === T_IN, "…without touching the one an earlier stage gave");
+  ck((await call(EA, "DELETE", `/api/ea-flow/documents/${D_APP}/approve`)).status === 404,
+    "undoing an approval that was never given is refused");
+
   // ---- stages jumped over ----
   r = await uploadDoc(EA, B2, "Goes straight through", "", { stageId: T_IN }); const D_SKIP = (await j(r)).document?.id;
   await new Promise((res) => setTimeout(res, 30));
@@ -449,6 +498,18 @@ try {
   const rowCc = b.documents?.find((d) => d.id === D_CC);
   ck(rowCc?.cc?.length === 2 && rowCc.cc.filter((c) => c.viewedAt).length === 1 && rowCc.cc.every((c) => c.name),
     "and the CC'd document carries each person, named, with who has read it");
+  // Approvals are reportable for the same reason dwell time is: "it sat here
+  // four days and was approved on the third" is one story, not two.
+  const sIn = b.stages?.find((s) => s.id === T_IN);
+  ck(sIn?.approvedCount === 1, `the report counts what each stage signed off (${sIn?.approvedCount})`);
+  ck(b.stages?.find((s) => s.id === T_SIG)?.approvedCount === 0,
+    "…and does not count a stamp that was undone");
+  const rowApp = b.documents?.find((d) => d.id === D_APP);
+  const appIn = rowApp?.stages.find((s) => s.stageId === T_IN);
+  ck(typeof appIn?.approvedAt === "number" && !!appIn.approvedBy,
+    "a document's own row says when each stage approved it, and who recorded it");
+  ck(rowApp?.stages.find((s) => s.stageId === T_SIG)?.approvedAt === null,
+    "…and leaves a stage that never approved it empty rather than guessing");
 
   // ---- a card already IN a stage that is then set to "Signs" (owner, 2026-10-31) ----
   // Entering a stage was the only trigger, so this card sat there and nobody

@@ -100,3 +100,25 @@ test("a document nobody has been copied on leaves the cell empty, not 'undefined
   const [head, row] = parse(buildFlowCsv({ stages, documents: [{ ...doc, cc: [] }] }));
   assert.equal(row[head.indexOf("Copied to Concern")], "");
 });
+
+test("each stage gets its own approval column, with the moment it signed off", () => {
+  const approved = {
+    ...doc,
+    stages: doc.stages.map((s) => (s.stageId === "s1"
+      ? { ...s, approvedAt: 1700000300000, approvedBy: "Sakina Demo" }
+      : s)),
+  };
+  const [head, row] = parse(buildFlowCsv({ stages, documents: [approved] }));
+  assert.equal(head.filter((h) => h.startsWith("Approved at ")).length, stages.length);
+  // Which step approved it is the question; a single "approved" column would
+  // lose exactly that.
+  assert.match(row[head.indexOf("Approved at In")], /— Sakina Demo$/);
+  assert.equal(row[head.indexOf("Approved at Signs")], "");
+});
+
+test("a document nobody has approved leaves every approval cell empty", () => {
+  const [head, row] = parse(buildFlowCsv({ stages, documents: [doc] }));
+  for (const s of stages) assert.equal(row[head.indexOf(`Approved at ${s.name}`)], "");
+  // And the row is still exactly as wide as the header.
+  assert.equal(row.length, head.length);
+});
