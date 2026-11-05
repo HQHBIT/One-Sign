@@ -9,45 +9,29 @@
 //   checkbox and the bar that moves several rows together.
 // ============================================================
 import { useEffect, useState } from "react";
-import { FolderPlus, CheckSquare, X, Search } from "lucide-react";
+import { FolderPlus, CheckSquare, X } from "lucide-react";
 import { BackHeader } from "./BackHeader.jsx";
 import { Empty } from "./Empty.jsx";
 import { FolderStrip } from "./FolderStrip.jsx";
 import { MoveToMenu } from "./MoveToMenu.jsx";
 import { useFolders } from "../lib/useFolders.js";
+import { useListSearch, ListSearchBar } from "./ListSearch.jsx";
 
 /**
  * @param items        the finished documents this screen lists (all of them; filtering happens here)
  * @param renderRow    (r, i, moveMenu, rowProps) => <RequestRow …/> — the parent supplies the row; `moveMenu` goes
  *                     among its actions and `rowProps` is spread onto it (drag handle, or checkbox state when selecting)
  * @param countLabel   what the title count says, e.g. "signed"
- * @param search       optional { approvers: (r) => [{ id, name }] } — shows a search box and an
- *                     "Approved by" filter. While either is in use the list shows every match,
+ * @param search       optional { people: (r) => [{ id, name }], label } — shows the shared search
+ *                     box and person filter. While either is in use the list shows every match,
  *                     filed or not, so a document is never missed for sitting in a folder.
  */
 export function FolderedList({ items, title, back, notify, emptyIcon, emptyText, countLabel = "signed", renderRow, search = null }) {
-  const [query, setQuery] = useState("");
-  const [approver, setApprover] = useState("");
-  // The people who appear as approvers on THESE documents, and on how many —
-  // never a directory of everyone.
-  const approverOptions = (() => {
-    if (!search?.approvers) return [];
-    const m = new Map();
-    for (const r of items) for (const a of search.approvers(r)) {
-      const e = m.get(a.id) || { id: a.id, name: a.name, n: 0 };
-      e.n += 1; m.set(a.id, e);
-    }
-    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
-  })();
-  const q = query.trim().toLowerCase();
-  const filtering = !!search && (!!q || !!approver);
-  const matches = (r) => {
-    if (approver && !search.approvers(r).some((a) => a.id === approver)) return false;
-    if (!q) return true;
-    const hay = [r.fileName, r.requestorName, r.requestType, r.note, r.approverName,
-      ...search.approvers(r).map((a) => a.name)].filter(Boolean).join(" ").toLowerCase();
-    return hay.includes(q);
-  };
+  // The same search every other document list uses; this screen adds only the
+  // folder rule below — while filtering, matches come from every folder.
+  const searchState = useListSearch(items, search || {});
+  const { filtering: searching, matches } = searchState;
+  const filtering = !!search && searching;
   const { folders, placements, createFolder, renameFolder, deleteFolder, moveTo, moveMany } = useFolders({ notify });
   const [current, setCurrent] = useState(null);       // open folder id, or null
   const [creating, setCreating] = useState(false);
@@ -124,24 +108,7 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
           </div>
         )} />
 
-      {search && items.length > 0 && (
-        <div className="mt-5 flex flex-col sm:flex-row gap-2 sm:items-center">
-          <div className="relative flex-1 max-w-xl">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} className="w-full pl-9"
-              placeholder="Search by document name, type or person…" aria-label="Search documents" />
-          </div>
-          {approverOptions.length > 0 && (
-            <select value={approver} onChange={(e) => setApprover(e.target.value)} className="sm:w-72" aria-label="Approved by">
-              <option value="">Approved by: everyone</option>
-              {approverOptions.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.n})</option>)}
-            </select>
-          )}
-          {filtering && (
-            <button className="btn-ghost text-xs shrink-0" onClick={() => { setQuery(""); setApprover(""); }}><X size={12} /> Clear</button>
-          )}
-        </div>
-      )}
+      {search && items.length > 0 && <ListSearchBar state={searchState} className="mt-5" />}
       {filtering && (
         <div className="text-xs opacity-60 mt-2">Showing matches from every folder.</div>
       )}

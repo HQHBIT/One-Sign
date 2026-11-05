@@ -51,6 +51,7 @@ import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
 import { FolderedList } from "./components/FolderedList.jsx";
+import { useListSearch, ListSearchBar, NoMatches } from "./components/ListSearch.jsx";
 import { HelpGuide } from "./components/HelpGuide.jsx";
 import { useInstall, InstallBanner, IosInstallSheet } from "./components/InstallPrompt.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
@@ -1295,15 +1296,18 @@ function ReturnedBlock({ items, teams, users, onOpen }) {
 }
 
 function PendingList({ items, teams, users, user, sendReminder, cancelRequest, refresh, back, notify, title = "Pending requests" }) {
+  // A requestor chasing a document wants to know who is holding it.
+  const search = useListSearch(items, { people: waitingOnOf, label: "Waiting on" });
   const [open, setOpen] = useState(null);
   const [revisingId, setRevisingId] = useState(null);
   const revising = items.find(r => r.id === revisingId);
   return (
     <div>
       <BackHeader back={back} title={title} step={`${items.length} total`} />
-      {items.length === 0 ? <Empty icon={Inbox} text="Nothing pending. You're all caught up." /> : (
+      {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
+      {items.length === 0 ? <Empty icon={Inbox} text="Nothing pending. You're all caught up." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
         <div className="card mt-8 overflow-hidden">
-          {items.map((r, i) => (
+          {search.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
@@ -1543,6 +1547,32 @@ function HodDashboard({ user, notify, back }) {
   );
 }
 
+// Who a pending document is waiting on. nextPendingSigner is the single source
+// of that truth — it mirrors the server's ordering — and a single-approver
+// request falls back to the named approver.
+function waitingOnOf(r) {
+  const next = nextPendingSigner(r);
+  if (next?.userId) return [{ id: next.userId, name: next.userName || "Unknown" }];
+  return r.approverId ? [{ id: r.approverId, name: r.approverName || "Unknown" }] : [];
+}
+
+// Who rejected it: the signer who turned it down, or the approver recorded
+// against a single-approver request.
+function rejectedByOf(r) {
+  for (const st of r.workflow || []) {
+    for (const sg of st.signers || []) {
+      if (sg.status === "rejected" && sg.userId) return [{ id: sg.userId, name: sg.userName || "Unknown" }];
+    }
+  }
+  return r.approverId ? [{ id: r.approverId, name: r.approverName || "Unknown" }] : [];
+}
+
+// Who raised it. This is the useful question on an approver's own screens,
+// where every document is already theirs to act on.
+function requestorOf(r) {
+  return r.requestorId ? [{ id: r.requestorId, name: r.requestorName || "Unknown" }] : [];
+}
+
 // Who approved a document: everyone who signed it on its route, or the team
 // approver of a single-approver request — never the person looking.
 function approversOf(r, user) {
@@ -1570,7 +1600,7 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
         emptyIcon={Archive} emptyText={`No ${title.replace(/^My /i, "").toLowerCase()} yet.`}
         // Search, and filter by who approved — offering only the people who
         // actually approved these documents (owner, 2026-11-02).
-        search={{ approvers: (r) => approversOf(r, user) }}
+        search={{ people: (r) => approversOf(r, user), label: "Approved by" }}
         renderRow={(r, i, moveMenu, rowProps) => (
           <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
             actions={(
@@ -1599,12 +1629,14 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
 
 function RejectedList({ items, teams, users, user, back }) {
   const [open, setOpen] = useState(null);
+  const search = useListSearch(items, { people: rejectedByOf, label: "Rejected by" });
   return (
     <div>
       <BackHeader back={back} title="Rejected requests" step={`${items.length} rejected`} />
-      {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : (
+      {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
+      {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
         <div className="card mt-8 overflow-hidden">
-          {items.map((r, i) => (
+          {search.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
@@ -2096,7 +2128,11 @@ function ApproverPending({ items, waiting = [], returned = [], user, users, team
   // rows (already signed, inside the 1-hour window) are excluded.
   const myTurn = (r) => isMyTurn(r, user.id, user.signingAuthorityTeams);
 
-  const visible = items.filter(r => filterType === "all" || (r.requestType || "general") === filterType);
+  const typed = items.filter(r => filterType === "all" || (r.requestType || "general") === filterType);
+  // Layered on the request-type tabs above, so the two narrow together and the
+  // person list reflects whatever tab is open.
+  const search = useListSearch(typed, { people: requestorOf, label: "Requested by" });
+  const visible = search.visible;
   const selectable = visible.filter(myTurn);
   const allSelected = selectable.length > 0 && selectable.every(r => selected.has(r.id));
 
@@ -2172,7 +2208,8 @@ function ApproverPending({ items, waiting = [], returned = [], user, users, team
         </div>
       )}
 
-      {visible.length === 0 ? <Empty icon={Inbox} text={items.length === 0 ? "Nothing awaiting your approval." : "No requests of this type."} /> : (
+      {items.length > 0 && <ListSearchBar state={search} className="mt-4" />}
+      {visible.length === 0 ? <Empty icon={Inbox} text={items.length === 0 ? "Nothing awaiting your approval." : search.filtering ? "Nothing matches that search." : "No requests of this type."} /> : (
         <div className="card mt-2 overflow-hidden">
           {visible.map((r, i) => {
             const mine = myTurn(r);
@@ -2770,6 +2807,9 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
   return (
     <>
       <FolderedList items={items} title="Approved requests" back={back} notify={notify}
+        // An approver's own screen: every document here is theirs, so the useful
+        // question is who raised it.
+        search={{ people: requestorOf, label: "Requested by" }}
         emptyIcon={Archive} emptyText="No approved requests yet."
         renderRow={(r, i, moveMenu, rowProps) => (
           <RequestRow key={r.id} r={r} teams={teams} users={users} i={i} {...rowProps}
@@ -2798,13 +2838,15 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
 }
 
 function ApproverRejected({ items, back, users, teams, user }) {
+  const search = useListSearch(items, { people: requestorOf, label: "Requested by" });
   const [open, setOpen] = useState(null);
   return (
     <div>
       <BackHeader back={back} title="Rejected requests" step={`${items.length} rejected`} />
-      {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : (
+      {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
+      {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
         <div className="card mt-8 overflow-hidden">
-          {items.map((r, i) => (
+          {search.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={<button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>}
               subtitle={(r.rejectReason || r.hasRejectVoice) && (
