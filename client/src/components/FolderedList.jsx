@@ -16,6 +16,7 @@ import { FolderStrip } from "./FolderStrip.jsx";
 import { MoveToMenu } from "./MoveToMenu.jsx";
 import { useFolders } from "../lib/useFolders.js";
 import { useListSearch, ListSearchBar } from "./ListSearch.jsx";
+import { usePagination, Pager } from "./Pager.jsx";
 
 /**
  * @param items        the finished documents this screen lists (all of them; filtering happens here)
@@ -44,6 +45,9 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
     : current
       ? items.filter((r) => placements[r.id] === current)
       : items.filter((r) => !placements[r.id] || !folderIds.has(placements[r.id]));
+  // Paging comes last: after the folder rule and the search have both decided
+  // which rows belong on screen.
+  const pager = usePagination(visible);
   const openFolder = current ? folders.find((f) => f.id === current) : null;
 
   // Selection belongs to one screen: opening or leaving a folder clears it.
@@ -131,9 +135,9 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
         </div>
       )}
 
-      {visible.length === 0 ? empty : (
+      {visible.length === 0 ? empty : (<>
         <div className="card mt-6 overflow-hidden">
-          {visible.map((r, i) => renderRow(r, i, (
+          {pager.visible.map((r, i) => renderRow(r, i, (
             <MoveToMenu folders={folders} currentFolderId={placements[r.id] || null}
               onMove={(folderId) => moveTo(r.id, folderId)}
               onCreateAndMove={(name) => createAndMove(name, r.id)} />
@@ -141,7 +145,8 @@ export function FolderedList({ items, title, back, notify, emptyIcon, emptyText,
             ? { selectable: true, selected: selected.has(r.id), onToggle: () => toggle(r.id) }
             : { draggableId: r.id }))}
         </div>
-      )}
+        <Pager state={pager} />
+      </>)}
       {openFolder && visible.length > 0 && !selecting && (
         <div className="text-xs opacity-50 mt-3">Drag a document onto "Main list" above to take it out of {openFolder.name}.</div>
       )}
