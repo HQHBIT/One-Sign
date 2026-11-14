@@ -2417,17 +2417,51 @@ function VoiceRecorder({ value, onChange }) {
 }
 
 // Plays a rejection's recorded voice note (fetched with auth → blob URL).
+// A rejection recording. This used to swallow every failure and render
+// NOTHING: the row said a note existed, no player appeared, and there was no
+// way to tell whether the file was missing or the browser simply could not
+// play it. Both now say so, and both offer the file to download — recordings
+// are webm/opus, which Safari and iOS cannot play at all, so a player that
+// never makes a sound is an expected outcome, not a rare one.
 function VoiceNote({ requestId }) {
   const [url, setUrl] = useState(null);
+  const [state, setState] = useState("loading");   // loading | ready | missing
+  const [unplayable, setUnplayable] = useState(false);
+
   useEffect(() => {
     let u = null, dead = false;
+    setState("loading"); setUnplayable(false);
     api.getRejectVoiceBlob(requestId)
-      .then(x => { if (dead) { URL.revokeObjectURL(x); return; } u = x; setUrl(x); })
-      .catch(() => {});
+      .then(x => { if (dead) { URL.revokeObjectURL(x); return; } u = x; setUrl(x); setState("ready"); })
+      .catch(() => { if (!dead) setState("missing"); });
     return () => { dead = true; if (u) URL.revokeObjectURL(u); };
   }, [requestId]);
-  if (!url) return null;
-  return <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} className="mt-1" />;
+
+  if (state === "loading") return <div className="text-xs opacity-50 mt-1">Loading the voice note…</div>;
+
+  if (state === "missing") {
+    return (
+      <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>
+        The voice note could not be loaded. It may have been removed with the document&rsquo;s files.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1">
+      <FixedAudio src={url} style={{ height: 30, maxWidth: 240 }} onError={() => setUnplayable(true)} />
+      {unplayable && (
+        <div className="text-xs opacity-70 mt-1">
+          This browser cannot play the recording — Safari and iPhone cannot play the format it was recorded in.
+        </div>
+      )}
+      {/* Always offered, not only on failure: a player that produces silence
+          gives no clue, and a file that downloads and plays elsewhere does. */}
+      <a href={url} download={`voice-note-${requestId}.webm`} className="btn-ghost text-xs mt-1 inline-flex">
+        <Download size={12} /> Download the recording
+      </a>
+    </div>
+  );
 }
 
 // `actingFor` — { name, canAct, signatureBlob }: an executive assistant deciding

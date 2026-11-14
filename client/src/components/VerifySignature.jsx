@@ -54,7 +54,8 @@ export function VerifySignature() {
 
   // A link straight to a number checks it on arrival; nobody should have to
   // press a button when the number is already in the address.
-  useEffect(() => { const n = signNoFromUrl(); if (n) check(n); /* eslint-disable-next-line */ }, []);
+  // Runs once: the number comes from the address, which does not change here.
+  useEffect(() => { const n = signNoFromUrl(); if (n) check(n); }, []);
 
   const good = result?.valid === true;
 
