@@ -26,6 +26,45 @@ export const signNumbersOn = () => deploymentOrg() === "hqhb";
 export const formatSignNo = (year, seq) => `SF-${year}-${String(seq).padStart(6, "0")}`;
 export const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
+// ---------- the check code ----------
+// A sign number on its own is guessable: they run in sequence, so holding a
+// real one tells you the next. The check code is four hex characters derived
+// from the number with a secret only this deployment holds, which makes a
+// number impossible to INVENT while leaving it trivial to VERIFY.
+//
+// It does not — and cannot — stop anyone copying the ink. What it does is make
+// a copied tag checkable: verifying it names the document it really belongs
+// to, and that is not the one in the forger's hand.
+let secretCache = null;
+export async function verifySecret() {
+  if (secretCache) return secretCache;
+  const row = await queryOne("SELECT value FROM app_secrets WHERE name = ?", ["sign_verify"]);
+  if (row?.value) { secretCache = row.value; return secretCache; }
+  const made = crypto.randomBytes(32).toString("hex");
+  // INSERT IGNORE, not INSERT: two workers booting together must not each
+  // mint a secret and have the loser stamp codes nobody can verify.
+  await execute("INSERT IGNORE INTO app_secrets (name, value, created_at) VALUES (?, ?, ?)",
+    ["sign_verify", made, Date.now()]);
+  const settled = await queryOne("SELECT value FROM app_secrets WHERE name = ?", ["sign_verify"]);
+  secretCache = settled?.value || made;
+  return secretCache;
+}
+
+export async function checkCodeFor(signNo) {
+  const key = await verifySecret();
+  return crypto.createHmac("sha256", key).update("signflow-verify|" + String(signNo)).digest("hex").slice(0, 4).toUpperCase();
+}
+
+/** The number as it is printed and quoted: SF-2026-000123-A7F3. */
+export const fullSignNo = (signNo, checkCode) => (checkCode ? String(signNo) + "-" + checkCode : String(signNo));
+
+/** Split what someone typed back into its parts; the code is optional. */
+export function parseSignNo(input) {
+  const raw = String(input || "").trim().toUpperCase();
+  const m = /^(SF-\d{4}-\d{6})(?:-([0-9A-F]{4}))?$/.exec(raw);
+  return m ? { signNo: m[1], checkCode: m[2] || null } : null;
+}
+
 // The calendar year in India — a signature at 1 a.m. IST on 1 January belongs
 // to the new year, whatever UTC says.
 const istYear = (ts) => Number(new Date(Number(ts) + 5.5 * 3600 * 1000).toISOString().slice(0, 4));
@@ -73,11 +112,14 @@ export async function assignSignNo({ requestId, signerRef, signerId, signerName,
     await execute(
       `INSERT INTO sign_register (sign_no, year, seq, request_id, signer_ref, signer_id, signer_name,
          acted_by_assistant_id, acted_by_name, step_order, signed_at, ip, user_agent, source, created_at,
-         document_name, requested_by_name, confidential)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         document_name, requested_by_name, confidential, check_code)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [signNo, year, seq, requestId, signerRef, signerId, signerName || null,
         actor?.id || null, actor?.name || null, stepOrder, at, ip, ua, source, Date.now(),
-        doc?.file_name || null, doc?.requestor || null, Number(doc?.confidential) ? 1 : 0]);
+        doc?.file_name || null, doc?.requestor || null, Number(doc?.confidential) ? 1 : 0,
+        // Stored as issued. Recomputing on every check would mean a rotated
+        // secret silently invalidating every document already stamped.
+        await checkCodeFor(signNo)]);
     return signNo;
   } catch (e) {
     // Someone registered this very signer a moment ago — theirs stands.
@@ -96,10 +138,13 @@ export async function releaseSignNo(requestId, signerRef) {
 }
 
 // signer_ref → sign_no, for a rebuild that must reuse every number given so far.
+// What gets PRINTED under each signature: the number with its check code, so
+// the tag on the page is the thing someone can verify. Rows registered before
+// check codes existed have none and print exactly as they did.
 export async function signNumbersFor(requestId) {
   if (!signNumbersOn()) return new Map();
-  const rows = await query("SELECT signer_ref, sign_no FROM sign_register WHERE request_id = ?", [requestId]);
-  return new Map(rows.map((r) => [r.signer_ref, r.sign_no]));
+  const rows = await query("SELECT signer_ref, sign_no, check_code FROM sign_register WHERE request_id = ?", [requestId]);
+  return new Map(rows.map((r) => [r.signer_ref, fullSignNo(r.sign_no, r.check_code)]));
 }
 
 // The fingerprint of the file a signature produced — on the rows still without one.
