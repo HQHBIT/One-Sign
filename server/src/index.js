@@ -32,6 +32,7 @@ import eaFlowRoutes from "./routes/ea-flow.js";
 import eaCcRoutes from "./routes/ea-cc.js";
 import shzRoutes from "./routes/shz.js";
 import attachmentsRoutes from "./routes/attachments.js";
+import verifyRoutes from "./routes/verify.js";
 import recommendationsRoutes from "./routes/recommendations.js";
 // import expensesRoutes from "./routes/expenses.js"; // DISABLED: expense feature commented out
 
@@ -95,6 +96,9 @@ async function main() {
 
   app.get("/api/health", (req, res) => res.json({ ok: true, time: Date.now() }));
 
+  // Public on purpose: whoever receives a signed document can check its tag
+  // without an account. Rate-limited inside.
+  app.use("/api/verify", verifyRoutes);
   app.use("/api/auth", authRoutes);
   app.use("/api/webauthn", webauthnRoutes);
   app.use("/api/notifications", notificationsRoutes);

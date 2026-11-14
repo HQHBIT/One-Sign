@@ -46,6 +46,7 @@ import { checkForUpdate, updateAvailable } from "./lib/autoUpdate.js";
 import { SIGNATURE_HEIGHTS_MM, DATE_HEIGHT_MM, DATE_ASPECT, DEFAULT_SIGNATURE_ASPECT, getPreset } from "./lib/boxSize.js";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { OrgUnavailable } from "./components/OrgUnavailable.jsx";
+import { VerifySignature, isVerifyUrl } from "./components/VerifySignature.jsx";
 import { SignatureImage } from "./components/SignatureImage.jsx";
 import { DownloadBtn } from "./components/DownloadBtn.jsx";
 import { PrintBtn } from "./components/PrintBtn.jsx";
@@ -300,6 +301,8 @@ export default function App() {
   // This is only which door to show. The server independently refuses an
   // account that belongs to another organisation, so a tampered value cannot
   // get a WAQF user into HQHB's space.
+  // Read once: the address does not change under the app.
+  const [verifying] = useState(() => isVerifyUrl());
   const [orgId, setOrgId] = useState(undefined);
   useEffect(() => {
     let alive = true;
@@ -488,11 +491,16 @@ export default function App() {
         // Straight to this deployment's sign-in — no organisation picker, because
         // the address already determines the organisation. Render nothing while
         // the answer is in flight, so the form does not flash the wrong door.
-        orgId === undefined
-          ? null
-          : orgId
-            ? <LoginScreen login={login} onSession={completeSession} org={orgId} />
-            : <OrgUnavailable />
+        // Checking a signature needs no account and must not wait on the
+        // organisation lookup: whoever received the document is the person
+        // most likely to be checking it, and they have neither.
+        verifying
+          ? <VerifySignature />
+          : orgId === undefined
+            ? null
+            : orgId
+              ? <LoginScreen login={login} onSession={completeSession} org={orgId} />
+              : <OrgUnavailable />
       ) : user.needsWorkEmail ? (
         <WorkEmailCapture user={user} notify={notify} onDone={setUser} />
       ) : (
