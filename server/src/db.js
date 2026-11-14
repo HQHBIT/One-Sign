@@ -872,6 +872,21 @@ async function runSchema() {
   // in — and since the audit page was removed, the ONLY one. `signer_ref` is the step
   // signer's id, or 'single' for a team request's one approver — unique per
   // request, so a rebuilt document reuses the numbers it already has.
+  // A per-deployment secret, generated once and kept. It is what makes a sign
+  // number impossible to invent: the check code stamped beside the number is
+  // derived from it, so anyone can VERIFY a number but nobody outside this box
+  // can MINT one. Kept in the database rather than an env var so it survives a
+  // deploy and needs nothing set by hand on three separate boxes.
+  await tryExec(`CREATE TABLE IF NOT EXISTS app_secrets (
+    name       VARCHAR(64)  NOT NULL PRIMARY KEY,
+    value      VARCHAR(128) NOT NULL,
+    created_at BIGINT       NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // The check code as issued, stored so verification never has to recompute it
+  // and so a secret rotation cannot silently invalidate every stamped document.
+  await tryExec("ALTER TABLE sign_register ADD COLUMN check_code VARCHAR(8) DEFAULT NULL");
+
   await tryExec(`CREATE TABLE IF NOT EXISTS sign_register (
     sign_no               VARCHAR(24)  NOT NULL PRIMARY KEY,
     year                  INT          NOT NULL,
