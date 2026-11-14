@@ -52,6 +52,7 @@ import { PrintBtn } from "./components/PrintBtn.jsx";
 import { RequestRow } from "./components/RequestRow.jsx";
 import { FolderedList } from "./components/FolderedList.jsx";
 import { useListSearch, ListSearchBar, NoMatches } from "./components/ListSearch.jsx";
+import { usePagination, Pager } from "./components/Pager.jsx";
 import { HelpGuide } from "./components/HelpGuide.jsx";
 import { useInstall, InstallBanner, IosInstallSheet } from "./components/InstallPrompt.jsx";
 import { WorkflowSummary } from "./components/WorkflowSummary.jsx";
@@ -1298,6 +1299,7 @@ function ReturnedBlock({ items, teams, users, onOpen }) {
 function PendingList({ items, teams, users, user, sendReminder, cancelRequest, refresh, back, notify, title = "Pending requests" }) {
   // A requestor chasing a document wants to know who is holding it.
   const search = useListSearch(items, { people: waitingOnOf, label: "Waiting on" });
+  const pager = usePagination(search.visible);
   const [open, setOpen] = useState(null);
   const [revisingId, setRevisingId] = useState(null);
   const revising = items.find(r => r.id === revisingId);
@@ -1306,8 +1308,9 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, r
       <BackHeader back={back} title={title} step={`${items.length} total`} />
       {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
       {items.length === 0 ? <Empty icon={Inbox} text="Nothing pending. You're all caught up." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
+        <>
         <div className="card mt-8 overflow-hidden">
-          {search.visible.map((r, i) => (
+          {pager.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
@@ -1345,6 +1348,8 @@ function PendingList({ items, teams, users, user, sendReminder, cancelRequest, r
               )} />
           ))}
         </div>
+        <Pager state={pager} />
+      </>
       )}
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
       {revising && <ReviseRequest req={revising} users={users} markers={buildWorkflowMarkers(revising, teams)}
@@ -1630,13 +1635,15 @@ function ApprovedList({ items, teams, users, user, back, notify, title = "Approv
 function RejectedList({ items, teams, users, user, back }) {
   const [open, setOpen] = useState(null);
   const search = useListSearch(items, { people: rejectedByOf, label: "Rejected by" });
+  const pager = usePagination(search.visible);
   return (
     <div>
       <BackHeader back={back} title="Rejected requests" step={`${items.length} rejected`} />
       {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
       {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
+        <>
         <div className="card mt-8 overflow-hidden">
-          {search.visible.map((r, i) => (
+          {pager.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={(
                 <div className="flex flex-wrap gap-2">
@@ -1651,6 +1658,8 @@ function RejectedList({ items, teams, users, user, back }) {
               )} />
           ))}
         </div>
+        <Pager state={pager} />
+      </>
       )}
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
@@ -2092,6 +2101,7 @@ function ForInformationList({ items, notify, onChanged, back }) {
 }
 
 function AwaitingSignatureList({ items, user, users, teams, approveRequest, rejectRequest, recommendChanges, undoApproval, back, notify }) {
+  const pager = usePagination(items);
   const [openId, setOpenId] = useState(null);
   const open = items.find(r => r.id === openId);
   return (
@@ -2100,8 +2110,9 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
       {items.length === 0 ? (
         <Empty icon={Inbox} text="No requests are waiting for your signature." />
       ) : (
+        <>
         <div className="card mt-4 overflow-hidden">
-          {items.map((r, i) => (
+          {pager.visible.map((r, i) => (
             <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
               <div className="flex-1 min-w-0">
                 <RequestRow r={r} teams={teams} users={users} i={0}
@@ -2110,6 +2121,8 @@ function AwaitingSignatureList({ items, user, users, teams, approveRequest, reje
             </div>
           ))}
         </div>
+        <Pager state={pager} />
+      </>
       )}
       {open && <ApproveDrawer req={open} user={user} users={users} teams={teams}
         approveRequest={approveRequest} rejectRequest={rejectRequest} recommendChanges={recommendChanges} undoApproval={undoApproval}
@@ -2132,7 +2145,8 @@ function ApproverPending({ items, waiting = [], returned = [], user, users, team
   // Layered on the request-type tabs above, so the two narrow together and the
   // person list reflects whatever tab is open.
   const search = useListSearch(typed, { people: requestorOf, label: "Requested by" });
-  const visible = search.visible;
+  const pager = usePagination(search.visible);
+  const visible = pager.visible;
   const selectable = visible.filter(myTurn);
   const allSelected = selectable.length > 0 && selectable.every(r => selected.has(r.id));
 
@@ -2210,8 +2224,9 @@ function ApproverPending({ items, waiting = [], returned = [], user, users, team
 
       {items.length > 0 && <ListSearchBar state={search} className="mt-4" />}
       {visible.length === 0 ? <Empty icon={Inbox} text={items.length === 0 ? "Nothing awaiting your approval." : search.filtering ? "Nothing matches that search." : "No requests of this type."} /> : (
+        <>
         <div className="card mt-2 overflow-hidden">
-          {visible.map((r, i) => {
+          {pager.visible.map((r, i) => {
             const mine = myTurn(r);
             return (
               <div key={r.id} className={`flex items-center ${i > 0 ? "border-t" : ""}`} style={{ borderColor: "var(--c-ink-08)" }}>
@@ -2231,6 +2246,8 @@ function ApproverPending({ items, waiting = [], returned = [], user, users, team
             );
           })}
         </div>
+        <Pager state={pager} />
+      </>
       )}
 
       {/* HQHB: sent back for changes — with the requestor, returns here on resubmit. */}
@@ -2839,14 +2856,16 @@ function ApproverApproved({ items, back, users, teams, user, approveRequest, rej
 
 function ApproverRejected({ items, back, users, teams, user }) {
   const search = useListSearch(items, { people: requestorOf, label: "Requested by" });
+  const pager = usePagination(search.visible);
   const [open, setOpen] = useState(null);
   return (
     <div>
       <BackHeader back={back} title="Rejected requests" step={`${items.length} rejected`} />
       {items.length > 0 && <ListSearchBar state={search} className="mt-5" />}
       {items.length === 0 ? <Empty icon={FileX} text="No rejected requests." /> : search.visible.length === 0 ? <NoMatches onClear={search.clear} /> : (
+        <>
         <div className="card mt-8 overflow-hidden">
-          {search.visible.map((r, i) => (
+          {pager.visible.map((r, i) => (
             <RequestRow key={r.id} r={r} teams={teams} users={users} i={i}
               actions={<button className="btn-ghost text-xs" onClick={() => setOpen(r)}><Eye size={12} /> Preview</button>}
               subtitle={(r.rejectReason || r.hasRejectVoice) && (
@@ -2857,6 +2876,8 @@ function ApproverRejected({ items, back, users, teams, user }) {
               )} />
           ))}
         </div>
+        <Pager state={pager} />
+      </>
       )}
       {open && <PreviewDrawer user={user} req={open} onClose={() => setOpen(null)} users={users} teams={teams} />}
     </div>
