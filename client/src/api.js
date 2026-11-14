@@ -434,6 +434,8 @@ export const api = {
     return URL.createObjectURL(await res.blob());
   },
   ccMarkSeen(id) { return this.fetch(`/api/ea-cc/${id}/seen`, { method: "POST", body: "{}" }); },
+  // The answer to a review or a held approval. The card is waiting on it.
+  ccSignOff(id) { return this.fetch(`/api/ea-cc/${id}/signoff`, { method: "POST", body: "{}" }); },
   // Issues submitted on the reops form and handed to us — admin only.
   // Report a problem or suggest an improvement from inside the app.
   reportIssue({ message, category, page, files }) {

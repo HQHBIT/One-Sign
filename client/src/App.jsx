@@ -2073,11 +2073,24 @@ function ForInformationList({ items, notify, onChanged, back }) {
     finally { setBusyId(null); }
   };
 
+  // The answer the document is waiting for. Saying what happened matters here:
+  // an approval also stamps the card, and a review deliberately does not.
+  const signOff = async (d) => {
+    setBusyId(d.id);
+    try {
+      const r = await api.ccSignOff(d.id);
+      notify(r?.stamped ? "Approved — the document can move on" : "Noted — the document can move on", "success");
+      await onChanged();
+    } catch (e) { notify(e.message || "Could not record that", "error"); }
+    finally { setBusyId(null); }
+  };
+
   return (
     <div>
       <BackHeader back={back} title="For your information" step={unopened ? `${unopened} not opened` : "all opened"} />
       <div className="card p-4 mt-5 text-sm opacity-70">
-        These were shared with you to read. <span className="font-medium">No signature is needed</span> — nothing here is waiting on you.
+        Shared with you to read. <span className="font-medium">No signature is needed</span> on any of them
+        — though anything marked <span className="font-medium">waiting on you</span> holds its document until you say you are done.
       </div>
       {items.length === 0 ? (
         <Empty icon={Eye} text="Nothing has been shared with you." />
@@ -2091,15 +2104,28 @@ function ForInformationList({ items, notify, onChanged, back }) {
                   {d.fromName ? `from ${d.fromName}` : ""}{d.stageName ? ` · ${d.stageName}` : ""} · shared {fmt(d.notifiedAt)}
                 </div>
               </div>
-              {d.viewedAt
-                ? <span className="pill pill-approved shrink-0"><CheckCircle size={10} /> Opened {fmt(d.viewedAt)}</span>
-                : <span className="pill pill-pending shrink-0">New</span>}
+              {(d.asks === "review" || d.asks === "approval") && !d.signedOffAt
+                ? <span className="pill pill-pending shrink-0">Waiting on you</span>
+                : d.viewedAt
+                  ? <span className="pill pill-approved shrink-0"><CheckCircle size={10} /> Opened {fmt(d.viewedAt)}</span>
+                  : <span className="pill pill-pending shrink-0">New</span>}
               <button className="btn-primary text-xs shrink-0" disabled={busyId === d.id} onClick={() => openDoc(d)}>
                 <Eye size={13} /> {busyId === d.id ? "…" : "Open"}
               </button>
-              {!d.viewedAt && (
+              {/* A review or a held approval is waiting on this person: the
+                  card cannot leave its stage until they answer. "Mark as read"
+                  is for the ones that are purely informational. */}
+              {d.asks === "review" || d.asks === "approval" ? (
+                d.signedOffAt
+                  ? <span className="pill pill-approved shrink-0">
+                      <CheckCircle size={10} /> {d.asks === "approval" ? "Approved" : "Signed off"} {fmt(d.signedOffAt)}
+                    </span>
+                  : <button className="btn-primary text-xs shrink-0" disabled={busyId === d.id} onClick={() => signOff(d)}>
+                      <CheckCircle size={13} /> {d.asks === "approval" ? "Approve" : "I have read this"}
+                    </button>
+              ) : (!d.viewedAt && (
                 <button className="btn-ghost text-xs shrink-0" disabled={busyId === d.id} onClick={() => markSeen(d)}>Mark as read</button>
-              )}
+              ))}
             </div>
           ))}
         </div>

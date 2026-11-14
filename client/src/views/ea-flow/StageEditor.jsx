@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PenLine, Eye, Stamp } from "lucide-react";
+import { PenLine, Eye, Stamp, CheckCircle2, Bell, BellOff } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { withCurrent } from "./time.js";
 
@@ -14,7 +14,8 @@ const KINDS = [
   ["plain", "Nothing — just a step", "A holding place on the board. Nobody is asked for anything."],
   ["signature", "Needs a signature", "Moving a document here sends it to that person to sign, exactly like a normal request. It can move on once they have signed."],
   ["cc", "For information only (CC)", "That person is shown the document and told it is for information. They do not sign, and the card is free to move on straight away."],
-  ["approval", "Marks it approved", "Moving a document here marks it Approved and records the moment. Nobody is asked to sign, nothing is added to the document itself, and the approval stays on the card as it moves on."],
+  ["review", "Read and sign off", "That person must open the document and say they have read it. It is recorded against them by name, nothing is drawn on the paper, and the card waits here until they have done it."],
+  ["approval", "Marks it approved", "Marks the document Approved and records the moment. Name somebody and the card waits for them to approve; leave it unnamed and arriving here approves it, asking nobody."],
 ];
 
 export function StageEditor({ stage, executives, onSave, onClose }) {
@@ -29,9 +30,16 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
     stage?.ccPeople?.length ? stage.ccPeople.map((p) => p.id)
       : (stage?.kind === "cc" && stage?.signer?.id ? [stage.signer.id] : [])
   ));
+  // Is the person this stage names emailed when a card arrives? On unless the
+  // stage says otherwise — silence would be the wrong default for a board that
+  // has always notified.
+  const [notifyHolder, setNotifyHolder] = useState(stage?.notifyHolder !== false);
   const [busy, setBusy] = useState(false);
+  // An approval may name nobody — that is the original behaviour, where
+  // arriving is the decision — so it is the one kind with no required person.
   const ok = name.trim().length > 0
     && (kind !== "signature" || !!signerId)
+    && (kind !== "review" || !!signerId)
     && (kind !== "cc" || ccIds.size > 0);
 
   const toggleCc = (id) => setCcIds((prev) => {
@@ -50,8 +58,9 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
         // Still sent so a server mid-deploy, which knows only this flag, cannot
         // read a CC stage as one that demands a signature.
         requiresSignature: kind === "signature",
-        signerId: kind === "signature" ? signerId : null,
+        signerId: ["signature", "review", "approval"].includes(kind) ? (signerId || null) : null,
         ccUserIds: kind === "cc" ? [...ccIds] : [],
+        notifyHolder,
       });
     } finally { setBusy(false); }
   };
@@ -98,10 +107,15 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
 
         {/* One signer: a signature stage raises a request, and a request has
             one signer. A dropdown says "exactly one" without needing to. */}
-        {kind === "signature" && (
+        {["signature", "review", "approval"].includes(kind) && (
           <label className="block">
-            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">Whose signature</div>
+            <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
+              {kind === "signature" ? "Whose signature" : kind === "review" ? "Who reads and signs off" : "Who approves"}
+            </div>
             <select value={signerId} onChange={(e) => setSignerId(e.target.value)} className="w-full">
+              {/* Only an approval may be held by nobody, and saying so in the
+                  list is clearer than a checkbox beside it. */}
+              {kind === "approval" && <option value="">Nobody — approve on arrival</option>}
               {/* Executive Management, plus this stage's signer if they were
                   chosen before the list was narrowed (so it never shows someone else). */}
               {withCurrent(executives, stage?.kind !== "cc" && stage?.signer ? [stage.signer] : []).map((x) => (
@@ -116,6 +130,29 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
         {/* Many readers: tick boxes rather than a dropdown, because a paper is
             routinely shown to several people at once and the list has to be
             readable at a glance when someone comes back to edit it. */}
+        {/* Who is told. Separate from who is named, because an assistant
+            walking a document round in person does not want it emailing
+            everyone as well. */}
+        {(["signature", "review", "cc"].includes(kind) || (kind === "approval" && signerId)) && (
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg p-2"
+            style={{ backgroundColor: "rgba(184,137,74,.06)" }}>
+            <input type="checkbox" className="mt-1" checked={notifyHolder}
+              onChange={(e) => setNotifyHolder(e.target.checked)}
+              style={{ accentColor: "var(--c-gold)" }} />
+            <span>
+              <span className="text-sm font-medium inline-flex items-center gap-1.5">
+                {notifyHolder ? <Bell size={13} /> : <BellOff size={13} />}
+                Email them when a document arrives
+              </span>
+              <span className="block text-xs opacity-60 mt-0.5">
+                {notifyHolder
+                  ? "They are emailed as soon as a card reaches this stage."
+                  : "Nobody is emailed. The stage still appears in their list, and the ask is still recorded — they simply are not told."}
+              </span>
+            </span>
+          </label>
+        )}
+
         {kind === "cc" && (
           <div>
             <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">

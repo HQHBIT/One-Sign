@@ -39,9 +39,9 @@ router.get("/", async (req, res, next) => {
       // LEFT JOIN on the stage, not an inner one: a document sent for review by
       // hand has NO stage, and an inner join would silently drop exactly those
       // rows — the ask would be recorded, and the reader would never see it.
-      `SELECT n.id, n.document_id, n.stage_id, n.notified_at, n.viewed_at, n.source,
+      `SELECT n.id, n.document_id, n.stage_id, n.notified_at, n.viewed_at, n.source, n.signed_off_at,
               d.title, d.file_name, d.file_type,
-              s.name AS stage_name, b.name AS board_name, u.name AS from_name
+              s.name AS stage_name, s.stage_kind, b.name AS board_name, u.name AS from_name
          FROM ea_cc_notices n
          JOIN ea_documents d ON d.id = n.document_id
          LEFT JOIN ea_stages s ON s.id = n.stage_id
@@ -56,8 +56,46 @@ router.get("/", async (req, res, next) => {
         stageName: r.source === "adhoc" ? "Sent for review" : r.stage_name,
         boardName: r.board_name, fromName: r.from_name,
         notifiedAt: Number(r.notified_at), viewedAt: r.viewed_at ? Number(r.viewed_at) : null,
+        // What is being asked of them. "cc" is for information and needs
+        // nothing; review and a held approval both want an answer, and the
+        // card does not move until they give it.
+        asks: r.source === "adhoc" ? "cc" : (r.stage_kind === "review" || r.stage_kind === "approval" ? r.stage_kind : "cc"),
+        signedOffAt: r.signed_off_at ? Number(r.signed_off_at) : null,
       })),
     });
+  } catch (e) { next(e); }
+});
+
+// ---------- done: read and signed off ----------
+// The answer to a review or a held approval. One row is the ask and the
+// answer both, so this is an UPDATE rather than a second table.
+router.post("/:id/signoff", async (req, res, next) => {
+  try {
+    const n = await noticeFor(req.user.id, req.params.id);
+    if (!n) return res.status(404).end();
+
+    const stage = n.stage_id ? await queryOne("SELECT * FROM ea_stages WHERE id = ?", [n.stage_id]) : null;
+    const kind = stage?.stage_kind || "cc";
+    if (kind !== "review" && kind !== "approval") {
+      return res.status(400).json({ error: "Nothing to sign off here — this was sent for information." });
+    }
+    if (n.signed_off_at) return res.json({ ok: true, signedOffAt: Number(n.signed_off_at) });
+
+    const at = Date.now();
+    // Reading it is implied by signing it off; a reader who went straight here
+    // should not be recorded as never having opened it.
+    await execute("UPDATE ea_cc_notices SET signed_off_at = ?, viewed_at = COALESCE(viewed_at, ?) WHERE id = ?",
+      [at, at, n.id]);
+
+    // An approval stage ALSO stamps the card, which is the thing that makes it
+    // an approval rather than a reading. A review deliberately stamps nothing.
+    if (kind === "approval") {
+      await execute(
+        `INSERT INTO ea_approvals (id, document_id, stage_id, approved_at, approved_by) VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE approved_at = VALUES(approved_at), approved_by = VALUES(approved_by)`,
+        ["eaa_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), n.document_id, n.stage_id, at, req.user.id]);
+    }
+    res.json({ ok: true, signedOffAt: at, stamped: kind === "approval" });
   } catch (e) { next(e); }
 });
 

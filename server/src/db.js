@@ -655,6 +655,22 @@ async function runSchema() {
   // that already has the column gets the new value too.
   await tryExec("ALTER TABLE ea_stages MODIFY COLUMN stage_kind ENUM('plain','signature','cc','approval') NOT NULL DEFAULT 'plain'");
 
+  // A fifth kind: read and sign off. The named person must open the document
+  // and say they have read it, and that is recorded against them by name — but
+  // nothing is drawn onto the paper and nothing is stamped on the card. It sits
+  // between CC (shown it, never asked) and approval (marks the paper Approved).
+  await tryExec("ALTER TABLE ea_stages MODIFY COLUMN stage_kind ENUM('plain','signature','cc','approval','review') NOT NULL DEFAULT 'plain'");
+
+  // Whether the person a stage names is emailed when a card arrives. On by
+  // default, because that is how every stage behaved before the switch existed
+  // — a new column must not silently stop existing boards notifying anyone.
+  await tryExec("ALTER TABLE ea_stages ADD COLUMN notify_holder TINYINT(1) NOT NULL DEFAULT 1");
+
+  // When the person a review or approval stage names said they had done it.
+  // NULL means still waiting. Lives on the notice because that is already the
+  // row that says "this person was asked about this document".
+  await tryExec("ALTER TABLE ea_cc_notices ADD COLUMN signed_off_at BIGINT DEFAULT NULL");
+
   // The stages a card jumped straight over on its way here, as a JSON array of
   // stage ids. A skipped stage is otherwise indistinguishable from one the card
   // has not reached yet — both simply have no movement row — and the report

@@ -100,6 +100,27 @@ const isCc = (s) => kindOf(s) === "cc";
 // records the moment; nobody is asked to sign, no request is raised, and
 // nothing is drawn onto the document itself.
 const isApproval = (s) => kindOf(s) === "approval";
+// Read and sign off: the named person must say they have read it, and that is
+// recorded against them. Nothing is drawn on the paper, nothing stamped.
+const isReview = (s) => kindOf(s) === "review";
+// The one person a stage names. Signature stages have always had one; review
+// and approval stages may now have one too, and approval without one keeps its
+// original behaviour of stamping on arrival and asking nobody.
+const holderOf = (s) => (["signature", "review", "approval"].includes(kindOf(s)) ? (s?.signer_id || null) : null);
+// Does this stage wait for its holder before the card moves on? A review
+// always does; an approval only once somebody is named, so boards built before
+// approvals could name anyone are unaffected.
+const waitsForHolder = (s) => isReview(s) || (isApproval(s) && !!holderOf(s));
+// Whether to email the person this stage names. Older rows have no column
+// value yet, and silence would be the wrong default for a board that has
+// always notified.
+// What the client sent for the email switch, or what the stage already had.
+// Absent means unchanged, not off — a client that knows nothing of the switch
+// must never turn it off by saying nothing.
+const notifyFrom = (body, current) =>
+  (body?.notifyHolder === undefined ? (current ? (notifiesHolder(current) ? 1 : 0) : 1) : (body.notifyHolder ? 1 : 0));
+
+const notifiesHolder = (s) => s?.notify_holder === undefined || s?.notify_holder === null || !!Number(s.notify_holder);
 
 // Everyone a CC stage copies, in a stable order. Empty for any other kind.
 // Inactive people drop out here rather than being told about documents.
@@ -120,6 +141,12 @@ async function stageOut(s) {
     // so a client from before this change names somebody rather than nobody.
     signer: signer ? { id: signer.id, name: signer.name } : (cc[0] ? { id: cc[0].id, name: cc[0].name } : null),
     ccPeople: cc.map((u) => ({ id: u.id, name: u.name, role: u.role })),
+    // The one person this stage names, whatever kind it is — the board shows
+    // "Shabbar BS · Signs" from this rather than guessing per kind.
+    holder: holderOf(s) && signer ? { id: signer.id, name: signer.name } : null,
+    notifyHolder: notifiesHolder(s),
+    // Whether a card has to wait here. The board greys "Move to…" on it.
+    waitsForHolder: waitsForHolder(s),
   };
 }
 
@@ -199,6 +226,18 @@ async function requestSummary(r, myExecIds = []) {
 }
 const isWaiting = (rq) => !!(rq && (rq.status === "pending" || rq.status === "approved_pending"));
 
+// A review or held-approval stage is satisfied when the person it names has
+// signed off on this visit. The notice is the record of the ask, so it is also
+// the record of the answer.
+async function holderSignedOff(doc, stage) {
+  const holderId = holderOf(stage);
+  if (!holderId) return true;
+  const n = await queryOne(
+    "SELECT signed_off_at FROM ea_cc_notices WHERE document_id = ? AND stage_id = ? AND user_id = ? AND source = ?",
+    [doc.id, stage.id, holderId, "stage"]);
+  return !!n?.signed_off_at;
+}
+
 async function docOut(d, stageById) {
   const rq = await requestFor(d);
   const stage = stageById?.[d.stage_id] || await queryOne("SELECT * FROM ea_stages WHERE id = ?", [d.stage_id]);
@@ -253,7 +292,10 @@ async function sourceFor(requestId) {
 //
 // The email is deliberately not awaited: a card must still move when SendGrid
 // is slow or unconfigured, exactly as the rest of the app treats notification.
-async function noticeCc({ doc, stage, person, at, source = "stage" }) {
+// notify false records the ask without emailing: the stage still appears in
+// that person's list, they are simply not told by email. The record and the
+// notification are separate things, and the switch only governs the second.
+async function noticeCc({ doc, stage, person, at, source = "stage", notify = true }) {
   if (source === "adhoc") {
     // Belongs to the document rather than a stage, so the unique key cannot
     // catch a repeat — refresh by hand, which is also what makes sending the
@@ -275,6 +317,7 @@ async function noticeCc({ doc, stage, person, at, source = "stage" }) {
        ON DUPLICATE KEY UPDATE notified_at = VALUES(notified_at), viewed_at = NULL`,
       [uid("eacc"), doc.id, stage.id, person.id, at]);
   }
+  if (!notify) return;
   const to = await queryOne("SELECT email, name FROM users WHERE id = ?", [person.id]);
   if (!to?.email) return;
   sendEmail({
@@ -423,7 +466,7 @@ router.delete("/boards/:id", async (req, res, next) => {
 // string. THE ONLY writer of requires_signature — see the note on the column in
 // db.js: stage_kind is the truth, that column is a compatibility shadow for a
 // server still running the previous build mid-deploy.
-const STAGE_KINDS = ["plain", "signature", "cc", "approval"];
+const STAGE_KINDS = ["plain", "signature", "cc", "approval", "review"];
 // Replaces a stage's CC list wholesale. Rewriting rather than diffing keeps
 // "who is copied" a single statement of fact; the notices already sent are
 // untouched, because being told about a document is a thing that happened.
@@ -443,7 +486,19 @@ async function signatureSettings(req, body, current = null) {
   // Neither of these asks anything of anybody, so neither names a person. An
   // approval stage is written with requires_signature 0 like any other: the
   // whole point is that nothing is signed there.
-  if (kind === "plain" || kind === "approval") return { kind, requiresSignature: 0, signerId: null, ccUserIds: [] };
+  if (kind === "plain") return { kind, requiresSignature: 0, signerId: null, ccUserIds: [] };
+
+  // An approval stage MAY name the person who approves. Without one it behaves
+  // exactly as it always has: arriving stamps the card and asks nobody. With
+  // one, the card waits for them.
+  if (kind === "approval") {
+    const who = body.signerId === undefined ? (current?.signer_id || null) : (body.signerId || null);
+    if (who) {
+      const ok = who === current?.signer_id ? await stillSignable(who) : await signableExecutive(who);
+      if (!ok) return "Choose from the Executive Management";
+    }
+    return { kind, requiresSignature: 0, signerId: who, ccUserIds: [] };
+  }
 
   // A CC stage copies MANY people; a signature stage has exactly one signer,
   // because the request it raises has exactly one signer. Different shapes on
@@ -468,12 +523,18 @@ async function signatureSettings(req, body, current = null) {
     return { kind, requiresSignature: 0, signerId: null, ccUserIds: unique };
   }
 
+  // signature and review both name exactly one person; only signature asks
+  // for a signature on the page.
   const signerId = body.signerId === undefined ? current?.signer_id : (body.signerId || null);
-  if (!signerId) return "Choose whose signature this stage needs";
+  if (!signerId) {
+    return kind === "review"
+      ? "Choose who should read and sign off at this stage"
+      : "Choose whose signature this stage needs";
+  }
   // The stage's existing signer may stay; a new one must be an executive.
   const ok = signerId === current?.signer_id ? await stillSignable(signerId) : await signableExecutive(signerId);
   if (!ok) return "Choose from the Executive Management";
-  return { kind, requiresSignature: 1, signerId, ccUserIds: [] };
+  return { kind, requiresSignature: kind === "signature" ? 1 : 0, signerId, ccUserIds: [] };
 }
 
 router.post("/boards/:id/stages", async (req, res, next) => {
@@ -488,8 +549,8 @@ router.post("/boards/:id/stages", async (req, res, next) => {
     if (typeof sig === "string") return res.status(400).json({ error: sig });
     const last = await queryOne("SELECT COALESCE(MAX(position), 0) AS p FROM ea_stages WHERE board_id = ?", [b.id]);
     const id = uid("eas");
-    await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, Date.now()]);
+    await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, notify_holder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, null), Date.now()]);
     await setStageCc(id, sig.ccUserIds);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [id]))), count: 0 } });
   } catch (e) { next(e); }
@@ -505,7 +566,8 @@ router.put("/stages/:id", async (req, res, next) => {
     if (clash) return res.status(409).json({ error: `This board already has a stage called "${name}"` });
     const sig = await signatureSettings(req, req.body || {}, s);
     if (typeof sig === "string") return res.status(400).json({ error: sig });
-    await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ? WHERE id = ?", [name, sig.kind, sig.requiresSignature, sig.signerId, s.id]);
+    await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ?, notify_holder = ? WHERE id = ?",
+      [name, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, s), s.id]);
     await setStageCc(s.id, sig.ccUserIds);
     const n = await queryOne("SELECT COUNT(*) AS n FROM ea_documents WHERE stage_id = ?", [s.id]);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [s.id]))), count: Number(n.n) } });
@@ -805,13 +867,25 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
     // the assistant should know the stage no longer does anything.
     const people = await ccRecipients(to.id);
     if (!people.length) return { status: 400, error: "Nobody on this stage can be shown the document any more — edit the stage" };
-    for (const person of people) await noticeCc({ doc, stage: to, person, at: now });
+    for (const person of people) await noticeCc({ doc, stage: to, person, at: now, notify: notifiesHolder(to) });
   }
 
-  if (isApproval(to)) {
-    // The stage IS the approval, so arriving is the decision — there is no
-    // second button to press, nothing is asked of anybody, and nothing is
-    // written onto the document. Only the stamp is recorded.
+  // A stage that NAMES somebody and waits for them: review always, approval
+  // once a holder is named. The person is asked through the same notice the CC
+  // reader already uses, so there is one inbox and one read-state, not two.
+  if (waitsForHolder(to)) {
+    const holderId = holderOf(to);
+    const person = holderId ? await queryOne("SELECT id, name, email FROM users WHERE id = ? AND active = 1", [holderId]) : null;
+    if (!person) {
+      return { status: 400, error: "The person this stage names is no longer active — edit the stage" };
+    }
+    await noticeCc({ doc, stage: to, person, at: now, notify: notifiesHolder(to) });
+  }
+
+  if (isApproval(to) && !holderOf(to)) {
+    // Nobody is named, so arriving IS the decision — the behaviour this stage
+    // has always had, kept exactly so boards built before approvals could name
+    // anyone do not suddenly stall waiting for a person who does not exist.
     //
     // A card sent back and round again re-approves: the stamp says when this
     // stage last passed it, which is the question the trail is asked.
@@ -982,6 +1056,12 @@ router.post("/documents/:id/move", async (req, res, next) => {
     // never does — being asked to read something is not a gate.
     if (needsSignature(from) && isWaiting(rq)) {
       return res.status(409).json({ error: `Waiting for ${rq.signerName || "the signatory"} to sign` });
+    }
+    // The same hold, for a stage that asks someone to read and sign off, or to
+    // approve. A card does not leave until they have.
+    if (waitsForHolder(from) && !(await holderSignedOff(d, from))) {
+      const who = await queryOne("SELECT name FROM users WHERE id = ?", [holderOf(from)]);
+      return res.status(409).json({ error: `Waiting for ${who?.name || "the person named here"} at "${from.name}"` });
     }
 
     const bad = await enterStage({ doc: d, from, to, boxes: parseBoxes(req.body?.boxes), actor: req.user });
