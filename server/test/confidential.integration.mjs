@@ -200,6 +200,19 @@ r = await fetch(`${B}/api/requests/${id}/approve`, {
 ck(r.status === 200, "approve succeeds inside the window (" + r.status + ")");
 const after = await queryOne("SELECT * FROM requests WHERE id=?", [id]);
 ck(after.status === "approved", "request is approved");
+// The requestor's "signed" email names the document, but the Email log —
+// which administrators read — must not. (notifyUser is fire-and-forget.)
+{
+  const reqEmail = (await queryOne("SELECT email FROM users WHERE id=?", [after.requestor_id]))?.email;
+  let logged = null;
+  for (let i = 0; i < 40 && !logged; i++) {
+    logged = await queryOne("SELECT subject, body FROM emails WHERE to_email=? AND template='confidential_approved' AND body LIKE ? ORDER BY id DESC LIMIT 1",
+      [reqEmail, `%?request=${id}%`]);
+    if (!logged) await new Promise(r => setTimeout(r, 250));
+  }
+  ck(!!logged, "the requestor was sent the confidential 'signed' email");
+  ck(logged && !logged.body.includes(FILE_NAME) && !logged.subject.includes(FILE_NAME), "the Email log never shows the confidential document's name");
+}
 ck(/\.enc$/.test(after.signed_file_path), "signed copy carries .enc (" + after.signed_file_path + ")");
 const signedOnDisk = await fs.readFile(diskPathFor("signed", after.signed_file_path));
 ck(looksEncrypted(signedOnDisk), "*** the SIGNED copy is encrypted at rest too ***");
@@ -238,6 +251,13 @@ ck(!nt.subject.includes(FILE_NAME) && !nt.html.includes(FILE_NAME) && !nt.text.i
 const rt = renderTemplate("confidential_rejected", { requestorName: "B", approverName: "A", requestId: id, reason: "because reasons" });
 ck(!rt.text.includes("because reasons"), "confidential_rejected never leaks the reason");
 ck(redactEmailBody("Unlock code: 123456").includes("••"), "unlock codes are masked in the log");
+// The one exception: the requestor is told WHICH of their documents was
+// signed — in the body, never in the subject or inbox preview.
+const at = renderTemplate("confidential_approved", { requestorName: "B", approverName: "A", requestId: id, fileName: FILE_NAME });
+ck(at.html.includes(FILE_NAME) && at.text.includes(FILE_NAME), "confidential_approved names the document to its requestor");
+ck(!at.subject.includes(FILE_NAME), "but not in the subject line");
+const preview = (at.html.match(/display:none[^>]*>([^<]*)</) || [])[1] || "";
+ck(!preview.includes(FILE_NAME), "nor in the inbox preview text");
 
 // ---------- 11. the access log recorded the right things ----------
 const log = await query("SELECT action, COUNT(*) n FROM confidential_access_log WHERE request_id=? GROUP BY action", [id]);
