@@ -14,6 +14,10 @@ on:
         default: uat
         type: choice
         options: [uat, hqhb, waqf]
+      email:
+        description: "Optional: look at ONE recipient (their log rows, account flags, SendGrid suppressions)"
+        required: false
+        default: ""
 
 jobs:
   inspect:
@@ -21,10 +25,13 @@ jobs:
     steps:
       - name: Read recent email log on EC2
         uses: appleboy/ssh-action@v1
+        env:
+          PROBE_EMAIL: ${{ inputs.email }}
         with:
           host: ${{ inputs.box == 'uat' && secrets.UAT_EC2_HOST || inputs.box == 'hqhb' && secrets.HQHB_EC2_HOST || secrets.WAQF_EC2_HOST }}
           username: ubuntu
           key: ${{ inputs.box == 'uat' && secrets.UAT_EC2_SSH_KEY || inputs.box == 'hqhb' && secrets.HQHB_EC2_SSH_KEY || secrets.WAQF_EC2_SSH_KEY }}
+          envs: PROBE_EMAIL
           script: |
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
@@ -61,6 +68,40 @@ jobs:
                   [Date.now() - 7 * 24 * 3600 * 1000]
                 );
                 console.log("last 7 days:", JSON.stringify(agg));
+
+                // ---- one recipient, if asked ----
+                const who = String(process.env.PROBE_EMAIL || "").trim().toLowerCase();
+                if (who) {
+                  console.log("");
+                  console.log("==== recipient: " + who + " ====");
+                  const [u] = await c.execute(
+                    "SELECT id, role, active, email_notifications, LOWER(email) = ? AS primary_match, LOWER(COALESCE(secondary_email, \"\")) = ? AS secondary_match FROM users WHERE LOWER(email) = ? OR LOWER(COALESCE(secondary_email, \"\")) = ?",
+                    [who, who, who, who]);
+                  console.log("account rows matching:", u.length, JSON.stringify(u.map(x => ({ role: x.role, active: x.active, email_notifications: x.email_notifications, primary: !!x.primary_match, secondary: !!x.secondary_match }))));
+                  const [mine] = await c.execute(
+                    "SELECT template, sent_at, delivered, LEFT(COALESCE(error, \"\"), 120) AS error FROM emails WHERE LOWER(to_email) = ? ORDER BY sent_at DESC LIMIT 15", [who]);
+                  console.log("emails logged TO this address:", mine.length, "(newest first)");
+                  for (const r of mine) console.log("  " + new Date(Number(r.sent_at)).toISOString() + " | " + (r.delivered ? "ACCEPTED by SendGrid" : "NOT SENT") + " | " + r.template + (r.error ? " | ERR: " + r.error : ""));
+                  const [inapp] = await c.execute(
+                    "SELECT COUNT(*) AS n, MAX(created_at) AS last FROM notifications n JOIN users u ON u.id = n.user_id WHERE LOWER(u.email) = ?", [who]);
+                  console.log("in-app notifications for this account:", inapp[0].n, inapp[0].last ? "(last " + new Date(Number(inapp[0].last)).toISOString() + ")" : "");
+
+                  // SendGrid keeps lists of addresses it will silently drop.
+                  // A send to a suppressed address still returns 202, so our
+                  // log says "accepted" while nothing ever arrives.
+                  const key = process.env.SENDGRID_API_KEY;
+                  if (!key) { console.log("no SENDGRID_API_KEY on this box — cannot check suppressions"); }
+                  else {
+                    for (const list of ["bounces", "blocks", "spam_reports", "invalid_emails"]) {
+                      try {
+                        const res = await fetch("https://api.sendgrid.com/v3/suppression/" + list + "/" + encodeURIComponent(who), { headers: { Authorization: "Bearer " + key } });
+                        const body = res.ok ? await res.json() : null;
+                        const hit = Array.isArray(body) && body.length > 0;
+                        console.log("SendGrid " + list + ": " + (res.ok ? (hit ? "LISTED — " + JSON.stringify(body[0]).slice(0, 200) : "not listed") : "HTTP " + res.status));
+                      } catch (e) { console.log("SendGrid " + list + ": lookup failed — " + e.message); }
+                    }
+                  }
+                }
                 await c.end();
               })().catch(e => { console.error(e.message); process.exit(1); });
             '
