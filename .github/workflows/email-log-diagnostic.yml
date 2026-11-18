@@ -83,7 +83,7 @@ jobs:
                   console.log("emails logged TO this address:", mine.length, "(newest first)");
                   for (const r of mine) console.log("  " + new Date(Number(r.sent_at)).toISOString() + " | " + (r.delivered ? "ACCEPTED by SendGrid" : "NOT SENT") + " | " + r.template + (r.error ? " | ERR: " + r.error : ""));
                   const [inapp] = await c.execute(
-                    "SELECT COUNT(*) AS n, MAX(created_at) AS last FROM notifications n JOIN users u ON u.id = n.user_id WHERE LOWER(u.email) = ?", [who]);
+                    "SELECT COUNT(*) AS n, MAX(n.created_at) AS last FROM notifications n JOIN users u ON u.id = n.user_id WHERE LOWER(u.email) = ?", [who]);
                   console.log("in-app notifications for this account:", inapp[0].n, inapp[0].last ? "(last " + new Date(Number(inapp[0].last)).toISOString() + ")" : "");
 
                   // SendGrid keeps lists of addresses it will silently drop.
