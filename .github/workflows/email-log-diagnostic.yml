@@ -69,6 +69,19 @@ jobs:
                 );
                 console.log("last 7 days:", JSON.stringify(agg));
 
+                // Confidential "your document was signed" emails (PR #79): the
+                // sent body names the document; the log masks it. Flags only —
+                // no names, no bodies printed here.
+                const [conf] = await c.execute(
+                  "SELECT sent_at, delivered, subject, body FROM emails WHERE template = 'confidential_approved' ORDER BY sent_at DESC LIMIT 5");
+                console.log("");
+                console.log("recent confidential_approved emails:", conf.length);
+                for (const r of conf) {
+                  console.log("  " + new Date(Number(r.sent_at)).toISOString() + " | " + (r.delivered ? "ACCEPTED by SendGrid" : "NOT SENT") +
+                    " | subject generic: " + (r.subject === "Your confidential document has been signed" ? "yes" : "NO") +
+                    " | document named in email (masked in log): " + (String(r.body || "").includes("[confidential document]") ? "YES" : "no"));
+                }
+
                 // ---- one recipient, if asked ----
                 const who = String(process.env.PROBE_EMAIL || "").trim().toLowerCase();
                 if (who) {
