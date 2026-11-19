@@ -563,6 +563,13 @@ const templates = {
   // These templates deliberately NEVER carry the file name or note. A subject
   // line like "PR Termination - <person>.pdf" would leak the substance to
   // anyone who sees the inbox, defeating the point of marking it confidential.
+  //
+  // ONE exception, owner 2026-11-18: when the requestor's own document is
+  // signed, the email names it — in the BODY only. It is their document; with
+  // several confidential requests open they could not otherwise tell which one
+  // was signed. The subject and preheader (what an inbox list shows) stay
+  // generic, and the name is never attached or linked to anything readable
+  // without signing in.
   confidential_unlock_code: (c) => ({
     subject: `Your ${BRAND.fromName} document unlock code`,
     html: layout({ appUrl: c.appUrl,
@@ -686,12 +693,16 @@ const templates = {
       contentHtml:
         greet(c.requestorName) +
         p(`<strong>${esc(c.approverName || "The approver")}</strong> has signed your confidential document.`) +
+        (c.fileName ? details([
+          { label: "Document", value: c.fileName },
+          { label: "Signed by", value: c.approverName || "The approver" },
+        ]) : "") +
         p(`Open ${esc(BRAND.fromName)} and request an unlock code to view or download it.`) +
         button("Open SignFlow", requestUrl(c), "green"),
     }),
     text: [
       `${BRAND.greeting} ${c.requestorName}`, ``,
-      `${c.approverName || "The approver"} has signed your confidential document.`, ``,
+      `${c.approverName || "The approver"} has signed your confidential document${c.fileName ? ` "${c.fileName}"` : ""}.`, ``,
       requestUrl(c), ``,
       `— ${BRAND.fromName}`,
     ].join("\n"),
@@ -891,7 +902,12 @@ export async function sendEmail({ to, template, ctx, attachments, _isAssistantCo
   const { subject, html, text } = renderTemplate(template, ctxWithUrl);
   // We SEND both `html` (branded) and `text` (fallback). We LOG only the
   // plain-text version, redacted — never the HTML, never a plaintext password.
-  const logBody = redactEmailBody(text);
+  let logBody = redactEmailBody(text);
+  // A confidential template that names the document to its requestor must not
+  // put that name in the Email log, which administrators read.
+  if (String(template).startsWith("confidential_") && ctx?.fileName) {
+    logBody = logBody.split(String(ctx.fileName)).join("[confidential document]");
+  }
   const sentAt = Date.now();
 
   if (!apiKey) {
