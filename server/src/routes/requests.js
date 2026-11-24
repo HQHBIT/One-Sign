@@ -193,7 +193,7 @@ export async function logAccess(req, requestId, action) {
 // anyone who is not on the route (in practice: the IT Admin, who keeps
 // operational visibility of status and participants) the name and note are
 // stripped. Applied once, here, so there is a single place to audit.
-function redactConfidential(hydrated, row, user) {
+export function redactConfidential(hydrated, row, user) {
   if (!row.confidential) return hydrated;
   const onRoute = user.id === row.requestor_id
     || user.id === row.approver_id
@@ -905,15 +905,17 @@ export async function authoriseAccess(user, row) {
   }
   // An executive assistant may open what the executives they assist have been
   // sent — the same documents their executive tab already LISTS (assist.js):
-  // the pending queue with "view", everything with "dashboard". Without this the
+  // the pending queue with "view", everything with "dashboard" — and on HQHB
+  // everything with "view" too (owner, 2026-11-24, HQHB only). Without this the
   // tab listed a document and then refused to open it (owner, 2026-10-31).
   // Never a confidential one: those stay with the people named on them.
   if (user.role === "executive_assistant" && !row.confidential) {
     const links = await query(
       "SELECT executive_id, can_view, can_dashboard FROM executive_assistants WHERE assistant_id = ?", [user.id]);
     for (const l of links) {
+      const viewing = l.can_view == null || Number(l.can_view) === 1;
       const allowed = Number(l.can_dashboard) === 1
-        || ((l.can_view == null || Number(l.can_view) === 1) && row.status === "pending");
+        || (viewing && (row.status === "pending" || deploymentOrg() === "hqhb"));
       if (allowed && await isExecutiveOn(l.executive_id, row)) return true;
     }
   }

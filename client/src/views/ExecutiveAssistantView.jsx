@@ -140,11 +140,18 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
   const approved = rs.filter(r => r.status === "approved" || r.status === "approved_pending");
   const rejected = rs.filter(r => r.status === "rejected");
   const unreadForInfo = forInfo.filter((d) => !d.viewedAt).length;
+  // HQHB: the assistant reviews everything (the server says so). Elsewhere the
+  // signed and rejected lists still need the executive's dashboard right.
+  const reviewAll = !!ex.reviewAll;
+  const seesDecided = reviewAll || ex.canDashboard;
 
-  const actionsFor = (r) => (
+  // Every document carries Review — open it and read it, whatever its state
+  // (owner, 2026-11-24: "show the EA everything with a Review button"). Where
+  // the assistant may decide for the executive, Preview & approve sits beside it.
+  // A confidential document stays with the people named on it, so it says so
+  // instead of offering a button the server would refuse.
+  const actionsFor = (r) => (!reviewAll ? (
     <div className="flex items-center gap-2">
-      {/* Approving opens the approver's own drawer: read it, Go to signature,
-          preview the stamp, then Approve — or Recommend changes / Reject. */}
       {ex.canApprove && theirTurn(r) && ReviewDrawer && !r.confidential ? (
         <button className="btn-primary text-xs" onClick={() => setReviewing(r)}>
           <Eye size={14} /> Preview & approve
@@ -153,7 +160,26 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
         <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> View</button>
       )}
     </div>
-  );
+  ) : (
+    <div className="flex flex-wrap items-center gap-2">
+      {r.confidential ? (
+        <span className="text-[11px] opacity-60 inline-flex items-center gap-1" title="Only the people named on a confidential document can open it">
+          <EyeOff size={13} /> Confidential
+        </span>
+      ) : (
+        <>
+          <button className="btn-ghost text-xs" onClick={() => setPreview(r)}><Eye size={14} /> Review</button>
+          {/* Approving opens the approver's own drawer: read it, Go to signature,
+              preview the stamp, then Approve — or Recommend changes / Reject. */}
+          {ex.canApprove && theirTurn(r) && ReviewDrawer && (
+            <button className="btn-primary text-xs" onClick={() => setReviewing(r)}>
+              <Stamp size={14} /> Preview & approve
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  ));
   const listPage = (items, title, countLabel, emptyText) => (
     <FolderedList items={items} title={`${title} — ${ex.name}`} back={() => setView("home")} notify={notify}
       emptyIcon={Inbox} emptyText={emptyText} countLabel={countLabel}
@@ -185,8 +211,8 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
     let page = null;
     if (view === "awaiting") page = listPage(awaiting, `Awaiting ${first}`, "waiting", `Nothing is waiting for ${ex.name}.`);
     if (view === "others") page = listPage(others, "With others first", "waiting", "Nothing is waiting on someone else first.");
-    if (view === "approved" && ex.canDashboard) page = listPage(approved, "Approved", "approved", "Nothing approved yet.");
-    if (view === "rejected" && ex.canDashboard) page = listPage(rejected, "Rejected", "rejected", "Nothing rejected.");
+    if (view === "approved" && seesDecided) page = listPage(approved, "Approved", "approved", "Nothing approved yet.");
+    if (view === "rejected" && seesDecided) page = listPage(rejected, "Rejected", "rejected", "Nothing rejected.");
     if (view === "for-review") page = (
       <ForInfoList ex={ex} items={forInfo} back={() => setView("home")} onOpen={setReadPreview} />
     );
@@ -198,7 +224,7 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
     { key: "awaiting", icon: Stamp, title: `Awaiting ${first}`, desc: `Documents whose turn it is for ${ex.name} to sign.`, badge: awaiting.length, color: "var(--c-gold)" },
     { key: "others", icon: Hourglass, title: "With others first", desc: `${ex.name} signs later — someone earlier in the route signs first.`, badge: others.length },
     { key: "for-review", icon: Eye, title: "For review", desc: `Documents shared with ${ex.name} to read — and whether they have opened them.`, badge: unreadForInfo, color: "var(--c-gold)" },
-    ...(ex.canDashboard ? [
+    ...(seesDecided ? [
       { key: "approved", icon: CheckCircle, title: "Approved", desc: `Documents ${ex.name} has signed.`, badge: approved.length },
       { key: "rejected", icon: XCircle, title: "Rejected", desc: `Documents ${ex.name} has rejected.`, badge: rejected.length },
     ] : []),
@@ -224,8 +250,9 @@ function ExecutivePanel({ ex, user, users, teams, notify, ReviewDrawer }) {
       {/* Every right this executive has granted, at a glance */}
       <div className="flex flex-wrap gap-1.5">
         {[
-          [ex.canView || ex.canDashboard, "View documents"],
-          [ex.canDashboard, "Full dashboard"],
+          ...(reviewAll
+            ? [[ex.canView || ex.canDashboard, "Review all documents"]]
+            : [[ex.canView || ex.canDashboard, "View documents"], [ex.canDashboard, "Full dashboard"]]),
           [ex.canApprove, "Approve on behalf"],
           [ex.canUpdateSignature, "Update signature"],
           [ex.canNotify, "Receives notifications"],
