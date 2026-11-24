@@ -93,11 +93,11 @@ export function DelegationSettings({ user, notify, onClose }) {
               </div>
               <div className="grid sm:grid-cols-2 gap-x-4 gap-y-2 mb-2">
                 {[
-                  ["canView", "View the documents", "See and open documents awaiting the executive's signature."],
+                  ["canView", "View the documents", "See and review all the executive's documents — waiting, signed and rejected (never confidential ones)."],
                   ["canApprove", "Approve on behalf", "Sign/approve those documents for the executive."],
                   ["canUpdateSignature", "Update the signature", "Upload or replace the executive's signature image."],
                   ["canNotify", "Receive notifications", "Gets a copy of every email the executive receives (the executive still gets theirs)."],
-                  ["canDashboard", "View the dashboard", "The executive's entire data — full history and stats, not just pending."],
+                  ["canDashboard", "View the dashboard", "The same documents as View — kept so older settings still work."],
                 ].map(([key, label, hint]) => (
                   <label key={key} className="flex items-start gap-2 text-sm cursor-pointer" title={hint}>
                     <input type="checkbox" className="mt-0.5" checked={!!l[key]} onChange={e => patch(l.id, { [key]: e.target.checked })} />

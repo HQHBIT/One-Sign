@@ -1,7 +1,9 @@
 // Executive Assistant "act on behalf" API. Every capability is granted per-link
 // by the executive (or admin) and enforced HERE, server-side:
-//   can_view             — see the executive's pending queue
-//   can_dashboard        — the executive's ENTIRE data (full queue + history)
+//   can_view             — see and open ALL the executive's documents: waiting,
+//                          signed and rejected (owner, 2026-11-24: "show the EA
+//                          everything with a Review button")
+//   can_dashboard        — kept for older links; grants the same sight as view
 //   can_approve          — approve/sign on the executive's behalf
 //   can_update_signature — upload/replace the executive's signature image
 //   can_notify           — copies of the executive's emails (handled in email.js)
@@ -13,7 +15,7 @@ import { Router } from "express";
 import { query, queryOne, execute, hydrateUser, hydrateRequest } from "../db.js";
 import { authRequired, requireRole } from "../auth.js";
 import { sendEmail } from "../email.js";
-import { approveRequestHandler, rejectRequestHandler, voiceUpload } from "./requests.js";
+import { approveRequestHandler, rejectRequestHandler, voiceUpload, redactConfidential } from "./requests.js";
 import { recommendHandler } from "./recommendations.js";
 import { deploymentOrg } from "../org.js";
 import { readImageSize, sendSignature } from "./users.js";
@@ -57,15 +59,18 @@ router.get("/executives", authRequired, requireRole("executive_assistant"), asyn
 });
 
 // ---------- the executive's documents ----------
-// can_dashboard → the executive's ENTIRE data (everything they'd see: their queue
-// plus full history). can_view only → the pending queue. Neither → 403.
+// Every document the executive is on — waiting, signed and rejected — for an
+// assistant with view (or the older dashboard) access. Neither → 403.
+// Until 2026-11-24 view alone showed only the pending queue; the owner wants the
+// assistant to be able to review everything. A confidential document stays in
+// the list (the assistant should know it exists) but is named only as
+// "Confidential document", and the file routes still refuse to open it.
 router.get("/:executiveId/requests", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
   try {
     const link = await linkFor(req.user.id, req.params.executiveId);
     if (!link) return res.status(403).json({ error: "You don't assist this executive" });
     if (!canView(link) && !link.can_dashboard) return res.status(403).json({ error: "This executive hasn't granted you document access" });
     const eid = req.params.executiveId;
-    const statusFilter = link.can_dashboard ? "" : "AND r.status = 'pending'";
     const rows = await query(`
       SELECT DISTINCT r.* FROM requests r
       LEFT JOIN request_steps st ON st.request_id = r.id
@@ -74,10 +79,9 @@ router.get("/:executiveId/requests", authRequired, requireRole("executive_assist
          OR sg.user_id = ?
          OR (r.status = 'pending' AND r.target_team_id IS NOT NULL
              AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)))
-        ${statusFilter}
       ORDER BY r.created_at DESC`, [eid, eid, eid]);
-    const requests = await Promise.all(rows.map(hydrateRequest));
-    res.json({ requests, scope: link.can_dashboard ? "all" : "pending" });
+    const requests = await Promise.all(rows.map(async (r) => redactConfidential(await hydrateRequest(r), r, req.user)));
+    res.json({ requests, scope: "all" });
   } catch (e) { next(e); }
 });
 

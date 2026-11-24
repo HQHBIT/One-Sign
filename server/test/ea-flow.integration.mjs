@@ -624,6 +624,25 @@ try {
   behalfRow = await queryOne("SELECT status, approver_id, reject_reason, acted_by_assistant_id FROM requests WHERE id = ?", [rejReq]);
   ck(r.status === 200 && behalfRow?.status === "rejected" && behalfRow?.approver_id === EXEC && behalfRow?.reject_reason === "Wrong vendor" && behalfRow?.acted_by_assistant_id === OTHER_EA,
     `reject on the executive's behalf — as the executive, with the reason, the assistant noted (${r.status})`);
+  // ---- the assistant reviews EVERYTHING with view alone (owner, 2026-11-24) ----
+  // View used to stop at the pending queue; the rejected paper was invisible.
+  await execute("UPDATE executive_assistants SET can_view = 1, can_dashboard = 0 WHERE id = ?", [`ea2_${T}`]);
+  let listed = (await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/requests`))).requests || [];
+  ck(listed.some((x) => x.id === rejReq && x.status === "rejected"), "with view alone the assistant LISTS the executive's rejected document");
+  r = await fetch(`${BASE}/api/requests/${rejReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 200, `…and can open it to review (${r.status})`);
+  await execute("UPDATE requests SET confidential = 1 WHERE id = ?", [rejReq]);
+  listed = (await j(await call(OTHER_EA, "GET", `/api/assist/${EXEC}/requests`))).requests || [];
+  const confRow = listed.find((x) => x.id === rejReq);
+  ck(!!confRow && confRow.fileName === "Confidential document", `a confidential one is listed but never named (got ${JSON.stringify(confRow?.fileName)})`);
+  r = await fetch(`${BASE}/api/requests/${rejReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 403, `…and still cannot be opened by the assistant (${r.status})`);
+  await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [rejReq]);
+  await execute("UPDATE executive_assistants SET can_view = 0, can_dashboard = 0 WHERE id = ?", [`ea2_${T}`]);
+  r = await call(OTHER_EA, "GET", `/api/assist/${EXEC}/requests`);
+  ck(r.status === 403, `with view switched off the list is refused, as before (${r.status})`);
+  await execute("UPDATE executive_assistants SET can_view = 1, can_dashboard = 1 WHERE id = ?", [`ea2_${T}`]);
+
   r = await call(REQR, "POST", `/api/assist/${EXEC}/requests/${rejReq}/reject`, { reason: "x" });
   ck(r.status === 403, `someone who is not an assistant cannot use these routes (${r.status})`);
 
