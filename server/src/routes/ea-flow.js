@@ -27,6 +27,7 @@ import { readStored, writeStored, deleteStored } from "../filestore.js";
 import { raiseDirectRequest, DirectRequestError } from "./requests.js";
 import { UPLOAD_CEILING_BYTES, uploadSizeError } from "../uploadLimits.js";
 import { sendEmail } from "../email.js";
+import { MAX_ATTACH_BYTES } from "../workflowComplete.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: UPLOAD_CEILING_BYTES } });
@@ -128,9 +129,16 @@ const ccRecipients = (stageId) => query(
   `SELECT u.id, u.name, u.role FROM ea_stage_cc c JOIN users u ON u.id = c.user_id
     WHERE c.stage_id = ? AND u.active = 1 ORDER BY u.name`, [stageId]);
 
+// The executives a stage tells when a document reaches it (any kind of stage).
+const managementRecipients = (stageId) => query(
+  `SELECT u.id, u.name, u.role FROM ea_stage_management m JOIN users u ON u.id = m.user_id
+    WHERE m.stage_id = ? AND u.active = 1 ORDER BY u.name`, [stageId]);
+const notifiesManagement = (s) => !!Number(s?.notify_management || 0);
+
 async function stageOut(s) {
   const signer = s.signer_id ? await queryOne("SELECT id, name FROM users WHERE id = ?", [s.signer_id]) : null;
   const cc = isCc(s) ? await ccRecipients(s.id) : [];
+  const management = notifiesManagement(s) ? await managementRecipients(s.id) : [];
   return {
     id: s.id, boardId: s.board_id, name: s.name, position: s.position,
     kind: kindOf(s),
@@ -147,6 +155,9 @@ async function stageOut(s) {
     notifyHolder: notifiesHolder(s),
     // Whether a card has to wait here. The board greys "Move to…" on it.
     waitsForHolder: waitsForHolder(s),
+    // Executive Management told when a document arrives here.
+    notifyManagement: notifiesManagement(s),
+    managementPeople: management.map((u) => ({ id: u.id, name: u.name, role: u.role })),
   };
 }
 
@@ -264,6 +275,8 @@ async function docOut(d, stageById) {
     // Sent for review by hand, independent of any stage — it stays with the
     // card as it moves, because the ask was about the paper, not the step.
     review: await reviewStateFor(d.id),
+    // Executive Management told the document is complete, and who has opened it.
+    management: await managementStateFor(d.id),
     // Boxes laid out ahead of time, so the board can show how much of the
     // paper is already prepared and the editor can reopen the same layout.
     plannedBoxes: plannedBoxesFor(d),
@@ -373,6 +386,59 @@ async function reviewStateFor(documentId) {
       WHERE n.document_id = ? AND n.source = 'adhoc' ORDER BY u.name`, [documentId]));
 }
 
+// Executive Management told at a "notify on arrival" stage. Read for the
+// DOCUMENT: once told, it stays on the card wherever it goes.
+async function managementStateFor(documentId) {
+  return summariseNotices(await query(
+    `SELECT ${NOTICE_COLUMNS} FROM ea_cc_notices n JOIN users u ON u.id = n.user_id
+      WHERE n.document_id = ? AND n.source = 'completion' ORDER BY u.name`, [documentId]));
+}
+
+// Tell each chosen executive that a document has reached this stage — which,
+// on the last stage, is "the document is complete". The notice puts it in their
+// "For your information" list and lets them open it; the email carries the
+// current file when it fits. Re-arriving refreshes the notice and emails again.
+//
+// A notice that already exists for the same person at the same stage for
+// another reason (they are also this stage's CC reader or holder) is left as it
+// is — that ask stands — and they are still emailed that the document arrived.
+async function noticeManagement({ doc, stage, at }) {
+  const people = await managementRecipients(stage.id);
+  if (!people.length) return;
+  const fresh = (await queryOne("SELECT * FROM ea_documents WHERE id = ?", [doc.id])) || doc;
+  let attachment = null;
+  try {
+    const { bytes, signed } = await currentBytes(fresh);
+    if (bytes && bytes.length <= MAX_ATTACH_BYTES) {
+      const isPdf = fresh.file_type === "pdf";
+      const base = String(fresh.file_name || "document").replace(/\.[^.]+$/, "");
+      attachment = {
+        bytes, type: isPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename: `${base}${signed ? ".signed" : ""}.${isPdf ? "pdf" : "xlsx"}`,
+      };
+    }
+  } catch { /* no attachment: the email still says it is in SignFlow */ }
+  const from = await queryOne("SELECT u.name FROM ea_boards b JOIN users u ON u.id = b.owner_id WHERE b.id = ?", [doc.board_id]);
+  for (const person of people) {
+    await execute(
+      `INSERT INTO ea_cc_notices (id, document_id, stage_id, user_id, notified_at, viewed_at, source)
+       VALUES (?, ?, ?, ?, ?, NULL, 'completion')
+       ON DUPLICATE KEY UPDATE
+         notified_at = IF(source = 'completion', VALUES(notified_at), notified_at),
+         viewed_at   = IF(source = 'completion', NULL, viewed_at)`,
+      [uid("eacc"), doc.id, stage.id, person.id, at]);
+    const to = await queryOne("SELECT email, name FROM users WHERE id = ?", [person.id]);
+    if (!to?.email) continue;
+    sendEmail({
+      to: to.email,
+      template: "ea_completion_notice",
+      ctx: { name: to.name, title: doc.title, stageName: stage.name, fromName: from?.name || "", documentId: doc.id,
+        attached: !!attachment },
+      attachments: attachment ? [attachment] : undefined,
+    }).catch(() => {});
+  }
+}
+
 // Every stage this paper has been approved at, oldest first.
 //
 // Read for the DOCUMENT and not for its current stage: an approval is usually
@@ -476,6 +542,29 @@ async function setStageCc(stageId, userIds) {
     await execute("INSERT IGNORE INTO ea_stage_cc (stage_id, user_id) VALUES (?, ?)", [stageId, uid_]);
   }
 }
+// The "tell Executive Management" switch and its list. Unsent fields keep what
+// the stage already has, so an older client editing a stage cannot switch it off.
+async function managementSettings(body, current = null) {
+  const on = body.notifyManagement === undefined ? notifiesManagement(current) : !!body.notifyManagement;
+  if (!on) return { on: false, ids: [] };
+  let ids = body.managementUserIds;
+  if (ids === undefined) ids = current ? (await managementRecipients(current.id)).map((u) => u.id) : [];
+  const unique = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+  if (!unique.length) return "Tick who in Executive Management should be told";
+  const already = new Set(current ? (await managementRecipients(current.id)).map((u) => u.id) : []);
+  for (const id of unique) {
+    const ok = already.has(id) ? await stillSignable(id) : await signableExecutive(id);
+    if (!ok) return "Choose from the Executive Management";
+  }
+  return { on: true, ids: unique };
+}
+async function setStageManagement(stageId, userIds) {
+  await execute("DELETE FROM ea_stage_management WHERE stage_id = ?", [stageId]);
+  for (const id of userIds) {
+    await execute("INSERT IGNORE INTO ea_stage_management (stage_id, user_id) VALUES (?, ?)", [stageId, id]);
+  }
+}
+
 async function signatureSettings(req, body, current = null) {
   // An older client sends requiresSignature and knows nothing of kinds; a newer
   // one sends kind. Accept both, and let kind win when it is given.
@@ -547,11 +636,14 @@ router.post("/boards/:id/stages", async (req, res, next) => {
       return res.status(409).json({ error: `This board already has a stage called "${name}"` });
     const sig = await signatureSettings(req, req.body || {});
     if (typeof sig === "string") return res.status(400).json({ error: sig });
+    const mgmt = await managementSettings(req.body || {});
+    if (typeof mgmt === "string") return res.status(400).json({ error: mgmt });
     const last = await queryOne("SELECT COALESCE(MAX(position), 0) AS p FROM ea_stages WHERE board_id = ?", [b.id]);
     const id = uid("eas");
-    await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, notify_holder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, null), Date.now()]);
+    await execute("INSERT INTO ea_stages (id, board_id, name, position, stage_kind, requires_signature, signer_id, notify_holder, notify_management, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, b.id, name, Number(last.p) + 1, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, null), mgmt.on ? 1 : 0, Date.now()]);
     await setStageCc(id, sig.ccUserIds);
+    await setStageManagement(id, mgmt.ids);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [id]))), count: 0 } });
   } catch (e) { next(e); }
 });
@@ -566,9 +658,12 @@ router.put("/stages/:id", async (req, res, next) => {
     if (clash) return res.status(409).json({ error: `This board already has a stage called "${name}"` });
     const sig = await signatureSettings(req, req.body || {}, s);
     if (typeof sig === "string") return res.status(400).json({ error: sig });
-    await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ?, notify_holder = ? WHERE id = ?",
-      [name, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, s), s.id]);
+    const mgmt = await managementSettings(req.body || {}, s);
+    if (typeof mgmt === "string") return res.status(400).json({ error: mgmt });
+    await execute("UPDATE ea_stages SET name = ?, stage_kind = ?, requires_signature = ?, signer_id = ?, notify_holder = ?, notify_management = ? WHERE id = ?",
+      [name, sig.kind, sig.requiresSignature, sig.signerId, notifyFrom(req.body, s), mgmt.on ? 1 : 0, s.id]);
     await setStageCc(s.id, sig.ccUserIds);
+    await setStageManagement(s.id, mgmt.ids);
     const n = await queryOne("SELECT COUNT(*) AS n FROM ea_documents WHERE stage_id = ?", [s.id]);
     res.json({ stage: { ...(await stageOut(await queryOne("SELECT * FROM ea_stages WHERE id = ?", [s.id]))), count: Number(n.n) } });
   } catch (e) { next(e); }
@@ -914,6 +1009,10 @@ async function enterStage({ doc, from, to, boxes, actor, at }) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [uid("eam"), doc.id, from?.id || null, to.id, now, actor.id, raised?.id || null,
       skipped.length ? JSON.stringify(skipped) : null]);
+
+  // Arrived. Now tell Executive Management, if this stage says to — after the
+  // move is written, so "it reached this stage" is already true when they look.
+  if (notifiesManagement(to)) await noticeManagement({ doc, stage: to, at: now });
   return null;
 }
 

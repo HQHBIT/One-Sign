@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PenLine, Eye, Stamp, CheckCircle2, Bell, BellOff } from "lucide-react";
+import { PenLine, Eye, Stamp, CheckCircle2, Bell, BellOff, Megaphone } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell.jsx";
 import { withCurrent } from "./time.js";
 
@@ -34,15 +34,26 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
   // stage says otherwise — silence would be the wrong default for a board that
   // has always notified.
   const [notifyHolder, setNotifyHolder] = useState(stage?.notifyHolder !== false);
+  // Tell Executive Management when a document reaches this stage (owner,
+  // 2026-11-24) — usually set on the last stage, so they learn it is complete.
+  const [notifyManagement, setNotifyManagement] = useState(!!stage?.notifyManagement);
+  const [mgmtIds, setMgmtIds] = useState(() => new Set((stage?.managementPeople || []).map((p) => p.id)));
   const [busy, setBusy] = useState(false);
   // An approval may name nobody — that is the original behaviour, where
   // arriving is the decision — so it is the one kind with no required person.
   const ok = name.trim().length > 0
     && (kind !== "signature" || !!signerId)
     && (kind !== "review" || !!signerId)
-    && (kind !== "cc" || ccIds.size > 0);
+    && (kind !== "cc" || ccIds.size > 0)
+    && (!notifyManagement || mgmtIds.size > 0);
 
   const toggleCc = (id) => setCcIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleMgmt = (id) => setMgmtIds((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
@@ -61,6 +72,8 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
         signerId: ["signature", "review", "approval"].includes(kind) ? (signerId || null) : null,
         ccUserIds: kind === "cc" ? [...ccIds] : [],
         notifyHolder,
+        notifyManagement,
+        managementUserIds: notifyManagement ? [...mgmtIds] : [],
       });
     } finally { setBusy(false); }
   };
@@ -174,6 +187,51 @@ export function StageEditor({ stage, executives, onSave, onClose }) {
             {ccIds.size === 0 && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>Choose at least one person.</div>}
           </div>
         )}
+
+        {/* Any kind of stage may announce arrivals to Executive Management.
+            Separate from the people the stage names: this says "it got here"
+            (on the last stage, "it is complete"), it asks nothing of them. */}
+        <div className="rounded-lg p-2" style={{ backgroundColor: "rgba(184,137,74,.06)" }}>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" className="mt-1" checked={notifyManagement}
+              disabled={executives.length === 0 && !(stage?.managementPeople || []).length}
+              onChange={(e) => setNotifyManagement(e.target.checked)}
+              style={{ accentColor: "var(--c-gold)" }} />
+            <span>
+              <span className="text-sm font-medium inline-flex items-center gap-1.5">
+                <Megaphone size={13} /> Notify Executive Management when a document reaches this stage
+              </span>
+              <span className="block text-xs opacity-60 mt-0.5">
+                {notifyManagement
+                  ? "Everyone ticked below is emailed the document and finds it under “For your information”. Nothing is asked of them. Use it on your last stage to tell them a document is complete."
+                  : "Nobody in Executive Management is told when a document arrives here."}
+              </span>
+            </span>
+          </label>
+          {notifyManagement && (
+            <div className="mt-2">
+              <div className="text-[10px] tracking-widest uppercase opacity-50 mb-1">
+                Who should be told {mgmtIds.size > 0 && <span className="opacity-70">· {mgmtIds.size} chosen</span>}
+                <button type="button" className="ml-2 underline normal-case tracking-normal opacity-80"
+                  onClick={() => setMgmtIds(new Set(executives.map((x) => x.id)))}>Tick all</button>
+              </div>
+              <div className="rounded-lg max-h-56 overflow-auto" style={{ border: "1px solid var(--c-ink-10)", backgroundColor: "var(--c-paper, transparent)" }}>
+                {withCurrent(executives, stage?.managementPeople || []).map((x) => (
+                  <label key={x.id} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer text-sm border-b last:border-0"
+                    style={{ borderColor: "var(--c-ink-08)" }}>
+                    <input type="checkbox" checked={mgmtIds.has(x.id)} onChange={() => toggleMgmt(x.id)}
+                      style={{ accentColor: "var(--c-gold)" }} />
+                    <span className="truncate">
+                      {x.name}
+                      {x.earlier && <span className="opacity-50"> · chosen earlier</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {mgmtIds.size === 0 && <div className="text-xs mt-1" style={{ color: "var(--c-rust)" }}>Tick at least one person, or switch this off.</div>}
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>

@@ -53,13 +53,14 @@ router.get("/", async (req, res, next) => {
       documents: rows.map((r) => ({
         id: r.document_id, title: r.title, fileName: r.file_name, fileType: r.file_type,
         // A one-off review says so rather than naming a step it never had.
-        stageName: r.source === "adhoc" ? "Sent for review" : r.stage_name,
+        stageName: r.source === "adhoc" ? "Sent for review"
+          : r.source === "completion" ? `Completed — reached ${r.stage_name}` : r.stage_name,
         boardName: r.board_name, fromName: r.from_name,
         notifiedAt: Number(r.notified_at), viewedAt: r.viewed_at ? Number(r.viewed_at) : null,
         // What is being asked of them. "cc" is for information and needs
         // nothing; review and a held approval both want an answer, and the
         // card does not move until they give it.
-        asks: r.source === "adhoc" ? "cc" : (r.stage_kind === "review" || r.stage_kind === "approval" ? r.stage_kind : "cc"),
+        asks: r.source === "adhoc" || r.source === "completion" ? "cc" : (r.stage_kind === "review" || r.stage_kind === "approval" ? r.stage_kind : "cc"),
         signedOffAt: r.signed_off_at ? Number(r.signed_off_at) : null,
       })),
     });

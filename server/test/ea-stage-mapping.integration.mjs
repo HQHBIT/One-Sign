@@ -143,6 +143,53 @@ try {
   ck(!!stamped, "an approval naming NOBODY still stamps on arrival, as it always has");
   const free = await call(EA, "POST", `/api/ea-flow/documents/${d3.id}/move`, { toStageId: first.id });
   ck(free.status === 200, `and such a card is free to move (got ${free.status})`);
+
+  // ---- tell Executive Management when a document arrives (owner, 2026-11-24) ----
+  const noOne = await addStage({ name: "Finished, nobody ticked", kind: "plain", notifyManagement: true, managementUserIds: [] });
+  ck(noOne.status === 400, `switching it on with nobody ticked is refused (got ${noOne.status})`);
+  const notExec = await addStage({ name: "Finished, wrong person", kind: "plain", notifyManagement: true, managementUserIds: [EA] });
+  ck(notExec.status === 400, `only Executive Management can be ticked (got ${notExec.status})`);
+
+  const fin = (await j(await addStage({ name: "Completed", kind: "plain", notifyManagement: true, managementUserIds: [EXEC] }))).stage;
+  ck(fin?.notifyManagement === true && fin?.managementPeople?.[0]?.id === EXEC, "a stage can be set to tell chosen executives");
+  ck(done.notifyManagement === false, "and a stage left alone tells nobody");
+
+  const mailsBefore = await emailsTo(EXEC);
+  const d4 = (await j(await upload(board.id, "All done", rev.id))).document;
+  // Filed into the first stage (a review) — tells nobody in management yet.
+  const mgmtEarly = await queryOne("SELECT COUNT(*) AS n FROM ea_cc_notices WHERE document_id = ? AND source = 'completion'", [d4.id]);
+  ck(Number(mgmtEarly.n) === 0 && mailsBefore >= 0, "arriving at an ordinary stage tells nobody in management");
+  await call(EXEC, "POST", `/api/ea-cc/${d4.id}/signoff`, {});
+  const mv = await call(EA, "POST", `/api/ea-flow/documents/${d4.id}/move`, { toStageId: fin.id });
+  ck(mv.status === 200, `the card moves to the last stage (got ${mv.status})`);
+
+  const told = await queryOne("SELECT source, viewed_at FROM ea_cc_notices WHERE document_id = ? AND stage_id = ? AND user_id = ?", [d4.id, fin.id, EXEC]);
+  ck(told?.source === "completion" && !told.viewed_at, "the executive is given a completion notice");
+  const u = await queryOne("SELECT email FROM users WHERE id = ?", [EXEC]);
+  let mail = null;
+  for (let i = 0; i < 20 && !mail; i++) {
+    mail = await queryOne("SELECT subject FROM emails WHERE to_email = ? AND template = 'ea_completion_notice' ORDER BY id DESC LIMIT 1", [u.email]);
+    if (!mail) await new Promise((r) => setTimeout(r, 200));
+  }
+  ck(!!mail && mail.subject === "Completed: All done", `…and emailed "Completed: All done" (got ${JSON.stringify(mail?.subject)})`);
+
+  const cards = (await j(await call(EA, "GET", `/api/ea-flow/boards/${board.id}/documents`))).documents || [];
+  const card = cards.find((x) => x.id === d4.id);
+  ck(card?.management?.notified === 1 && card?.management?.viewed === 0, "the card shows management told, none opened yet");
+
+  const list = (await j(await call(EXEC, "GET", "/api/ea-cc"))).documents || [];
+  const item = list.find((x) => x.id === d4.id && /Completed/.test(x.stageName));
+  ck(!!item && item.asks === "cc", "it appears in the executive's For your information list, asking nothing");
+  const opened = await fetch(`${BASE}/api/ea-cc/${d4.id}/file`, { headers: hdr(EXEC, false) });
+  ck(opened.status === 200, `the executive can open it (got ${opened.status})`);
+  const after2 = (await j(await call(EA, "GET", `/api/ea-flow/boards/${board.id}/documents`))).documents.find((x) => x.id === d4.id);
+  ck(after2?.management?.viewed === 1, "and the card then shows it opened");
+
+  // An older client editing the stage without these fields must not switch it off.
+  const kept = (await j(await call(EA, "PUT", `/api/ea-flow/stages/${fin.id}`, { name: "Completed" }))).stage;
+  ck(kept?.notifyManagement === true && kept?.managementPeople?.length === 1, "editing the stage without the new fields keeps the setting");
+  const off = (await j(await call(EA, "PUT", `/api/ea-flow/stages/${fin.id}`, { name: "Completed", notifyManagement: false }))).stage;
+  ck(off?.notifyManagement === false && off?.managementPeople?.length === 0, "and it can be switched off");
 } finally {
   api?.kill();
   await cleanup();
