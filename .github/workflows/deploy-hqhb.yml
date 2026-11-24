@@ -9,6 +9,22 @@ on:
   # key reach the server without inventing a dummy commit.
   workflow_dispatch:
 
+# One deploy to this box at a time (2026-11-24). Two PRs merged seconds apart
+# started two deploys together; both ran `npm ci` in the same server folder,
+# wrecked each other's node_modules, and the site was down until one was re-run.
+# A deploy that arrives while another is running now WAITS. If several pile up,
+# GitHub keeps only the newest waiting one — which is fine, because "Check for
+# changes" below compares against the last SUCCESSFUL deploy, not the previous
+# push, so a skipped deploy's changes are still picked up.
+concurrency:
+  group: deploy-hqhb
+  cancel-in-progress: false
+
+# Read access to this repo's own workflow runs, to find the last good deploy.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -21,8 +37,23 @@ jobs:
 
       - name: Check for changes
         id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BASE=${{ github.event.before }}
+          # On a push, compare against what this box LAST DEPLOYED SUCCESSFULLY,
+          # not just the previous push: with deploys queued, a waiting deploy
+          # can be dropped for a newer one, and a failed deploy never landed —
+          # either way the previous push is not what the box is running.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            LAST_OK=$(gh run list --repo "${{ github.repository }}" --workflow "deploy-hqhb.yml" \
+              --branch master --status success --limit 1 --json headSha -q '.[0].headSha' 2>/dev/null || true)
+            if [ -n "$LAST_OK" ] && [ "$LAST_OK" != "$(git rev-parse HEAD)" ] \
+               && git merge-base --is-ancestor "$LAST_OK" HEAD 2>/dev/null; then
+              echo "Last successful deploy: $LAST_OK"
+              BASE=$LAST_OK
+            fi
+          fi
           # Empty on a manual run, all-zeros on the first push to a new branch.
           # Both mean "nothing to compare against" — fall back to the parent, so a
           # dispatch redeploys the app instead of only syncing secrets.
