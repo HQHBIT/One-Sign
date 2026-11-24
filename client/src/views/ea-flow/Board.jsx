@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Stamp, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send, Inbox } from "lucide-react";
+import { Plus, Ellipsis, Pencil, Trash2, ChevronLeft, ChevronRight, PenLine, Stamp, Clock, Eye, Download, FolderInput, FileText, FileSpreadsheet, CircleCheck, CircleAlert, Hourglass, GripVertical, BellRing, ArrowRight, ArrowLeft, ArrowDown, Send, Inbox, Megaphone } from "lucide-react";
 import { api } from "../../api.js";
 import { useConfirmation } from "../../lib/useConfirm.jsx";
 import { ModalShell } from "../../components/ModalShell.jsx";
@@ -224,7 +224,8 @@ export function Board({ board, executives, notify, onBoardChanged, layout = "til
   const asks = (s) => (s.kind === "cc" ? `${ccNames(s)} ${(s.ccPeople?.length ?? 1) > 1 ? "are" : "is"} shown it`
     : (s.kind === "signature" || s.requiresSignature) ? `${s.signer?.name || "Someone"} signs`
       : s.kind === "approval" ? "Marked approved here — nothing signed"
-        : "A step on the way");
+        : "A step on the way")
+    + (s.notifyManagement ? ` · tells ${(s.managementPeople || []).length} in Executive Management` : "");
   const openStage = layout === "tiles" ? stages.find((s) => s.id === openStageId) : null;
 
   return (
@@ -420,6 +421,11 @@ function StageColumn({ stage, index, total, colour, docs, stages, tick, menuOpen
             : (stage.kind === "signature" || stage.requiresSignature)
               ? <div className="text-[11px] opacity-60 inline-flex items-center gap-1"><PenLine size={10} /> {stage.signer?.name} signs</div>
               : null}
+          {stage.notifyManagement && (
+            <div className="text-[11px] opacity-60 inline-flex items-center gap-1" title={(stage.managementPeople || []).map((p) => p.name).join(", ")}>
+              <Megaphone size={10} /> Tells {(stage.managementPeople || []).length} in Executive Management
+            </div>
+          )}
         </div>
         <span className="text-xs opacity-50 tabular-nums">{docs.length}</span>
         {/* Every column can start a document, not only the first: a paper
@@ -551,6 +557,14 @@ function Card({ doc, stage, stages, tick, onMove, onOpen, onDownload, onRemove, 
             style={doc.review.viewed === doc.review.notified ? undefined : { backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }}
             title={doc.review.people.map((p) => `${p.name} — ${p.viewedAt ? `read ${fmtWhen(p.viewedAt)}` : "not read"}`).join("\n")}>
             <Eye size={10} /> Review: {doc.review.viewed} of {doc.review.notified} read
+          </span>
+        )}
+        {/* Executive Management told at a "notify on arrival" stage. */}
+        {doc.management && (
+          <span className={`pill ${doc.management.viewed === doc.management.notified ? "pill-approved" : ""}`}
+            style={doc.management.viewed === doc.management.notified ? undefined : { backgroundColor: "rgba(15,26,46,.06)", textTransform: "none", letterSpacing: 0 }}
+            title={doc.management.people.map((p) => `${p.name} — ${p.viewedAt ? `opened ${fmtWhen(p.viewedAt)}` : "not opened"}`).join("\n")}>
+            <Megaphone size={10} /> Management told: {doc.management.viewed} of {doc.management.notified} opened
           </span>
         )}
         {doc.notSent && <span className="pill pill-pending"><Hourglass size={10} /> Not sent yet</span>}

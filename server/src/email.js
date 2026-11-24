@@ -312,6 +312,37 @@ const templates = {
     ].filter((x) => x !== null).join("\n"),
   }),
 
+  // To Executive Management when a document reaches a stage the assistant set
+  // to tell them — typically the board's last stage, so "it is complete".
+  ea_completion_notice: (c) => ({
+    subject: `Completed: ${c.title}`,
+    html: layout({ appUrl: c.appUrl,
+      preheader: `${c.title} has reached ${c.stageName} — for your information`,
+      pillHtml: pill("Completed", "approved"),
+      heading: "A document has been completed",
+      contentHtml:
+        greet(c.name) +
+        p(`<strong>${esc(c.title)}</strong> has reached <strong>${esc(c.stageName)}</strong>. This is for your information — <strong>nothing is needed from you</strong>.`) +
+        details([
+          { label: "Document", value: c.title },
+          { label: "Stage", value: c.stageName },
+          { label: "From", value: c.fromName },
+        ]) +
+        button("Open the document", requestUrl(c), "navy") +
+        caption(c.attached
+          ? "The document is attached. You will also find it under “For your information” when you sign in."
+          : "You will find it under “For your information” when you sign in."),
+    }),
+    text: [
+      `${BRAND.greeting} ${c.name}`, ``,
+      `"${c.title}" has reached ${c.stageName}. This is for your information — nothing is needed from you.`,
+      c.fromName ? `From: ${c.fromName}` : null,
+      c.attached ? `The document is attached.` : null, ``,
+      `Open it: ${requestUrl(c)}`, ``,
+      `— ${BRAND.fromName}`,
+    ].filter((x) => x !== null).join("\n"),
+  }),
+
   // To the EXECUTIVE when their assistant acts on their behalf — names the
   // assistant and the action so delegation is never invisible to the owner.
   ea_action: (c) => ({

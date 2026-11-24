@@ -746,6 +746,27 @@ async function runSchema() {
     CONSTRAINT fk_ea_cc_user  FOREIGN KEY (user_id)     REFERENCES users(id)        ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
+  // "Tell Executive Management when a document reaches this stage" (owner,
+  // 2026-11-24). Any stage kind may carry it — the assistant typically sets it
+  // on the LAST stage, so arriving there tells the chosen executives that the
+  // document is complete. A switch plus a list, like a CC stage's readers, but
+  // separate from them: it says "this is finished", not "please read this".
+  await tryExec("ALTER TABLE ea_stages ADD COLUMN notify_management TINYINT(1) NOT NULL DEFAULT 0");
+  await tryExec(`CREATE TABLE IF NOT EXISTS ea_stage_management (
+    stage_id  VARCHAR(64) NOT NULL,
+    user_id   VARCHAR(64) NOT NULL,
+    PRIMARY KEY (stage_id, user_id),
+    INDEX idx_ea_stage_mgmt_user (user_id),
+    CONSTRAINT fk_ea_stage_mgmt_stage FOREIGN KEY (stage_id) REFERENCES ea_stages(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ea_stage_mgmt_user  FOREIGN KEY (user_id)  REFERENCES users(id)     ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  // The executive told is given a notice like any reader — it is what puts the
+  // document in their "For your information" list and lets them open it — told
+  // apart by its source so CC and review figures are not inflated by it. Its own
+  // statement: widening an ENUM is a MODIFY, and the ADD earlier is a no-op on a
+  // box that already has the column.
+  await tryExec("ALTER TABLE ea_cc_notices MODIFY COLUMN source ENUM('stage','adhoc','completion') NOT NULL DEFAULT 'stage'");
+
   // "This paper was approved here, at this moment." A record the assistant
   // makes, not a signature: the approval itself may have happened in a meeting,
   // on paper or over the phone, and the board is where it gets written down.
