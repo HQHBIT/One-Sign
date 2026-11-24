@@ -1,9 +1,10 @@
 // Executive Assistant "act on behalf" API. Every capability is granted per-link
 // by the executive (or admin) and enforced HERE, server-side:
-//   can_view             — see and open ALL the executive's documents: waiting,
-//                          signed and rejected (owner, 2026-11-24: "show the EA
-//                          everything with a Review button")
-//   can_dashboard        — kept for older links; grants the same sight as view
+//   can_view             — HQHB: see and open ALL the executive's documents —
+//                          waiting, signed and rejected (owner, 2026-11-24:
+//                          "show the EA everything with a Review button", HQHB
+//                          only). Elsewhere: the pending queue, as before.
+//   can_dashboard        — the executive's ENTIRE data (full queue + history)
 //   can_approve          — approve/sign on the executive's behalf
 //   can_update_signature — upload/replace the executive's signature image
 //   can_notify           — copies of the executive's emails (handled in email.js)
@@ -32,6 +33,10 @@ async function linkFor(assistantId, executiveId) {
   );
 }
 const canView = (link) => link.can_view == null || !!link.can_view;
+// HQHB's assistants review everything their executive is on (owner,
+// 2026-11-24, HQHB only). Everywhere else view stops at the pending queue and
+// the full history still needs the dashboard right, exactly as before.
+export const reviewsEverything = () => deploymentOrg() === "hqhb";
 
 // ---------- the executives this assistant supports (with granted rights) ----------
 router.get("/executives", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
@@ -51,6 +56,8 @@ router.get("/executives", authRequired, requireRole("executive_assistant"), asyn
         canUpdateSignature: !!r.can_update_signature,
         canNotify: !!r.can_notify,
         canDashboard: !!r.can_dashboard,
+        // Tells the screen to show every list with a Review button (HQHB).
+        reviewAll: reviewsEverything(),
         signatureSource: r.signature_source,
         executiveHasSignature: !!r.signature_path,
       })),
@@ -59,18 +66,18 @@ router.get("/executives", authRequired, requireRole("executive_assistant"), asyn
 });
 
 // ---------- the executive's documents ----------
-// Every document the executive is on — waiting, signed and rejected — for an
-// assistant with view (or the older dashboard) access. Neither → 403.
-// Until 2026-11-24 view alone showed only the pending queue; the owner wants the
-// assistant to be able to review everything. A confidential document stays in
+// can_dashboard → the executive's ENTIRE data. can_view → on HQHB everything
+// too (owner, 2026-11-24: the assistant reviews every document); elsewhere the
+// pending queue only. Neither → 403. On HQHB a confidential document stays in
 // the list (the assistant should know it exists) but is named only as
-// "Confidential document", and the file routes still refuse to open it.
+// "Confidential document"; the file routes refuse to open it everywhere.
 router.get("/:executiveId/requests", authRequired, requireRole("executive_assistant"), async (req, res, next) => {
   try {
     const link = await linkFor(req.user.id, req.params.executiveId);
     if (!link) return res.status(403).json({ error: "You don't assist this executive" });
     if (!canView(link) && !link.can_dashboard) return res.status(403).json({ error: "This executive hasn't granted you document access" });
     const eid = req.params.executiveId;
+    const seesAll = !!link.can_dashboard || reviewsEverything();
     const rows = await query(`
       SELECT DISTINCT r.* FROM requests r
       LEFT JOIN request_steps st ON st.request_id = r.id
@@ -79,9 +86,13 @@ router.get("/:executiveId/requests", authRequired, requireRole("executive_assist
          OR sg.user_id = ?
          OR (r.status = 'pending' AND r.target_team_id IS NOT NULL
              AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)))
+        ${seesAll ? "" : "AND r.status = 'pending'"}
       ORDER BY r.created_at DESC`, [eid, eid, eid]);
-    const requests = await Promise.all(rows.map(async (r) => redactConfidential(await hydrateRequest(r), r, req.user)));
-    res.json({ requests, scope: "all" });
+    const requests = await Promise.all(rows.map(async (r) => {
+      const h = await hydrateRequest(r);
+      return reviewsEverything() ? redactConfidential(h, r, req.user) : h;
+    }));
+    res.json({ requests, scope: seesAll ? "all" : "pending" });
   } catch (e) { next(e); }
 });
 

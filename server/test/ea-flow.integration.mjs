@@ -712,6 +712,18 @@ try {
   await waitFor(`http://127.0.0.1:${PORT + 10}`, waqf);
   r = await fetch(`http://127.0.0.1:${PORT + 10}/api/ea-flow/boards`, { headers: hdr(EA) });
   ck(r.status === 404, `the feature does not exist on a WAQF deployment (${r.status})`);
+
+  // "Review everything" is HQHB only: on WAQF, view still stops at the pending
+  // queue and a decided document stays closed without the dashboard right.
+  await execute("UPDATE executive_assistants SET can_view = 1, can_dashboard = 0 WHERE id = ?", [`ea2_${T}`]);
+  const W = `http://127.0.0.1:${PORT + 10}`;
+  r = await fetch(`${W}/api/assist/${EXEC}/requests`, { headers: hdr(OTHER_EA) });
+  const wList = (await j(r)).requests || [];
+  ck(r.status === 200 && !wList.some((x) => x.status !== "pending"), `on WAQF view still lists only waiting documents (${r.status}, ${wList.length})`);
+  r = await fetch(`${W}/api/requests/${rejReq}/file`, { headers: hdr(OTHER_EA) });
+  ck(r.status === 403, `on WAQF a rejected document stays closed with view alone (${r.status})`);
+  r = await fetch(`${W}/api/assist/executives`, { headers: hdr(OTHER_EA) });
+  ck(((await j(r)).executives || []).every((x) => x.reviewAll === false), "on WAQF the screen is told not to show everything");
 } catch (e) {
   fail.push(`the run stopped early: ${e?.message || e}`);
 } finally {
