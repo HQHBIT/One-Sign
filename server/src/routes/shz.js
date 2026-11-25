@@ -50,6 +50,30 @@ const manzuriOut = (f) => f.manzuri_received_at ? {
   uploadedAt: f.manzuri_uploaded_at ? Number(f.manzuri_uploaded_at) : null,
 } : null;
 
+// Who may see a document that was sent for Shz Saab approval (owner,
+// 2026-11-25: "visibility for all the members who have signed the document,
+// not just the HOD … restricted to the files where they are signing
+// authority"). The HOD sees every one; anyone else sees it only if they signed
+// it, or hold signing authority for the team it was raised to — the latter
+// never for a confidential document, which stays with the people named on it.
+// The SQL below and this function must say the same thing.
+const VISIBLE_TO_SIGNER_SQL = `(r.approver_id = ?
+   OR EXISTS (SELECT 1 FROM request_step_signers sg JOIN request_steps st ON st.id = sg.step_id
+               WHERE st.request_id = r.id AND sg.user_id = ?)
+   OR (COALESCE(r.confidential, 0) = 0 AND r.target_team_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM signing_authority sa WHERE sa.user_id = ? AND sa.team_id = r.target_team_id)))`;
+
+export async function canSeeForward(user, requestId) {
+  if (deploymentOrg() !== "waqf" || !user) return false;
+  const f = await queryOne("SELECT request_id FROM shz_forwards WHERE request_id = ?", [requestId]);
+  if (!f) return false;
+  if (user.isHod) return true;
+  const ok = await queryOne(
+    `SELECT 1 AS ok FROM requests r WHERE r.id = ? AND ${VISIBLE_TO_SIGNER_SQL}`,
+    [requestId, user.id, user.id, user.id]);
+  return !!ok;
+}
+
 // The HOD team for this deployment's organisation: the team named "HOD".
 async function hodTeam() {
   return await queryOne(
@@ -88,10 +112,13 @@ router.post("/forward", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ---------- HOD dashboard: everything sent for Shz Saab approval ----------
+// ---------- the Shz Saab board ----------
+// The HOD: everything sent for Shz Saab approval. Everyone else: only what they
+// signed or hold signing authority for (see canSeeForward). An empty list, not
+// a refusal, for someone with nothing — the screen then hides the tile.
 router.get("/forwards", async (req, res, next) => {
   try {
-    if (!req.user.isHod) return res.status(403).json({ error: "Only the HOD can view this" });
+    const all = !!req.user.isHod;
     const rows = await query(`
       SELECT f.id, f.request_id, f.comment, f.forwarded_at,
              f.manzuri_received_at, f.manzuri_note, f.manzuri_file_name, f.manzuri_uploaded_at,
@@ -100,10 +127,11 @@ router.get("/forwards", async (req, res, next) => {
       FROM shz_forwards f
       JOIN requests r ON r.id = f.request_id
       JOIN users u ON u.id = f.requestor_id
-      WHERE f.org_id = ?
+      WHERE f.org_id = ? ${all ? "" : "AND " + VISIBLE_TO_SIGNER_SQL}
       ORDER BY f.forwarded_at DESC
-    `, [deploymentOrg()]);
+    `, all ? [deploymentOrg()] : [deploymentOrg(), req.user.id, req.user.id, req.user.id]);
     res.json({
+      scope: all ? "all" : "signed",
       forwards: rows.map(x => ({
         id: x.id,
         requestId: x.request_id,
@@ -175,12 +203,12 @@ router.post("/manzuri/:requestId", upload.single("file"), async (req, res, next)
   } catch (e) { next(e); }
 });
 
-// ---------- open the uploaded Manzuri: the requestor, or the HOD ----------
+// ---------- open the uploaded Manzuri: the requestor, the HOD, or a signer ----------
 router.get("/manzuri/:requestId/file", async (req, res, next) => {
   try {
     const f = await queryOne("SELECT * FROM shz_forwards WHERE request_id = ?", [req.params.requestId]);
     if (!f || !f.manzuri_file_path) return res.status(404).json({ error: "No Manzuri has been uploaded" });
-    if (f.requestor_id !== req.user.id && !req.user.isHod) return res.status(403).end();
+    if (f.requestor_id !== req.user.id && !(await canSeeForward(req.user, f.request_id))) return res.status(403).end();
     res.type(MANZURI_TYPES[f.manzuri_file_type] || "application/octet-stream");
     res.send(await readStored("documents", f.manzuri_file_path));
   } catch (e) { next(e); }

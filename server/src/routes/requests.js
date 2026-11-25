@@ -19,6 +19,7 @@ import { readStored, writeStored } from "../filestore.js";
 import { rotateMarker90CW } from "../pdf-rotation.js";
 import { pingUser, pingAdmins } from "../events.js";
 import { deploymentOrg } from "../org.js";
+import { canSeeForward } from "./shz.js";
 import { allowedTypesFor, retentionDaysFor, removedBody } from "../retention.js";
 
 // The storage period stamped on a new request (HQHB; NULL = kept indefinitely).
@@ -899,10 +900,9 @@ export async function authoriseAccess(user, row) {
   if (rec) return true;
   // The WAQF HOD may view any document forwarded to them for Shz Saab approval.
   // View-only: the existence of a shz_forwards row is what grants the sight.
-  if (user.isHod) {
-    const fwd = await queryOne("SELECT 1 AS ok FROM shz_forwards WHERE request_id = ?", [row.id]);
-    if (fwd) return true;
-  }
+  // Since 2026-11-25 also anyone who holds signing authority for the team it
+  // went to (not for a confidential one) — shz.js canSeeForward is the rule.
+  if (await canSeeForward(user, row.id)) return true;
   // An executive assistant may open what the executives they assist have been
   // sent — the same documents their executive tab already LISTS (assist.js):
   // the pending queue with "view", everything with "dashboard" — and on HQHB

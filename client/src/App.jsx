@@ -1513,17 +1513,20 @@ function ManzuriControl({ req, manzuri, onSaved, notify }) {
 function HodDashboard({ user, notify, back }) {
   const [rows, setRows] = useState(null);
   useEffect(() => { api.shzForwards().then(setRows).catch(() => setRows([])); }, []);
+  // The HOD sees every forward; anyone else only the documents they signed or
+  // hold signing authority for (the server decides).
   const viewSigned = async (requestId) => {
     try { const url = await api.getRequestFileBlob(requestId, "signed"); window.open(url, "_blank"); }
     catch (e) { notify?.(e.message || "Could not open the document", "error"); }
   };
   return (
     <div>
-      <BackHeader back={back} title="Shz Saab Approvals" step={rows ? `${rows.length} sent` : "…"} />
+      <BackHeader back={back} title="Shz Saab Approvals"
+        step={rows ? (user?.isHod ? `${rows.length} sent` : `${rows.length} you signed or hold authority for`) : "…"} />
       {rows == null ? (
         <div className="card p-6 text-sm opacity-50 mt-8">Loading…</div>
       ) : rows.length === 0 ? (
-        <Empty icon={Inbox} text="Nothing has been sent for Shz Saab approval yet." />
+        <Empty icon={Inbox} text={user?.isHod ? "Nothing has been sent for Shz Saab approval yet." : "None of the documents you signed has been sent for Shz Saab approval yet."} />
       ) : (
         <div className="card mt-8 overflow-hidden divide-y" style={{ borderColor: "var(--c-ink-08)" }}>
           {rows.map((f) => (
@@ -1937,6 +1940,14 @@ function ApproverView(props) {
   const loadForInfo = () => api.ccForMe().then(setForInfo).catch(() => setForInfo([]));
   useEffect(() => { loadForInfo(); }, [user.id]);
   const unopenedForInfo = forInfo.filter(d => !d.viewedAt).length;
+  // WAQF: documents this signer signed (or holds authority for) that were sent
+  // for Shz Saab approval. The HOD always has the tile; anyone else gets it once
+  // there is something to show. Asked only on WAQF, where the route exists.
+  const [shzCount, setShzCount] = useState(0);
+  useEffect(() => {
+    if (user.orgId !== "waqf" || user.isHod) return;
+    api.shzForwards().then(r => setShzCount((r || []).length)).catch(() => setShzCount(0));
+  }, [user.id]);
   const isWorkflowSigner = r => (r.workflow || []).some(st => st.signers.some(s => s.userId === user.id));
   const iSigned = r => iSignedInWorkflow(r, user.id);
   // Requests routed to me to SIGN — never my own (I don't approve what I raised).
@@ -1977,7 +1988,11 @@ function ApproverView(props) {
   if (tab === "for-info") return <ForInformationList items={forInfo} notify={notify} onChanged={loadForInfo} back={() => setTab("home")} />;
 
   const tiles = [
-    ...(user.isHod ? [{ key: "shz-hod", icon: Building2, title: "Shz Saab Approvals", desc: "Documents sent to the HOD for Shz Saab approval.", color: "var(--c-gold)" }] : []),
+    ...(user.isHod
+      ? [{ key: "shz-hod", icon: Building2, title: "Shz Saab Approvals", desc: "Documents sent to the HOD for Shz Saab approval.", color: "var(--c-gold)" }]
+      : shzCount > 0
+        ? [{ key: "shz-hod", icon: Building2, title: "Shz Saab Approvals", desc: "Documents you signed that were sent for Shz Saab approval — and whether the Manzuri is back.", badge: shzCount, color: "var(--c-gold)" }]
+        : []),
     // Only when something has actually been shared — an empty tile on every
     // signer's home would be noise on the deployments that never use CC stages.
     ...(forInfo.length ? [{ key: "for-info", icon: Eye, title: "For your information", desc: "Documents shared with you to read. No signature needed.", badge: unopenedForInfo, color: "var(--c-gold)" }] : []),

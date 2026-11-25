@@ -42,6 +42,8 @@ const ck = (ok, label) => (ok ? pass : fail).push(label);
 const T = Date.now().toString(36), now = Date.now();
 let TEAM = `t_hod_${T}`, createdTeam = false;
 const HOD = `u_hod_${T}`, REQ = `u_req_${T}`, OTHER = `u_oth_${T}`;
+// 2026-11-25: signers see what they signed; authority holders what went to their team.
+const SIGNER = `u_sig_${T}`, AUTH = `u_aut_${T}`, TEAM2 = `t_shzsig_${T}`;
 const RID = `req_shz_${T}`, RID2 = `req_shz2_${T}`;
 const hdr = (id) => ({ Authorization: "Bearer " + signToken(id), "Content-Type": "application/json" });
 const j = async r => { try { return await r.json(); } catch { return {}; } };
@@ -49,8 +51,9 @@ const j = async r => { try { return await r.json(); } catch { return {}; } };
 const cleanup = async () => {
   await execute("DELETE FROM shz_forwards WHERE org_id = 'waqf' AND request_id IN (?, ?)", [RID, RID2]).catch(() => {});
   await execute("DELETE FROM requests WHERE id IN (?, ?)", [RID, RID2]).catch(() => {});
-  await execute("DELETE FROM signing_authority WHERE user_id IN (?, ?, ?)", [HOD, REQ, OTHER]).catch(() => {});
-  await execute("DELETE FROM users WHERE id IN (?, ?, ?)", [HOD, REQ, OTHER]).catch(() => {});
+  await execute("DELETE FROM signing_authority WHERE user_id IN (?, ?, ?, ?, ?)", [HOD, REQ, OTHER, SIGNER, AUTH]).catch(() => {});
+  await execute("DELETE FROM users WHERE id IN (?, ?, ?, ?, ?)", [HOD, REQ, OTHER, SIGNER, AUTH]).catch(() => {});
+  await execute("DELETE FROM teams WHERE id = ?", [TEAM2]).catch(() => {});
   if (createdTeam) await execute("DELETE FROM teams WHERE id = ?", [TEAM]).catch(() => {});
 };
 
@@ -75,6 +78,15 @@ try {
     [RID, REQ, "Trust Deed.pdf", `${RID}.pdf`, "pdf", now]);
   await execute("INSERT INTO requests (id, requestor_id, file_name, file_path, file_type, status, created_at, org_id) VALUES (?,?,?,?,?, 'pending', ?, 'waqf')",
     [RID2, REQ, "Draft.pdf", `${RID2}.pdf`, "pdf", now]);
+
+  // A masool who SIGNED RID, and one who holds authority for its team.
+  await execute("INSERT INTO teams (id, name, created_at, org_id) VALUES (?, ?, ?, 'waqf')", [TEAM2, `Jamiat ${T}`, now]);
+  for (const [id, nm] of [[SIGNER, "Signing Masool"], [AUTH, "Authority Masool"]]) {
+    await execute("INSERT INTO users (id, email, password_hash, name, role, team_id, created_at, active, org_id) VALUES (?,?,?,?,?,?,?,1,'waqf')",
+      [id, `${id}@waqf.test`, bcrypt.hashSync("x", 4), nm, "approver", null, now]);
+  }
+  await execute("INSERT INTO signing_authority (user_id, team_id) VALUES (?, ?)", [AUTH, TEAM2]);
+  await execute("UPDATE requests SET approver_id = ?, target_team_id = ? WHERE id = ?", [SIGNER, TEAM2, RID]);
 
   waqf = startApi(PORT, { ORG_SLUG: "waqf" });
   await waitFor(BASE, waqf);
@@ -115,8 +127,20 @@ try {
   const seen = (b.forwards || []).find(f => f.requestId === RID);
   ck(r.status === 200 && seen && seen.comment === "Please review, Saheb." && seen.requestorName === "WAQF Requestor" && seen.forwardedAt > 0,
     `the HOD sees the forwarded document with comment, requestor and timestamp (${r.status})`);
-  r = await fetch(`${BASE}/api/shz/forwards`, { headers: hdr(REQ) });
-  ck(r.status === 403, `a non-HOD cannot read the HOD dashboard (${r.status})`);
+  // ---- everyone else: only what they signed or hold authority for ----
+  const listFor = async (uid) => ((await j(await fetch(`${BASE}/api/shz/forwards`, { headers: hdr(uid) }))).forwards || []);
+  ck((await listFor(SIGNER)).some(f => f.requestId === RID), "a masool who SIGNED the document sees it was sent for Manzuri");
+  ck((await listFor(AUTH)).some(f => f.requestId === RID), "a masool with signing authority for its team sees it too");
+  ck(!(await listFor(OTHER)).some(f => f.requestId === RID), "someone with no part in it does not see it");
+  r = await fetch(`${BASE}/api/requests/${RID}/signed`, { headers: hdr(AUTH) });
+  ck(r.status !== 403, `the authority holder may open the signed document (${r.status}, not 403)`);
+  r = await fetch(`${BASE}/api/requests/${RID}/signed`, { headers: hdr(OTHER) });
+  ck(r.status === 403, `someone with no part in it may not (${r.status})`);
+  // A confidential document stays with the people named on it.
+  await execute("UPDATE requests SET confidential = 1 WHERE id = ?", [RID]);
+  ck(!(await listFor(AUTH)).some(f => f.requestId === RID), "authority alone does not show a CONFIDENTIAL document");
+  ck((await listFor(SIGNER)).some(f => f.requestId === RID), "…while the person who signed it still sees it");
+  await execute("UPDATE requests SET confidential = 0 WHERE id = ?", [RID]);
 
   // ---- /sent helper for the requestor's button ----
   r = await fetch(`${BASE}/api/shz/sent`, { headers: hdr(REQ) });
